@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.riv binary
+*.png binary
+*.jpg binary
+*.jks binary
+*.p8 binary
+*.p12 binary

@@ -1,0 +1,44 @@
+# Node
+node_modules/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+coverage/
+
+# Expo / React Native
+.expo/
+.expo-shared/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+ios/Pods/
+android/.gradle/
+android/app/build/
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Testes
+test-results/
+playwright-report/
+maestro-output/
+
+# Editor / SO
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code (local)
+.claude/memory/
+.claude/agents-old/
+.claude/settings.local.json
+graphify-out/
