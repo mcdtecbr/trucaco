@@ -2,6 +2,8 @@
 
 Truco online (Paulista e Mineiro) para web, iOS e Android. Mesa de 4 jogadores (6 na fase 8), avatar animado em Rive que faz sinais de truco visíveis a toda a mesa, chat privado da dupla para combinar sinais, balões de conversa na mesa.
 
+**Memória do projeto**: leia `.claude/memory/MEMORY.md` no início da sessão (estado das fases, ambiente, regras de Git). Grave ali o que for aprendido e não estiver no código.
+
 Documentos de referência, leia antes de qualquer tarefa não trivial:
 
 - `docs/specs/2026-11-01-trucaco-design.md`: arquitetura, componentes, fluxo de dados, decisões.
@@ -70,6 +72,6 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 - **Pastas**: ver `README.md`. `packages/rules` não importa nada de rede, banco ou UI. `packages/protocol` só tipos, schemas e constantes.
 - **Nomes**: código em inglês (`playCard`, `callTruco`), termos do jogo mantidos em português quando não há tradução natural (`manilha`, `vira`, `zap`, `maoDeOnze`). Docs e commits em português.
 - **Commits**: `tipo(escopo): descrição` em pt-BR (`feat`, `fix`, `chore`, `docs`, `test`, `build`, `ci`). Escopos: `rules`, `server`, `mobile`, `avatar`, `protocol`, `ui`, `infra`, `docs`, `agents`.
-- **Git**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs via `gh pr create`, não via API do Azure DevOps.
+- **Git**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs pela API REST do GitHub (o `gh` não está instalado; ver `.claude/memory/trucaco-ambiente-dev.md`), não pela API do Azure DevOps.
 - **Variáveis de ambiente**: toda variável nova entra em `.env.example` com valor de exemplo seguro e na seção de ambiente do `apps/server/README.md`. `.env` nunca versionado.
 - **Dependência nova**: só com justificativa no relatório do agente.

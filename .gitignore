@@ -37,8 +37,7 @@ maestro-output/
 .DS_Store
 Thumbs.db
 
-# Claude Code (local)
-.claude/memory/
+# Claude Code (local). A memória do projeto (.claude/memory/) é versionada.
 .claude/agents-old/
 .claude/settings.local.json
 graphify-out/

@@ -1,0 +1,3 @@
+- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; estado das fases e decisões
+- [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
+- [Git: commit e push só quando pedir](feedback_git_convencao.md) — Git Flow, stage explícito, PR para develop; push e PR são decisões do usuário
