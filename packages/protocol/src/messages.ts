@@ -4,6 +4,7 @@ import type { PublicGameEvent } from './events';
 import type { ErrorCode } from './errors';
 import type { Seat } from './room';
 import {
+  CHAT_MAX_COMBINING_RUN,
   CHAT_MAX_LENGTH,
   QUICK_PHRASE_IDS,
   SFX_IDS,
@@ -11,7 +12,7 @@ import {
   type QuickPhraseId,
   type SfxId,
   type SignalId,
-} from './index';
+} from './catalogs';
 
 export type ChatScope = 'partner' | 'table';
 
@@ -61,7 +62,8 @@ export type ServerMessage =
       readonly phraseId: QuickPhraseId;
       readonly at: number;
     }
-  | { readonly type: 'error'; readonly code: ErrorCode; readonly message?: string }
+  // Sem `message`: o cliente traduz pelo `code`. O servidor nunca repassa exceção/texto interno.
+  | { readonly type: 'error'; readonly code: ErrorCode }
   | { readonly type: 'presence'; readonly seat: Seat; readonly status: PresenceStatus }
   | { readonly type: 'turnTimer'; readonly seat: Seat; readonly deadlineAt: number };
 
@@ -76,27 +78,101 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Copia as propriedades PRÓPRIAS enumeráveis para um objeto sem protótipo, lendo cada uma UMA vez
+ * (getters não podem mudar de valor entre validação e uso; herdadas via protótipo são ignoradas).
+ */
+function snapshot(v: unknown): Record<string, unknown> | null {
+  if (!isRecord(v)) return null;
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (!Object.hasOwn(v, k)) continue;
+    out[k] = v[k];
+  }
+  return out;
+}
+
 /** Verdadeiro se o objeto só tem as chaves permitidas (rejeita campos extras, como `seat`). */
 function onlyKeys(o: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(o).every((k) => allowed.includes(k));
 }
 
 function parseCard(v: unknown): Card | null {
-  if (!isRecord(v) || !onlyKeys(v, ['rank', 'suit'])) return null;
-  const { rank, suit } = v;
+  const c = snapshot(v);
+  if (c === null || !onlyKeys(c, ['rank', 'suit'])) return null;
+  const { rank, suit } = c;
   if (!(RANKS as readonly unknown[]).includes(rank)) return null;
   if (!(SUITS as readonly unknown[]).includes(suit)) return null;
   return { rank: rank as Rank, suit: suit as Suit };
 }
 
+/** String UTF-16 sem surrogate solto (`String.prototype.isWellFormed` é ES2024, fora do `lib`). */
+function isWellFormed(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const n = s.charCodeAt(i + 1);
+      if (!(n >= 0xdc00 && n <= 0xdfff)) return false;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const CONTROL_OR_FORMAT = /^[\p{Cc}\p{Cf}\p{Co}\p{Cn}]$/u;
+const COMBINING = /^\p{M}$/u;
+
+/**
+ * Limpa o texto de chat ou devolve `null` (rejeitar). Regras: teto de 280 unidades UTF-16 ANTES de
+ * qualquer processamento; sem surrogate solto; NFC; `\n \r \t U+2028 U+2029` viram espaço; qualquer
+ * controle/formatação (Cc, Cf: zero-width, bidi, BOM...), uso privado ou não atribuído é REJEITADO;
+ * no máximo `CHAT_MAX_COMBINING_RUN` marcas combinantes seguidas; apara só as pontas; vazio é avaliado
+ * depois da limpeza; limite de `CHAT_MAX_LENGTH` em code points depois do NFC.
+ * Sem regex em string inteira (só testes de 1 caractere): linear, sem ReDoS.
+ * O texto NÃO é escapado aqui (`<img onerror>` passa intacto): escapar/renderizar como texto puro é
+ * responsabilidade do cliente.
+ */
+function cleanChatText(raw: string): string | null {
+  if (raw.length > CHAT_MAX_LENGTH * 2) return null;
+  if (!isWellFormed(raw)) return null;
+  const text = raw.normalize('NFC');
+  let out = '';
+  let run = 0;
+  let count = 0;
+  for (const ch of text) {
+    const ws = ch === '\n' || ch === '\r' || ch === '\t' || ch === '\u2028' || ch === '\u2029';
+    const c = ws ? ' ' : ch;
+    if (CONTROL_OR_FORMAT.test(c)) return null;
+    run = COMBINING.test(c) ? run + 1 : 0;
+    if (run > CHAT_MAX_COMBINING_RUN) return null;
+    out += c;
+    if (++count > CHAT_MAX_LENGTH + 64) return null;
+  }
+  const trimmed = out.trim();
+  if (trimmed.length === 0 || [...trimmed].length > CHAT_MAX_LENGTH) return null;
+  return trimmed;
+}
+
 /**
  * Porta de entrada anti-trapaça: valida estrutura, tipos, tamanhos e catálogos de uma mensagem
- * do cliente. Função pura, nunca lança. Decisão: campos extras são REJEITADOS (`INVALID_PAYLOAD`),
- * em especial `seat`, que o servidor nunca aceita do cliente. Só `type` e os campos de cada
- * mensagem são permitidos. Não verifica legalidade de jogo (isso é do motor).
+ * do cliente. Função pura, nunca lança (Proxy/getter hostil vira `INVALID_PAYLOAD`). Decisão: campos
+ * extras são REJEITADOS (`INVALID_PAYLOAD`), em especial `seat`, que o servidor nunca aceita do
+ * cliente. Só propriedades próprias contam e cada uma é lida uma vez. Não verifica legalidade de
+ * jogo (isso é do motor).
  */
 export function parseClientMessage(raw: unknown): ParseResult {
-  if (!isRecord(raw)) return BAD;
+  try {
+    return parseUnsafe(raw);
+  } catch {
+    return BAD;
+  }
+}
+
+function parseUnsafe(input: unknown): ParseResult {
+  const raw = snapshot(input);
+  if (raw === null) return BAD;
   const type = raw.type;
   if (typeof type !== 'string') return BAD;
 
@@ -158,10 +234,8 @@ export function parseClientMessage(raw: unknown): ParseResult {
         return good({ type, scope, phraseId: phraseId as QuickPhraseId });
       }
       if (!onlyKeys(raw, ['type', 'scope', 'text']) || typeof raw.text !== 'string') return BAD;
-      // Limite em code points; teto bruto em code units evita varrer strings gigantes.
-      if (raw.text.length > CHAT_MAX_LENGTH * 2) return BAD;
-      const text = raw.text.trim();
-      if (text.length === 0 || [...text].length > CHAT_MAX_LENGTH) return BAD;
+      const text = cleanChatText(raw.text);
+      if (text === null) return BAD;
       return good({ type, scope, text });
     }
     default:

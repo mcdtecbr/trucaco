@@ -53,7 +53,7 @@ Dependências permitidas: `rules` e `protocol` não dependem de nada interno. `a
 
 ## 5. Servidor (`apps/server`)
 
-- **`LobbyRoom`**: criar mesa (variante, formato `single` ou `bo3`, pública/privada, código de 6 caracteres; `bo3` só em mesa privada), entrar por código, fila pública simples (FIFO por variante), sorteio de parcerias ou duplas fixas (quem entrou junto).
+- **`LobbyRoom`**: criar mesa (variante, formato `single` ou `bo3`, pública/privada, código de 8 caracteres; `bo3` só em mesa privada), entrar por código, fila pública simples (FIFO por variante), sorteio de parcerias ou duplas fixas (quem entrou junto).
 - **`TrucoRoom`** (4 assentos): instancia o motor, aplica ações, mantém `@colyseus/schema` com **visão filtrada por assento** (`@filter`: cartas próprias visíveis, alheias como contagem). O estado filtrado de cada assento inclui `legalActions` daquele assento, para o cliente habilitar botões sem conhecer regra. Timer de turno 20 s; `allowReconnection(client, 60)`; bot assume após expirar.
 - **Sinais**: mensagem `signal { signalId }` → validação (catálogo, rate limit 1/3 s) → broadcast `signal { seat, signalId, at }` → log.
 - **Eventos de jogo e efeitos**: o servidor transmite `GameEvent` (`bet_called`, `bet_accepted`, `bet_folded`, `special_hand`, `trick_won`, `game_won`, `series_won`) para todos, e o cliente toca a voz do avatar a partir deles. Efeitos engraçados: `sfx { sfxId }` → validação (catálogo, rate limit 1/5 s) → broadcast `sfx { seat, sfxId, at }`. Nenhum áudio trafega pela rede; só ids (`docs/audio.md`).

@@ -1,4 +1,4 @@
-import { VARIANT_IDS, type VariantId } from './index';
+import { VARIANT_IDS, type VariantId } from './catalogs';
 
 /** Assento na mesa: 0..seats-1. Duplas: assento % 2 (espelha `Seat` do motor). */
 export type Seat = number;
@@ -26,7 +26,7 @@ export interface JoinOptions {
   readonly partnerUserId?: string;
 }
 
-export const ROOM_CODE_LENGTH = 6;
+export const ROOM_CODE_LENGTH = 8;
 
 /**
  * Alfabeto do código de mesa: A-Z e 2-9 sem os caracteres ambíguos 0, O, 1, I e L
@@ -36,7 +36,7 @@ export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 const CODE_RE = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
 
-/** Verdadeiro se `code` é uma string de 6 caracteres do alfabeto (maiúsculas, sem normalizar). */
+/** Verdadeiro se `code` é uma string de 8 caracteres do alfabeto (maiúsculas, sem normalizar). */
 export function isValidRoomCode(code: unknown): code is string {
   return typeof code === 'string' && CODE_RE.test(code);
 }

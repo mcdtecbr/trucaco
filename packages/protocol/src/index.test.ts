@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTION_MIN_INTERVAL_MS,
+  CHAT_COOLDOWN_MS,
+  CHAT_MAX_COMBINING_RUN,
+  CHAT_MAX_LENGTH,
+  MAX_MESSAGE_BYTES,
+  SIGNAL_COOLDOWN_MS,
   PROTOCOL_VERSION,
   QUICK_PHRASES,
   QUICK_PHRASE_IDS,
@@ -39,5 +45,16 @@ describe('protocol', () => {
     for (const list of [SIGNAL_IDS, SFX_IDS, VARIANT_IDS]) {
       expect(new Set(list).size).toBe(list.length);
     }
+  });
+});
+
+describe('limites de ação', () => {
+  it('constantes coerentes', () => {
+    expect(MAX_MESSAGE_BYTES).toBe(1024);
+    expect(MAX_MESSAGE_BYTES).toBeGreaterThan(CHAT_MAX_LENGTH * 4);
+    expect(ACTION_MIN_INTERVAL_MS).toBeGreaterThan(0);
+    expect(ACTION_MIN_INTERVAL_MS).toBeLessThan(SIGNAL_COOLDOWN_MS);
+    expect(CHAT_COOLDOWN_MS).toBeLessThan(SIGNAL_COOLDOWN_MS);
+    expect(CHAT_MAX_COMBINING_RUN).toBeGreaterThan(0);
   });
 });

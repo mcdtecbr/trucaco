@@ -30,7 +30,7 @@ Escopo de 2G: `POST /auth/guest`, `/auth/refresh` (rotativo em Redis), `/auth/li
 
 ## Contrato em `packages/protocol` (`messages.ts`, `room.ts`, `errors.ts`)
 
-**Opções de sala:** `RoomOptions { variant; format: 'single'|'bo3'; ironHand: boolean; visibility: 'public'|'private' }`, `JoinOptions { code?; partnerUserId? }`, `ROOM_CODE_LENGTH = 6` e alfabeto sem caracteres ambíguos (`A-Z2-9`). `bo3` só em mesa privada.
+**Opções de sala:** `RoomOptions { variant; format: 'single'|'bo3'; ironHand: boolean; visibility: 'public'|'private' }`, `JoinOptions { code?; partnerUserId? }`, `ROOM_CODE_LENGTH = 8` (decisão do usuário após a auditoria: 6 era adivinhável por força bruta) e alfabeto de 31 símbolos sem caracteres ambíguos (sem `0`, `O`, `1`, `I`, `L`). `bo3` só em mesa privada.
 
 **Cliente → servidor** (nunca levam `seat`; o servidor deriva do `client`): `play {card, covered?}`, `playBlind {index}`, `bet` (o servidor escolhe `callBet` ou `raiseBet` pelo estado), `accept`, `run`, `special {decision: 'play'|'run'}`, `signal {signalId}`, `sfx {sfxId}`, `chat {scope: 'partner'|'table', text}` ou `{scope, phraseId}`, `voteCancel`, `ready`.
 

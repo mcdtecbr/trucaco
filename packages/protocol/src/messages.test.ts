@@ -87,3 +87,95 @@ describe('parseClientMessage inválidas', () => {
     bad({ type: 'chat', scope: 'table', text: 'oi', phraseId: 'good_luck' });
   });
 });
+
+describe('chat: caracteres perigosos', () => {
+  const chat = (text: string): unknown => ({ type: 'chat', scope: 'table', text });
+  it('rejeita zero-width, bidi, controle, BOM e surrogate solto', () => {
+    for (const t of [
+      'a​b',
+      'a‌b',
+      'a‍b',
+      'a‮b',
+      'a‪b',
+      'a⁦b',
+      'a⁩b',
+      'a\u0000b',
+      'a\u001bb',
+      'a\u007fb',
+      'a\u0085b',
+      'a﻿b',
+      'a\uD800b',
+      '\uDC00',
+      'ab\uD83D',
+    ]) {
+      bad(chat(t));
+    }
+  });
+  it('quebras de linha e tab viram espaço', () => {
+    ok(chat('a\nb\r\nc\td'), { type: 'chat', scope: 'table', text: 'a b  c d' });
+    bad(chat('\n \t\r'));
+    bad(chat('   '));
+  });
+  it('zalgo: até 3 combinantes passam, mais que 3 (após NFC) rejeitam', () => {
+    ok(chat('é̂̃'.normalize('NFD')), {
+      type: 'chat',
+      scope: 'table',
+      text: 'é̂̃'.normalize('NFC'),
+    });
+    bad(chat('a' + '́'.repeat(139)));
+    bad(chat('a' + '́'.repeat(5)));
+  });
+  it('normaliza NFC e conta o limite em code points depois', () => {
+    ok(chat('é'), { type: 'chat', scope: 'table', text: 'é' });
+    ok(chat('😀'.repeat(CHAT_MAX_LENGTH)), {
+      type: 'chat',
+      scope: 'table',
+      text: '😀'.repeat(CHAT_MAX_LENGTH),
+    });
+    bad(chat('😀'.repeat(CHAT_MAX_LENGTH + 1)));
+    bad(chat('a'.repeat(CHAT_MAX_LENGTH * 2 + 1)));
+  });
+  it('texto normal pt-BR, emoji e HTML passam intactos (escape é do cliente)', () => {
+    for (const text of ['Ação já! Truco, são três cartões 👍🏽', '<img src=x onerror=alert(1)>']) {
+      ok(chat(text), { type: 'chat', scope: 'table', text });
+    }
+  });
+});
+
+describe('parseClientMessage robustez', () => {
+  it('ignora/rejeita propriedades herdadas', () => {
+    bad(Object.create({ type: 'bet' }));
+    bad(Object.assign(Object.create({ card: { rank: '3', suit: 'paus' } }), { type: 'play' }));
+    bad(Object.assign(Object.create({ phraseId: 'good_luck' }), { type: 'chat', scope: 'table' }));
+    bad({ type: 'play', card: Object.create({ rank: '3', suit: 'paus' }) });
+  });
+  it('getter que lança e Proxy hostil viram INVALID_PAYLOAD', () => {
+    bad({
+      type: 'bet',
+      get x(): never {
+        throw new Error('boom');
+      },
+    });
+    const proxy = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('boom');
+        },
+      },
+    );
+    bad(proxy);
+  });
+  it('getter que muda de valor: cada propriedade é lida uma vez', () => {
+    let reads = 0;
+    const raw = {
+      type: 'signal',
+      get signalId(): string {
+        reads += 1;
+        return reads === 1 ? 'wink' : 'inexistente';
+      },
+    };
+    ok(raw, { type: 'signal', signalId: 'wink' });
+    expect(reads).toBe(1);
+  });
+});

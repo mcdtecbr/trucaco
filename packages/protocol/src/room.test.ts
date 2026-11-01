@@ -10,19 +10,20 @@ const base = { variant: 'paulista', format: 'single', ironHand: false, visibilit
 
 describe('código de mesa', () => {
   it('alfabeto sem ambíguos e sem repetição', () => {
-    expect(ROOM_CODE_LENGTH).toBe(6);
+    expect(ROOM_CODE_LENGTH).toBe(8);
     for (const c of '01OIL') expect(ROOM_CODE_ALPHABET).not.toContain(c);
     expect(new Set(ROOM_CODE_ALPHABET).size).toBe(ROOM_CODE_ALPHABET.length);
     expect(ROOM_CODE_ALPHABET).toHaveLength(31);
   });
   it('valida formato', () => {
-    expect(isValidRoomCode('ABC234')).toBe(true);
+    expect(isValidRoomCode('ABC23456')).toBe(true);
     for (const bad of [
-      'ABC23',
-      'ABC2345',
-      'abc234',
-      'ABC0O1',
-      'ABCIL2',
+      'ABC2345', // 7 caracteres
+      'ABC234567', // 9 caracteres
+      'ABC234', // código antigo de 6
+      'abc23456',
+      'ABC0O1I2', // 8 caracteres, todos ambíguos
+      'ABCIL234',
       '',
       null,
       123,
