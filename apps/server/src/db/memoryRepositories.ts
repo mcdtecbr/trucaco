@@ -4,6 +4,7 @@ import {
   MATCH_PAGE_DEFAULT,
   MATCH_PAGE_MAX,
   NicknameTakenError,
+  NotPartnersError,
   ProviderSubjectTakenError,
   type AuthProviderId,
   type FinishedMatchInput,
@@ -19,13 +20,17 @@ import {
   type UserRepository,
 } from './types';
 import {
-  assertNickname,
+  assertAvatarParts,
+  assertFinishedMatch,
   assertPartnerCodes,
+  assertProviderSubject,
   assertReportText,
   clampLimit,
   decodeCursor,
   encodeCursor,
+  normalizeId,
   orderPair,
+  validateNickname,
 } from './validation';
 
 /**
@@ -57,8 +62,9 @@ export class MemoryUserRepository implements UserRepository {
   }
 
   async createGuest(input: NewGuestInput): Promise<UserRecord> {
-    assertNickname(input.nickname);
-    const lower = input.nickname.toLowerCase();
+    const nickname = validateNickname(input.nickname);
+    assertProviderSubject(input.providerSubject);
+    const lower = nickname.toLowerCase();
     for (const user of this.store.users.values()) {
       if (user.nickname.toLowerCase() === lower) throw new NicknameTakenError();
       if (user.provider === 'guest' && user.providerSubject === input.providerSubject) {
@@ -70,7 +76,7 @@ export class MemoryUserRepository implements UserRepository {
       id: randomUUID(),
       provider: 'guest',
       providerSubject: input.providerSubject,
-      nickname: input.nickname,
+      nickname,
       createdAt: now,
       lastSeenAt: now,
     };
@@ -79,7 +85,7 @@ export class MemoryUserRepository implements UserRepository {
   }
 
   async findById(id: string): Promise<UserRecord | null> {
-    return this.store.users.get(id) ?? null;
+    return this.store.users.get(normalizeId(id)) ?? null;
   }
 
   async findByProvider(
@@ -92,40 +98,45 @@ export class MemoryUserRepository implements UserRepository {
     return null;
   }
 
-  async touchLastSeen(id: string, at: Date): Promise<void> {
+  async touchLastSeen(rawId: string, at: Date): Promise<void> {
+    const id = normalizeId(rawId);
     const user = this.store.users.get(id);
     if (user !== undefined) this.store.users.set(id, { ...user, lastSeenAt: at });
   }
 
   async getAvatar(userId: string): Promise<JsonObject | null> {
-    return this.store.avatars.get(userId) ?? null;
+    return this.store.avatars.get(normalizeId(userId)) ?? null;
   }
 
   async saveAvatar(userId: string, parts: JsonObject): Promise<void> {
-    this.requireUser(userId);
-    this.store.avatars.set(userId, parts);
+    const id = normalizeId(userId);
+    assertAvatarParts(parts);
+    this.requireUser(id);
+    this.store.avatars.set(id, parts);
   }
 
   async addBlock(blockerId: string, blockedId: string): Promise<void> {
-    if (blockerId === blockedId) throw new InvalidInputError('Não é possível bloquear a si mesmo.');
-    this.requireUser(blockerId);
-    this.requireUser(blockedId);
-    this.store.blocks.add(blockKey(blockerId, blockedId));
+    const blocker = normalizeId(blockerId);
+    const blocked = normalizeId(blockedId);
+    if (blocker === blocked) throw new InvalidInputError('Não é possível bloquear a si mesmo.');
+    this.requireUser(blocker);
+    this.requireUser(blocked);
+    this.store.blocks.add(blockKey(blocker, blocked));
   }
 
   async removeBlock(blockerId: string, blockedId: string): Promise<void> {
-    this.store.blocks.delete(blockKey(blockerId, blockedId));
+    this.store.blocks.delete(blockKey(normalizeId(blockerId), normalizeId(blockedId)));
   }
 
-  async listBlockedIds(userId: string): Promise<readonly string[]> {
-    const prefix = `${userId}>`;
+  async listBlockedIds(rawId: string): Promise<readonly string[]> {
+    const prefix = `${normalizeId(rawId)}>`;
     return [...this.store.blocks]
       .filter((k) => k.startsWith(prefix))
       .map((k) => k.slice(prefix.length));
   }
 
-  async listBlockerIds(userId: string): Promise<readonly string[]> {
-    const suffix = `>${userId}`;
+  async listBlockerIds(rawId: string): Promise<readonly string[]> {
+    const suffix = `>${normalizeId(rawId)}`;
     return [...this.store.blocks]
       .filter((k) => k.endsWith(suffix))
       .map((k) => k.slice(0, k.length - suffix.length));
@@ -133,19 +144,22 @@ export class MemoryUserRepository implements UserRepository {
 
   async createReport(input: NewReportInput): Promise<ReportRecord> {
     assertReportText(input.text);
-    if (input.reporterId === input.reportedId) {
+    const reporterId = normalizeId(input.reporterId);
+    const reportedId = normalizeId(input.reportedId);
+    const matchId = input.matchId === undefined ? null : normalizeId(input.matchId);
+    if (reporterId === reportedId) {
       throw new InvalidInputError('Não é possível denunciar a si mesmo.');
     }
-    this.requireUser(input.reporterId);
-    this.requireUser(input.reportedId);
-    if (input.matchId !== undefined && !this.store.matches.some((m) => m.id === input.matchId)) {
+    this.requireUser(reporterId);
+    this.requireUser(reportedId);
+    if (matchId !== null && !this.store.matches.some((m) => m.id === matchId)) {
       throw new InvalidInputError('Usuário ou partida inexistente.');
     }
     const report: ReportRecord = {
       id: randomUUID(),
-      reporterId: input.reporterId,
-      reportedId: input.reportedId,
-      matchId: input.matchId ?? null,
+      reporterId,
+      reportedId,
+      matchId,
       reason: input.reason,
       text: input.text ?? null,
       status: 'open',
@@ -155,16 +169,30 @@ export class MemoryUserRepository implements UserRepository {
     return report;
   }
 
+  async havePlayedTogether(userA: string, userB: string): Promise<boolean> {
+    const [a, b] = orderPair(userA, userB);
+    return this.store.matches.some(
+      (m) =>
+        m.input.status === 'finished' &&
+        m.input.players.some(
+          (pa) =>
+            pa.userId === a &&
+            m.input.players.some(
+              (pb) => pb.userId === b && pb.team === pa.team && pb.seat !== pa.seat,
+            ),
+        ),
+    );
+  }
+
   async getPartnerCodes(userId: string, partnerId: string): Promise<PartnerCodesMap | null> {
     const [a, b] = orderPair(userId, partnerId);
     return this.store.partnerCodes.get(`${a}|${b}`) ?? null;
   }
 
   async savePartnerCodes(userId: string, partnerId: string, codes: PartnerCodesMap): Promise<void> {
-    assertPartnerCodes(codes);
     const [a, b] = orderPair(userId, partnerId);
-    this.requireUser(a);
-    this.requireUser(b);
+    assertPartnerCodes(codes);
+    if (!(await this.havePlayedTogether(a, b))) throw new NotPartnersError();
     this.store.partnerCodes.set(`${a}|${b}`, { ...codes });
   }
 }
@@ -172,7 +200,13 @@ export class MemoryUserRepository implements UserRepository {
 export class MemoryMatchRepository implements MatchRepository {
   constructor(private readonly store: MemoryStore = new MemoryStore()) {}
 
-  async saveMatch(input: FinishedMatchInput): Promise<string> {
+  async saveMatch(raw: FinishedMatchInput): Promise<string> {
+    const input = assertFinishedMatch(raw);
+    for (const p of input.players) {
+      if (p.userId !== null && !this.store.users.has(p.userId)) {
+        throw new InvalidInputError('Usuário ou partida inexistente.');
+      }
+    }
     const id = randomUUID();
     this.store.matches.push({ id, input });
     return id;
@@ -182,10 +216,11 @@ export class MemoryMatchRepository implements MatchRepository {
     userId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
   ): Promise<MatchPage> {
+    const me = normalizeId(userId);
     const limit = clampLimit(options?.limit, MATCH_PAGE_DEFAULT, MATCH_PAGE_MAX);
     const cursor = options?.cursor === undefined ? null : decodeCursor(options.cursor);
     const mine = this.store.matches
-      .filter((m) => m.input.players.some((p) => p.userId === userId))
+      .filter((m) => m.input.players.some((p) => p.userId === me))
       .sort((x, y) => {
         const dt = y.input.endedAt.getTime() - x.input.endedAt.getTime();
         return dt !== 0 ? dt : x.id < y.id ? 1 : x.id > y.id ? -1 : 0;

@@ -1,19 +1,28 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { PrismaClient } from '../generated/prisma/client';
+import { invalidMatchCases } from './parityCases';
 import { createPrisma, type PrismaHandle } from './prisma';
+import { constraintNameOf, guarded } from './prismaErrors';
 import { PrismaMatchRepository, PrismaUserRepository } from './prismaRepositories';
+import { assertSafeTestDatabaseUrl } from './testDatabase';
 import {
   InvalidInputError,
   NicknameTakenError,
+  NotPartnersError,
   ProviderSubjectTakenError,
   type FinishedMatchInput,
+  type PartnerCodesMap,
   type UserRecord,
 } from './types';
 
 /**
- * Integração com Postgres real (`pnpm test:int`). Exige DATABASE_URL de um banco DESCARTÁVEL já
- * migrado (`pnpm db:deploy`): cada teste começa com as tabelas truncadas.
+ * Integração com Postgres real (`pnpm test:int`). Exige TEST_DATABASE_URL de um banco DESCARTÁVEL
+ * já migrado (`pnpm db:deploy`): cada teste começa com as tabelas truncadas. A trava
+ * (`assertSafeTestDatabaseUrl`) recusa host não local e banco sem "test"/"verif" no nome, antes de
+ * qualquer escrita.
  */
-const url = process.env['DATABASE_URL'];
+const url = process.env['TEST_DATABASE_URL'];
 
 describe.skipIf(url === undefined || url === '')('persistência (Postgres real)', () => {
   let handle: PrismaHandle;
@@ -56,8 +65,27 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
     ...overrides,
   });
 
+  /** Dupla A+C (assentos 0 e 2) numa partida finalizada: libera `savePartnerCodes`. */
+  const makePartners = async (x: string, y: string): Promise<void> => {
+    await matches.saveMatch(matchInput([x, null, y, null], new Date('2026-11-01T11:00:00Z')));
+  };
+
+  const rawNick = (nickname: string): Promise<number> =>
+    db().$executeRaw`INSERT INTO users (id, provider, provider_subject, nickname)
+      VALUES (gen_random_uuid(), 'guest', ${`raw-${++seq}`}, ${nickname})`;
+
+  const rawMatch = (
+    over: { status?: string; winner?: number | null; seed?: number; ended?: string } = {},
+  ): Promise<number> =>
+    db().$executeRaw`INSERT INTO matches (id, variant, format, iron_hand, visibility, seed, options,
+        events, games, status, winner_team, started_at, ended_at)
+      VALUES (gen_random_uuid(), 'paulista', 'single', false, 'public', ${over.seed ?? 1},
+        '{}', '[]', '[]', ${over.status ?? 'finished'}::match_status,
+        ${over.winner === undefined ? 0 : over.winner}::smallint, '2026-11-01T12:00:00Z',
+        ${over.ended ?? '2026-11-01T12:01:00Z'}::timestamptz)`;
+
   beforeAll(() => {
-    handle = createPrisma(url ?? '', { maxConnections: 4 });
+    handle = createPrisma(assertSafeTestDatabaseUrl(url), { maxConnections: 4 });
     users = new PrismaUserRepository(handle.prisma);
     matches = new PrismaMatchRepository(handle.prisma);
   });
@@ -73,17 +101,18 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
   });
 
   describe('users', () => {
-    it('apelido é único sem diferenciar maiúsculas e minúsculas', async () => {
+    it('apelido é único sem diferenciar maiúsculas e minúsculas (inclusive acentuadas)', async () => {
       await guest('Ana');
       await expect(guest('ana')).rejects.toBeInstanceOf(NicknameTakenError);
       await expect(guest('ANA')).rejects.toBeInstanceOf(NicknameTakenError);
+      await guest('Ágil');
+      await expect(guest('ágil')).rejects.toBeInstanceOf(NicknameTakenError);
       // O índice em lower(nickname) vale também para SQL direto (sem passar pelo repositório).
-      await expect(
-        db().$executeRawUnsafe(
-          `INSERT INTO users (id, provider, provider_subject, nickname)
-           VALUES (gen_random_uuid(), 'guest', 'raw-1', 'aNa')`,
-        ),
-      ).rejects.toThrow(/users_nickname_lower_key/);
+      await expect(rawNick('aNa')).rejects.toThrow(/users_nickname_lower_key/);
+      await expect(rawNick('ÁGIL')).rejects.toThrow(/users_nickname_lower_key/);
+      // Banco com locale "C" não dobraria a caixa de Á: o cluster precisa ser UTF-8.
+      const [row] = await db().$queryRaw<{ l: string }[]>`SELECT lower('ÁGIL') AS l`;
+      expect(row?.l).toBe('ágil');
     });
 
     it('apelido tem de 3 a 16 caracteres (repositório e CHECK)', async () => {
@@ -92,19 +121,60 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       await expect(guest(' ana')).rejects.toBeInstanceOf(InvalidInputError);
       expect((await guest('abc')).nickname).toBe('abc');
       expect((await guest('a'.repeat(16))).nickname).toHaveLength(16);
-      await expect(
-        db().$executeRawUnsafe(
-          `INSERT INTO users (id, provider, provider_subject, nickname)
-           VALUES (gen_random_uuid(), 'guest', 'raw-2', 'ab')`,
-        ),
-      ).rejects.toThrow(/users_nickname_length_check/);
+      await expect(rawNick('ab')).rejects.toThrow(/users_nickname_length_check/);
       // 17 caracteres: recusado pelo VARCHAR(16) antes mesmo do CHECK.
-      await expect(
-        db().$executeRawUnsafe(
-          `INSERT INTO users (id, provider, provider_subject, nickname)
-           VALUES (gen_random_uuid(), 'guest', 'raw-3', '${'x'.repeat(17)}')`,
-        ),
-      ).rejects.toThrow();
+      await expect(rawNick('x'.repeat(17))).rejects.toThrow();
+    });
+
+    it('política de apelido: o CHECK recusa o que o repositório recusa (casos do Vitor)', async () => {
+      const bad: readonly string[] = [
+        'Jo\u200bao', // zero-width
+        'J\u043eao', // o cirílico
+        '\u03a9mega', // grego
+        '\u202eoaoJ', // bidi
+        'Joao ',
+        'Jo ao',
+        'Jo\tao',
+        'Joao\n',
+        'Jo\u00a0ao',
+        'a\u00d7b',
+        'Joa\u0303o', // NFD
+        'a\u0345bc',
+        'Joao\u{1F600}',
+      ];
+      for (const nick of bad) {
+        await expect(rawNick(nick), JSON.stringify(nick)).rejects.toThrow(
+          /users_nickname_(charset|nfc|length)_check/,
+        );
+        await expect(guest(nick === 'Joa\u0303o' ? 'ab' : nick)).rejects.toBeInstanceOf(
+          InvalidInputError,
+        );
+      }
+      // O NFD isolado: o repositório normaliza e aceita; o banco, direto, recusa.
+      expect((await guest('Joa\u0303o')).nickname).toBe('João');
+      for (const nick of ['Zé_da-Silva', 'Ana.B', 'Ágil2', 'Joao', 'Çedilha9']) {
+        await expect(rawNick(nick), nick).resolves.toBe(1);
+      }
+    });
+
+    it('as constraints de apelido têm nome estável (lido do erro estruturado)', async () => {
+      await guest('Ana');
+      try {
+        await db().user.create({
+          data: { provider: 'guest', providerSubject: 'q', nickname: 'ANA' },
+        });
+        expect.unreachable();
+      } catch (error) {
+        expect(constraintNameOf(error)).toBe('users_nickname_lower_key');
+      }
+      try {
+        await db().user.create({
+          data: { provider: 'guest', providerSubject: 'q2', nickname: 'a b' },
+        });
+        expect.unreachable();
+      } catch (error) {
+        expect(constraintNameOf(error)).toBe('users_nickname_charset_check');
+      }
     });
 
     it('UNIQUE(provider, provider_subject); o mesmo subject em outro provedor é outra conta', async () => {
@@ -150,6 +220,18 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       await db().user.delete({ where: { id: u.id } });
       expect(await db().avatar.count()).toBe(0);
     });
+
+    it('avatar: teto de tamanho no banco e no repositório', async () => {
+      const u = await guest('Gil');
+      await expect(users.saveAvatar(u.id, { hat: 'x'.repeat(141) })).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
+      await expect(
+        db().$executeRaw`INSERT INTO avatars (user_id, parts, updated_at)
+          VALUES (${u.id}::uuid, jsonb_build_object('k', repeat('x', 5000000)), now())`,
+      ).rejects.toThrow(/avatars_parts_size_check/);
+      await users.saveAvatar(u.id, { hat: 'x'.repeat(140) });
+    });
   });
 
   describe('blocks', () => {
@@ -176,22 +258,54 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
   });
 
   describe('partner_codes', () => {
-    it('par é ordenado: (a,b) e (b,a) são o mesmo registro', async () => {
+    it('par é ordenado: (a,b) e (b,a) são o mesmo registro (com vínculo de dupla)', async () => {
       const a = await guest('Ana');
       const b = await guest('Beto');
-      await users.savePartnerCodes(a.id, b.id, { s1: 'tenho zap' });
-      await users.savePartnerCodes(b.id, a.id, { s1: 'tenho zap', s2: 'sem manilha' });
+      await makePartners(a.id, b.id);
+      await users.savePartnerCodes(a.id, b.id, { wink: 'tenho zap' });
+      await users.savePartnerCodes(b.id.toUpperCase(), a.id, {
+        wink: 'tenho zap',
+        nod: 'sem manilha',
+      });
       expect(await db().partnerCodes.count()).toBe(1);
       expect(await users.getPartnerCodes(a.id, b.id)).toEqual({
-        s1: 'tenho zap',
-        s2: 'sem manilha',
+        wink: 'tenho zap',
+        nod: 'sem manilha',
       });
       expect(await users.getPartnerCodes(b.id, a.id)).toEqual({
-        s1: 'tenho zap',
-        s2: 'sem manilha',
+        wink: 'tenho zap',
+        nod: 'sem manilha',
       });
       const row = await db().partnerCodes.findFirstOrThrow();
       expect(row.userAId < row.userBId).toBe(true);
+    });
+
+    it('havePlayedTogether: mesma dupla em partida finalizada; adversário e cancelada não contam', async () => {
+      const [a, b, c, d] = await Promise.all([
+        guest('Ana'),
+        guest('Beto'),
+        guest('Caio'),
+        guest('Dora'),
+      ]);
+      const t = new Date('2026-11-01T12:00:00Z');
+      expect(await users.havePlayedTogether(a.id, b.id)).toBe(false);
+      await expect(users.savePartnerCodes(a.id, b.id, {})).rejects.toBeInstanceOf(NotPartnersError);
+      // a,b,c,d nos assentos 0..3: duplas (a,c) e (b,d).
+      await matches.saveMatch(matchInput([a.id, b.id, c.id, d.id], t));
+      expect(await users.havePlayedTogether(a.id, c.id)).toBe(true);
+      expect(await users.havePlayedTogether(d.id.toUpperCase(), b.id)).toBe(true);
+      expect(await users.havePlayedTogether(a.id, b.id)).toBe(false);
+      expect(await users.havePlayedTogether(a.id, d.id)).toBe(false);
+      await expect(users.savePartnerCodes(a.id, b.id, { wink: 'x' })).rejects.toBeInstanceOf(
+        NotPartnersError,
+      );
+      await users.savePartnerCodes(a.id, c.id, { wink: 'x' });
+      // Partida cancelada não cria vínculo.
+      await matches.saveMatch(
+        matchInput([a.id, null, d.id, null], t, { status: 'cancelled', winnerTeam: null }),
+      );
+      expect(await users.havePlayedTogether(a.id, d.id)).toBe(false);
+      await expect(users.havePlayedTogether(a.id, a.id)).rejects.toBeInstanceOf(InvalidInputError);
     });
 
     it('CHECK recusa par fora de ordem, par consigo e duplicado', async () => {
@@ -209,16 +323,31 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       await expect(insert(lo, hi)).rejects.toThrow(/partner_codes_user_a_id_user_b_id_key/);
     });
 
-    it('significado de até 140 caracteres; 141 é recusado', async () => {
+    it('significado de até 140 caracteres, só signalId do catálogo; teto de 16 KB no banco', async () => {
       const a = await guest('Ana');
       const b = await guest('Beto');
-      await users.savePartnerCodes(a.id, b.id, { s1: 'x'.repeat(140) });
-      await expect(
-        users.savePartnerCodes(a.id, b.id, { s1: 'x'.repeat(141) }),
-      ).rejects.toBeInstanceOf(InvalidInputError);
+      await makePartners(a.id, b.id);
+      await users.savePartnerCodes(a.id, b.id, { wink: 'x'.repeat(140) });
+      const badCodes: PartnerCodesMap[] = [
+        { wink: 'x'.repeat(141) },
+        { naoExiste: 'x' },
+        { '': 'x' },
+      ];
+      for (const bad of badCodes) {
+        await expect(users.savePartnerCodes(a.id, b.id, bad)).rejects.toBeInstanceOf(
+          InvalidInputError,
+        );
+      }
       await expect(users.savePartnerCodes(a.id, a.id, {})).rejects.toBeInstanceOf(
         InvalidInputError,
       );
+      const [lo, hi] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+      await db().partnerCodes.deleteMany();
+      await expect(
+        db().$executeRaw`INSERT INTO partner_codes (id, user_a_id, user_b_id, codes, updated_at)
+          VALUES (gen_random_uuid(), ${lo}::uuid, ${hi}::uuid,
+                  jsonb_build_object('wink', repeat('x', 5000000)), now())`,
+      ).rejects.toThrow(/partner_codes_codes_size_check/);
     });
   });
 
@@ -256,38 +385,153 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       expect(Object.keys(item ?? {})).not.toContain('seed');
     });
 
-    it('CHECKs: status x vencedor, assento 0..3, dupla = assento % 2, assento repetido', async () => {
+    it('CHECKs do banco (SQL direto): status x vencedor, assento 0..3, dupla, período, seed, botFrom', async () => {
       const a = await guest('Ana');
-      const t = new Date('2026-11-01T12:00:00Z');
-      await expect(matches.saveMatch(matchInput([a.id], t, { winnerTeam: null }))).rejects.toThrow(
+      await expect(rawMatch({ winner: null })).rejects.toThrow(/matches_status_winner_check/);
+      await expect(rawMatch({ status: 'cancelled', winner: 1 })).rejects.toThrow(
         /matches_status_winner_check/,
       );
+      await expect(rawMatch({ seed: -1 })).rejects.toThrow(/matches_seed_check/);
+      await expect(rawMatch({ seed: 4294967296 })).rejects.toThrow(/matches_seed_check/);
+      await expect(rawMatch({ ended: '2026-11-01T11:59:00Z' })).rejects.toThrow(
+        /matches_period_check/,
+      );
+      await rawMatch({ status: 'cancelled', winner: null });
+      const [m] = await db().$queryRaw<{ id: string }[]>`SELECT id FROM matches`;
+      const player = (seat: number, team: number, bot: number | null): Promise<number> =>
+        db().$executeRaw`INSERT INTO match_players (match_id, seat, user_id, team, bot_from)
+          VALUES (${m?.id}::uuid, ${seat}::smallint, ${a.id}::uuid, ${team}::smallint, ${bot})`;
+      await expect(player(4, 0, null)).rejects.toThrow(/match_players_seat_check/);
+      await expect(player(1, 0, null)).rejects.toThrow(/match_players_team_check/);
+      await expect(player(0, 0, -1)).rejects.toThrow(/match_players_bot_from_check/);
+      await player(0, 0, null);
+      await expect(player(0, 0, null)).rejects.toThrow(/match_players_pkey/);
+      expect(await db().match.count()).toBe(1);
+    });
+
+    it('PARIDADE: o mesmo conjunto de entradas inválidas é recusado com InvalidInputError, sem gravar nada', async () => {
+      const a = await guest('Ana');
+      const valid = matchInput([a.id, null, null, null], new Date('2026-11-01T12:00:00Z'));
+      for (const { name, input } of invalidMatchCases(
+        valid,
+        a.id,
+        '00000000-0000-4000-8000-000000000000',
+      )) {
+        await expect(matches.saveMatch(input), name).rejects.toBeInstanceOf(InvalidInputError);
+      }
+      expect(await db().match.count()).toBe(0);
+      expect(await db().matchPlayer.count()).toBe(0);
+      await matches.saveMatch(valid);
+      expect(await db().match.count()).toBe(1);
+    });
+
+    it('userId inexistente é recusado pela FK mesmo sem a checagem do repositório', async () => {
+      const ghost = '00000000-0000-4000-8000-000000000000';
       await expect(
-        matches.saveMatch(matchInput([a.id], t, { status: 'cancelled', winnerTeam: 1 })),
-      ).rejects.toThrow(/matches_status_winner_check/);
-      await matches.saveMatch(matchInput([a.id], t, { status: 'cancelled', winnerTeam: null }));
-      await expect(
-        matches.saveMatch(
-          matchInput([a.id], t, { players: [{ seat: 4, userId: a.id, team: 0, botFrom: null }] }),
-        ),
-      ).rejects.toThrow(/match_players_seat_check/);
-      await expect(
-        matches.saveMatch(
-          matchInput([a.id], t, { players: [{ seat: 1, userId: a.id, team: 0, botFrom: null }] }),
-        ),
-      ).rejects.toThrow(/match_players_team_check/);
-      await expect(
-        matches.saveMatch(
-          matchInput([a.id], t, {
-            players: [
-              { seat: 0, userId: a.id, team: 0, botFrom: null },
-              { seat: 0, userId: null, team: 0, botFrom: 0 },
-            ],
+        guarded(() =>
+          db().match.create({
+            data: {
+              variant: 'paulista',
+              format: 'single',
+              ironHand: false,
+              visibility: 'public',
+              seed: 1n,
+              options: {},
+              events: [],
+              games: [],
+              status: 'cancelled',
+              startedAt: new Date(),
+              endedAt: new Date(),
+              players: { create: [{ seat: 0, userId: ghost, team: 0 }] },
+            },
           }),
         ),
-      ).rejects.toThrow();
-      // Partida que falhou no meio não deixa linha órfã (transação).
-      expect(await db().match.count()).toBe(1);
+      ).rejects.toBeInstanceOf(InvalidInputError);
+    });
+
+    it('erro do banco é saneado: sem meta, detail nem o conteúdo de deals; nome da constraint preservado', async () => {
+      const marker = 'MAO-SECRETA-4C-7H-ZAP';
+      const create = (): Promise<unknown> =>
+        db().match.create({
+          data: {
+            variant: 'paulista',
+            format: 'single',
+            ironHand: false,
+            visibility: 'public',
+            seed: 1n,
+            options: {},
+            events: [],
+            games: [],
+            deals: [{ hand: 1, cards: [marker] }],
+            status: 'finished',
+            winnerTeam: null,
+            startedAt: new Date(),
+            endedAt: new Date(),
+          },
+        });
+      // Prova de que o teste é significativo: o erro BRUTO carrega a linha inteira.
+      const raw: unknown = await create().catch((error: unknown) => error);
+      expect(JSON.stringify(raw)).toContain(marker);
+      expect(constraintNameOf(raw)).toBe('matches_status_winner_check');
+
+      const clean: unknown = await guarded(create).catch((error: unknown) => error);
+      expect(clean).toBeInstanceOf(InvalidInputError);
+      const err = clean as InvalidInputError;
+      expect(err.constraint).toBe('matches_status_winner_check');
+      const everything = [
+        err.message,
+        err.stack ?? '',
+        JSON.stringify(err),
+        ...Object.getOwnPropertyNames(err).map((k) => String(Reflect.get(err, k))),
+      ].join('\n');
+      expect(everything).not.toContain(marker);
+      expect(everything).not.toContain('Failing row');
+      expect(Reflect.get(err, 'meta')).toBeUndefined();
+      expect(Reflect.get(err, 'cause')).toBeUndefined();
+    });
+
+    it('tetos de tamanho dos jsonb de matches (SQL direto)', async () => {
+      const big = (col: string, bytes: number): Promise<number> =>
+        db().$executeRawUnsafe(
+          `INSERT INTO matches (id, variant, format, iron_hand, visibility, seed, options, events,
+                                games, deals, status, winner_team, started_at, ended_at)
+           SELECT gen_random_uuid(), 'paulista', 'single', false, 'public', 1,
+                  ${col === 'options' ? `jsonb_build_object('k', repeat('x', ${bytes}))` : "'{}'"},
+                  ${col === 'events' ? `jsonb_build_array(repeat('x', ${bytes}))` : "'[]'"},
+                  ${col === 'games' ? `jsonb_build_array(repeat('x', ${bytes}))` : "'[]'"},
+                  ${col === 'deals' ? `jsonb_build_array(repeat('x', ${bytes}))` : 'NULL'},
+                  'finished', 0, now(), now()`,
+        );
+      await expect(big('options', 20_000)).rejects.toThrow(/matches_options_size_check/);
+      await expect(big('games', 70_000)).rejects.toThrow(/matches_games_size_check/);
+      await expect(big('deals', 1_100_000)).rejects.toThrow(/matches_deals_size_check/);
+      await expect(big('events', 2_200_000)).rejects.toThrow(/matches_events_size_check/);
+      await big('events', 1_900_000);
+      await big('deals', 900_000);
+    });
+
+    it('todo id que não é UUID vira InvalidInputError (nunca P2007 cru); MAIÚSCULAS são normalizadas', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      for (const id of ['xyz', '', 'nao-uuid', `${a.id}x`]) {
+        await expect(users.findById(id), id).rejects.toBeInstanceOf(InvalidInputError);
+        await expect(users.addBlock(a.id, id), id).rejects.toBeInstanceOf(InvalidInputError);
+        await expect(users.removeBlock(id, a.id), id).rejects.toBeInstanceOf(InvalidInputError);
+        await expect(users.getPartnerCodes(a.id, id), id).rejects.toBeInstanceOf(InvalidInputError);
+        await expect(users.havePlayedTogether(a.id, id), id).rejects.toBeInstanceOf(
+          InvalidInputError,
+        );
+        await expect(matches.listForUser(id), id).rejects.toBeInstanceOf(InvalidInputError);
+        await expect(
+          users.createReport({ reporterId: a.id, reportedId: b.id, matchId: id, reason: 'other' }),
+        ).rejects.toBeInstanceOf(InvalidInputError);
+      }
+      expect((await users.findById(a.id.toUpperCase()))?.nickname).toBe('Ana');
+      await users.addBlock(a.id.toUpperCase(), b.id.toUpperCase());
+      expect(await users.listBlockedIds(a.id.toUpperCase())).toEqual([b.id]);
+      await expect(users.addBlock(a.id, a.id.toUpperCase())).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
     });
 
     it('remover usuário preserva o histórico (SetNull) e leva só os dados pessoais (Cascade)', async () => {
@@ -299,7 +543,8 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       await users.saveAvatar(a.id, { skin: 1 });
       await users.addBlock(a.id, b.id);
       await users.addBlock(b.id, a.id);
-      await users.savePartnerCodes(a.id, b.id, { s1: 'x' });
+      const [lo, hi] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+      await db().partnerCodes.create({ data: { userAId: lo, userBId: hi, codes: {} } });
       const report = await users.createReport({
         reporterId: b.id,
         reportedId: a.id,
@@ -418,7 +663,7 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       expect((await matches.listForUser(a.id, { limit: 500 })).items).toEqual([]);
     });
 
-    it('a consulta de GET /matches usa o índice de match_players', async () => {
+    it('o SQL REAL de listForUser (capturado do client) pode usar o índice de match_players', async () => {
       const a = await guest('Ana');
       await db().$executeRawUnsafe(
         `INSERT INTO matches (id, variant, format, iron_hand, visibility, seed, options, events, games,
@@ -432,13 +677,32 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
          SELECT id, 0, '${a.id}'::uuid, 0 FROM matches ORDER BY ended_at DESC LIMIT 100`,
       );
       await db().$executeRawUnsafe('ANALYZE matches, match_players');
+
+      // Segundo client, só para capturar o SQL que o Prisma gera para listForUser.
+      const captured: { query: string; params: string }[] = [];
+      const spy = new PrismaClient({
+        adapter: new PrismaPg({ connectionString: assertSafeTestDatabaseUrl(url), max: 2 }),
+        log: [{ emit: 'event', level: 'query' }],
+      });
+      spy.$on('query', (e) => captured.push({ query: e.query, params: e.params }));
+      try {
+        await new PrismaMatchRepository(spy).listForUser(a.id, { limit: 20 });
+      } finally {
+        await spy.$disconnect();
+      }
+      const main = captured.find(
+        (c) => /FROM "public"\."matches"/.test(c.query) && c.query.includes('match_players'),
+      );
+      expect(main, captured.map((c) => c.query).join('\n')).toBeDefined();
+      const params = JSON.parse(main?.params ?? '[]') as unknown[];
+
       // Com tabelas pequenas o planejador prefere Seq Scan; desligá-lo na transação prova que o
-      // índice existe e atende a consulta.
+      // índice existe e é aplicável ao SQL real (não prova a escolha do planejador em produção).
       const text = await db().$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
         const plan = await tx.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
-          `EXPLAIN SELECT m.id FROM match_players p JOIN matches m ON m.id = p.match_id
-            WHERE p.user_id = '${a.id}'::uuid ORDER BY m.ended_at DESC, m.id DESC LIMIT 21`,
+          `EXPLAIN ${main?.query ?? ''}`,
+          ...params,
         );
         return plan.map((r) => r['QUERY PLAN']).join('\n');
       });

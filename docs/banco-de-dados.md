@@ -1,6 +1,6 @@
 # Banco de dados: Postgres e Redis
 
-Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/schema.prisma` e a migração `apps/server/prisma/migrations/20261101173134_init/migration.sql`. Contrato de acesso: `apps/server/src/db/` (interfaces `UserRepository` e `MatchRepository`, implementação Prisma e em memória). Conquistas, missões e ranking (Fases 6 e 9, `docs/gamificacao.md`) NÃO estão modelados ainda: nada aqui os bloqueia (tabelas novas apontam para `users.id` e `matches.id`).
+Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/schema.prisma` e as migrações `apps/server/prisma/migrations/20261101173134_init` (modelo) e `20261101190000_nickname_policy_json_limits` (política de apelido e tetos de tamanho, escrita à mão). Contrato de acesso: `apps/server/src/db/` (interfaces `UserRepository` e `MatchRepository`, implementação Prisma e em memória). Conquistas, missões e ranking (Fases 6 e 9, `docs/gamificacao.md`) NÃO estão modelados ainda: nada aqui os bloqueia (tabelas novas apontam para `users.id` e `matches.id`).
 
 ## 1. Postgres
 
@@ -13,15 +13,41 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 
 ### Tabelas
 
-| Tabela          | Chave                                  | Pontos de decisão                                                                                                                                                                    |
-| --------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `users`         | `id`                                   | `UNIQUE(provider, provider_subject)`; `UNIQUE (lower(nickname))`; `CHECK` apelido 3..16 caracteres e sem espaço nas pontas                                                           |
-| `avatars`       | `user_id` (PK e FK)                    | Um por usuário por construção. `parts` é o `AvatarParts` (JSON, objeto) validado no servidor; o banco só garante `jsonb_typeof = 'object'`                                           |
-| `matches`       | `id`                                   | Só partidas terminadas ou canceladas (nada em andamento). `seed` é `BIGINT` porque a semente é uint32. `events` em visão pública; `deals` só auditoria                               |
-| `match_players` | `(match_id, seat)`                     | A PK composta é o `UNIQUE(match, seat)`. `user_id` NULL = bot ou usuário removido; `bot_from` = `seq` em que o bot assumiu. `CHECK` assento 0..3 e `team = seat % 2`                 |
-| `partner_codes` | `id`, `UNIQUE(user_a_id, user_b_id)`   | Par ordenado: `CHECK (user_a_id < user_b_id)`. O repositório ordena (`orderPair`) por string UUID minúscula, que coincide com a ordem de bytes do tipo `uuid`. `codes` é objeto JSON |
-| `reports`       | `id`                                   | `reporter_id`, `reported_id`, `match_id` anuláveis (viram NULL se a origem for apagada: a denúncia sobrevive). `text` ≤ 500. `CHECK` reporter ≠ reported                             |
-| `blocks`        | `id`, `UNIQUE(blocker_id, blocked_id)` | `CHECK (blocker_id <> blocked_id)`                                                                                                                                                   |
+| Tabela          | Chave                                  | Pontos de decisão                                                                                                                                                                                                                                                   |
+| --------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`         | `id`                                   | `UNIQUE(provider, provider_subject)`; `UNIQUE (lower(nickname))`; `CHECK` apelido 3..16 caracteres, NFC e só caracteres permitidos (seção Política de apelido)                                                                                                      |
+| `avatars`       | `user_id` (PK e FK)                    | Um por usuário por construção. `parts` é o `AvatarParts` (JSON, objeto) validado no servidor; o banco garante `jsonb_typeof = 'object'` e `pg_column_size < 16 KB`                                                                                                  |
+| `matches`       | `id`                                   | Só partidas terminadas ou canceladas (nada em andamento). `seed` é `BIGINT` porque a semente é uint32. `events` em visão pública; `deals` só auditoria                                                                                                              |
+| `match_players` | `(match_id, seat)`                     | A PK composta é o `UNIQUE(match, seat)`. `user_id` NULL = bot ou usuário removido; `bot_from` = `seq` em que o bot assumiu. `CHECK` assento 0..3 e `team = seat % 2`                                                                                                |
+| `partner_codes` | `id`, `UNIQUE(user_a_id, user_b_id)`   | Par ordenado: `CHECK (user_a_id < user_b_id)`. O repositório ordena (`orderPair`) por string UUID minúscula, que coincide com a ordem de bytes do tipo `uuid`. `codes` é objeto JSON, `pg_column_size < 16 KB`; só grava quem já jogou junto (`havePlayedTogether`) |
+| `reports`       | `id`                                   | `reporter_id`, `reported_id`, `match_id` anuláveis (viram NULL se a origem for apagada: a denúncia sobrevive). `text` ≤ 500. `CHECK` reporter ≠ reported                                                                                                            |
+| `blocks`        | `id`, `UNIQUE(blocker_id, blocked_id)` | `CHECK (blocker_id <> blocked_id)`                                                                                                                                                                                                                                  |
+
+### Política de apelido (migração `20261101190000_nickname_policy_json_limits`)
+
+- **Normalização**: NFC obrigatória. O servidor chama `validateNickname` (`src/db/validation.ts`), que normaliza (NFC) ANTES de validar e devolve o texto a gravar; `João` digitado com `a` + til combinante vira `João` e colide com o apelido NFC. Direto no SQL, o banco recusa o que não está em NFC (`users_nickname_nfc_check`, `normalize(nickname, NFC) = nickname`, Postgres 13+).
+- **Caracteres permitidos** (`users_nickname_charset_check`, mesma expressão de `NICKNAME_PATTERN`): `0-9`, `A-Z`, `a-z`, `_`, `.`, `-` e as letras latinas de Latin-1 e Latin Extended-A/B (U+00C0 a U+024F, exceto `×` U+00D7 e `÷` U+00F7). Ficam de fora espaço (qualquer), tab, controles, zero-width, marcas bidi, combinantes soltos, emoji e outros alfabetos (cirílico, grego etc.). Comprimento 3 a 16 code points (`users_nickname_length_check`).
+- **Unicidade**: `UNIQUE (lower(nickname))`. Exige banco com encoding UTF8 e locale UTF-8 (no locale `C`, `lower('Á')` não vira `á`); o `test:int` verifica.
+- **Risco residual**: dentro do alfabeto latino ainda há letras de aparência parecida (`ı` sem ponto, `ɡ` etc.). O combate a imitação deliberada continua sendo a denúncia `offensive_nickname`; um "esqueleto" de confusáveis (UTS #39) seria passo futuro, sem nova migração de schema.
+- A migração falha, e reverte inteira, se já houver apelido fora da política; nenhum dado é apagado. Rollback: `DROP CONSTRAINT` das duas constraints novas.
+
+### Tetos de tamanho dos jsonb
+
+| Coluna                      | Teto no banco (`pg_column_size`, valor não comprimido) | Validação na aplicação                                                                                                      |
+| --------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `partner_codes.codes`       | < 16 KB (`partner_codes_codes_size_check`)             | `signalId` só de `SIGNAL_IDS` (`@trucaco/protocol`), no máximo 12 chaves, valor string até `CHAT_MAX_LENGTH` (140)          |
+| `avatars.parts`             | < 16 KB (`avatars_parts_size_check`)                   | objeto plano, até 32 chaves (`AVATAR_PARTS_MAX_KEYS`), valores escalares, strings até 140; o significado das partes é do 2G |
+| `matches.options` / `games` | < 16 KB / < 64 KB                                      | mesmos tetos em bytes de JSON (`JSON_LIMITS`)                                                                               |
+| `matches.deals` / `events`  | < 1 MB / < 2 MB                                        | idem; uma partida real fica na ordem de centenas de KB                                                                      |
+
+Estourar o teto de uma partida faz `saveMatch` lançar `InvalidInputError`: o 2H decide o que fazer (por exemplo, gravar sem `deals`), nunca descartar em silêncio.
+
+### Erros de persistência e vínculo de dupla
+
+- **Nunca logar o erro bruto do Prisma.** Numa violação de CHECK, `meta.driverAdapterError.cause.detail` traz a linha inteira ("Failing row contains ..."), inclusive `deals` com as cartas de todos. Os repositórios (`guarded` em `prismaErrors.ts`) relançam apenas erros de domínio sem `cause`, `meta`, `detail` nem valores: `InvalidInputError` (entrada recusada; `constraint` com o NOME da constraint), `NicknameTakenError`, `ProviderSubjectTakenError`, `NotPartnersError` e `PersistenceError` (`code` e `constraint`). O nome vem do campo estruturado `meta.driverAdapterError.cause.constraint` (string ou `{ index }`; o CHECK não o traz e cai para o texto `... constraint "nome"` do Postgres, só aceitando identificadores simples).
+- **Ids**: todo id de entrada é validado como UUID e normalizado para minúsculas; o resto vira `InvalidInputError` (o 2G devolve 400), nunca chega cru ao banco.
+- **`savePartnerCodes` exige vínculo**: `havePlayedTogether(a, b)` = existe partida `finished` em que os dois foram `match_players` da MESMA `team`. Sem vínculo, `NotPartnersError` (o 2G mapeia para 403). Impede que um usuário grave códigos para qualquer `partnerId`.
+- **Paridade**: `memoryRepositories` valida o mesmo que o banco recusa (`assertFinishedMatch`, usuário inexistente, ids, apelido), para o teste de sala não ficar verde com gravação que falharia em produção. O conjunto de casos inválidos (`parityCases.ts`) roda contra os dois.
 
 ### Remoção de usuário (`onDelete`)
 
@@ -55,22 +81,29 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 
 ### Retenção (política proposta; o expurgo é um job do bloco 2H/`diego-devops`, ainda NÃO implementado)
 
-| Dado                                  | Retenção                                                                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `matches.deals` (cartas de todos)     | 30 dias; depois `UPDATE matches SET deals = NULL WHERE ended_at < now() - interval '30 days'`. Nunca sai por REST        |
-| `matches.events` e a linha da partida | 12 meses (auditoria anti-trapaça e disputas); depois `DELETE FROM matches WHERE ended_at < now() - interval '12 months'` |
-| Partidas `cancelled`                  | 30 dias (não contam para missão, conquista nem rating)                                                                   |
-| `reports`                             | Fechadas (`reviewed`/`dismissed`): 12 meses após `reviewed_at`; abertas: até serem tratadas                              |
-| Convidados inativos                   | Sem partida e `last_seen_at` com mais de 90 dias: apagar o usuário (as partidas ficam anonimizadas pelo `SetNull`)       |
+| Dado                                  | Retenção                                                                                                                                                                                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `matches.deals` (cartas de todos)     | 30 dias; depois `UPDATE matches SET deals = NULL WHERE ended_at < now() - interval '30 days'`. Nunca sai por REST                                                                                                                                                                            |
+| `matches.events` e a linha da partida | 12 meses (auditoria anti-trapaça e disputas); depois `DELETE FROM matches WHERE ended_at < now() - interval '12 months'`                                                                                                                                                                     |
+| Partidas `cancelled`                  | 30 dias (não contam para missão, conquista nem rating)                                                                                                                                                                                                                                       |
+| `partner_codes`                       | Enquanto os dois usuários existirem (somem por `Cascade` com o usuário). Proposta: apagar pares sem `updated_at` há 12 meses. **O job de expurgo NÃO existe ainda: pendência antes do beta** (vale também para `deals`, `events`, `cancelled`, `reports` e convidados inativos desta tabela) |
+| `reports`                             | Fechadas (`reviewed`/`dismissed`): 12 meses após `reviewed_at`; abertas: até serem tratadas                                                                                                                                                                                                  |
+| Convidados inativos                   | Sem partida e `last_seen_at` com mais de 90 dias: apagar o usuário (as partidas ficam anonimizadas pelo `SetNull`)                                                                                                                                                                           |
 
 Prazos são propostas para o usuário confirmar (privacidade/jurídico); mudar um prazo não exige migração.
 
 ### Observações e limites conhecidos
 
 - O `CHECK` de assento é 0..3. A mesa de 6 (Fase 8) troca `match_players_seat_check` e `match_players_team_check` (`team = seat % 2` continua válido).
-- O tamanho de 140 caracteres por código de `partner_codes` e a forma de `AvatarParts` são validados no repositório/servidor, não no banco (o Postgres não permite subconsulta em `CHECK`).
-- `lower()` depende do locale do cluster para letras não ASCII. Para o apelido ser unívoco entre caixas em qualquer locale, o bloco 2G deve restringir o conjunto de caracteres do apelido (por exemplo letras, números, `_`, `-`, `.`) ou normalizar antes de gravar.
+- O tamanho de 140 caracteres por código de `partner_codes`, o catálogo de `signalId` e a forma de `AvatarParts` são validados no repositório/servidor; o banco só impõe tipo e teto de bytes (o Postgres não permite subconsulta em `CHECK`).
+- `lower()` depende do locale do cluster para letras não ASCII: o conjunto de caracteres do apelido já é restrito (política acima), mas o banco precisa ser UTF-8 com locale UTF-8.
 - `gen_random_uuid()` não é usado como default: o Prisma gera o UUID no cliente. Inserções SQL diretas precisam informar `id`.
+
+### Produção: conexão e papéis (pendência de infra, `diego-devops`)
+
+- **TLS**: fora da rede privada, `DATABASE_URL` com `sslmode=verify-full` (certificado do servidor verificado, não só criptografia).
+- **Dois papéis**: um de MIGRAÇÃO (dono do schema, DDL; usado só pelo passo de release com `db:deploy`) e um de RUNTIME (somente DML: `SELECT/INSERT/UPDATE/DELETE` nas tabelas, sem DDL nem `TRUNCATE`). O servidor da aplicação nunca recebe a credencial de migração.
+- **Banco de teste separado**: o `test:int` só roda contra `TEST_DATABASE_URL` local (ver `apps/server/README.md`).
 
 ## 2. Redis
 
@@ -89,7 +122,7 @@ Uso: sessão, presença e coordenação entre instâncias. **Nada que só o Redi
 | Chave                                  | Tipo / valor                                                                                        | TTL                                                                                                         | Escreve                                                     | Lê                                             |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------- |
 | `trucaco:v1:rt:{sha256(refreshToken)}` | HASH: `userId`, `familyId`, `issuedAt`, `usedAt` (ausente até a rotação)                            | 30 dias (vida do refresh)                                                                                   | `/auth/guest`, `/auth/refresh`                              | `/auth/refresh`                                |
-| `trucaco:v1:rtfam:{familyId}`          | HASH: `userId`, `createdAt`, `revokedAt` (ausente enquanto válida)                                  | 30 dias, renovado a cada rotação                                                                            | `/auth/refresh`, logout, detecção de reuso                  | `/auth/refresh`, `onAuth` opcional             |
+| `trucaco:v1:rtfam:{familyId}`          | HASH: `userId`, `createdAt`, `lastJti`, `revokedAt` (ausente enquanto válida)                       | 30 dias, renovado a cada rotação                                                                            | `/auth/refresh`, logout, detecção de reuso                  | `/auth/refresh`, `onAuth` opcional             |
 | `trucaco:v1:userfam:{userId}`          | SET de `familyId` do usuário                                                                        | 30 dias, renovado a cada rotação                                                                            | `/auth/guest`, `/auth/refresh`                              | "sair de todos", banimento, remoção de conta   |
 | `trucaco:v1:jti:revoked:{jti}`         | STRING `1`                                                                                          | Tempo que falta para o access JWT expirar (máx. 15 min)                                                     | logout, banimento                                           | `onAuth` e middleware REST                     |
 | `trucaco:v1:jti:used:{jti}`            | STRING `1` criada com `SET NX EX`                                                                   | Tempo que falta para o token expirar                                                                        | Quem consome token de uso único (ex.: vínculo `/auth/link`) | o mesmo `SET NX` (falha = reuso)               |
@@ -102,6 +135,8 @@ Uso: sessão, presença e coordenação entre instâncias. **Nada que só o Redi
 Detalhes:
 
 - **Refresh rotativo com detecção de reuso.** Cada refresh pertence a uma família (`familyId`), criada no login. Em `/auth/refresh`: busca `rt:{hash}`; se a família estiver revogada, recusa. `HSETNX rt:{hash} usedAt <agora>` devolve 1 só para o primeiro uso: esse emite o novo par e grava o novo `rt:` na mesma família. Devolveu 0 (token já usado) é **reuso**: grava `revokedAt` na família (e revoga o `jti` do access vigente), recusa e registra log de segurança. Um token roubado e o legítimo não coexistem: o segundo a apresentar um refresh antigo derruba a família. Hash inexistente = token desconhecido ou expirado (401, sem efeito colateral). O `rt:` usado permanece até o TTL justamente para que o reuso seja detectável.
+- **Rotação atômica (um único script Lua).** A checagem da família, o `HSETNX usedAt` e a gravação do novo `rt:` acontecem no MESMO `EVAL`; passos separados deixam uma janela em que um logout/reuso concorrente revoga a família e o novo token ainda é emitido. O script: (1) recusa se `rtfam:{familyId}` NÃO existir (família expirada ou apagada: 401, sem criar nada) ou tiver `revokedAt`; (2) `HSETNX rt:{hash} usedAt`; se 0, é reuso: grava `revokedAt` e devolve o `lastJti` para o chamador revogar o access vigente; (3) se 1, grava o novo `rt:{novoHash}`, atualiza `lastJti` e renova os TTLs de `rtfam` e `userfam`. `lastJti` (o `jti` do último access emitido da família) fica em `rtfam` justamente para a detecção de reuso e o logout revogarem o access vigente sem precisar dele na requisição.
+- **Configuração do Redis em produção**: `maxmemory-policy noeviction` (despejar `rt:`/`rtfam:` sob pressão de memória deslogaria usuários ou, pior, apagaria `revokedAt` e reabilitaria uma família; com `noeviction` o Redis recusa escritas e o login falha de forma visível); `appendonly yes`; autenticação (`requirepass`/ACL) e TLS (`rediss://` em `REDIS_URL`) sempre que o Redis não estiver em rede privada isolada.
 - **`jti`**: o access JWT (15 min) não consulta o Redis por padrão; só `jti:revoked` é checado quando há revogação explícita (logout, banimento). `jti:used` serve a tokens de uso único curtos (vínculo de conta, ticket de entrada), por `SET NX EX`.
 - **Presença**: uma chave por usuário, não um SET global, para o TTL expirar sozinho quando a instância cai. `status` na mesa (`online`/`away`/`bot`) continua no estado da sala; esta chave é só para o lobby.
 - **Matchmaking**: só mesas públicas `single`. ZSET dá FIFO, deduplicação e remoção O(log n) ao cancelar; LIST não remove do meio. Bloqueios (`blocks`) são consultados no Postgres ao montar a mesa, não no Redis. O sorteador faz `ZRANGE` dos mais antigos sob `mm:lock`, valida bloqueios entre os candidatos e remove os escolhidos com `ZREM` na mesma seção crítica.

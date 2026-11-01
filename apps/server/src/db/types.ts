@@ -41,11 +41,41 @@ export class ProviderSubjectTakenError extends Error {
   }
 }
 
-/** Entrada que o banco recusaria (tamanho, par inválido, cursor malformado, usuário inexistente). */
+/**
+ * Entrada que o banco recusaria (tamanho, par inválido, cursor malformado, id que não é UUID,
+ * usuário inexistente, apelido fora da política). O 2G mapeia para HTTP 400. Quando vem de uma
+ * constraint do banco, `constraint` traz só o NOME dela (nunca valores ou linhas).
+ */
 export class InvalidInputError extends Error {
-  constructor(message: string) {
+  readonly constraint: string | null;
+  constructor(message: string, constraint: string | null = null) {
     super(message);
     this.name = 'InvalidInputError';
+    this.constraint = constraint;
+  }
+}
+
+/** `savePartnerCodes` sem vínculo: os dois nunca jogaram juntos (mesma dupla) numa partida finalizada. O 2G mapeia para 403. */
+export class NotPartnersError extends Error {
+  constructor() {
+    super('Os jogadores nunca formaram dupla numa partida finalizada.');
+    this.name = 'NotPartnersError';
+  }
+}
+
+/**
+ * Falha inesperada de persistência (infra ou bug), já SANEADA: só o código Prisma/driver e o nome
+ * da constraint. Sem `cause`, `meta`, `detail` nem valores (o erro bruto do Prisma carrega a linha
+ * inteira, incluindo `deals`). O chamador NUNCA deve logar o erro bruto do Prisma.
+ */
+export class PersistenceError extends Error {
+  readonly code: string;
+  readonly constraint: string | null;
+  constructor(code: string, constraint: string | null) {
+    super(`Falha de persistência (${code}${constraint === null ? '' : `, ${constraint}`}).`);
+    this.name = 'PersistenceError';
+    this.code = code;
+    this.constraint = constraint;
   }
 }
 
@@ -87,6 +117,10 @@ export interface ReportRecord {
 /** `signalId -> significado` (até 140 caracteres cada). */
 export type PartnerCodesMap = { readonly [signalId: string]: string };
 
+/**
+ * Todo `id` recebido pelos repositórios é validado como UUID e normalizado para minúsculas;
+ * qualquer outra coisa lança `InvalidInputError` (nunca chega crua ao banco).
+ */
 export interface UserRepository {
   /** Lança `NicknameTakenError` (apelido repetido, sem diferenciar caixa) ou `InvalidInputError`. */
   createGuest(input: NewGuestInput): Promise<UserRecord>;
@@ -94,7 +128,7 @@ export interface UserRepository {
   findByProvider(provider: AuthProviderId, providerSubject: string): Promise<UserRecord | null>;
   touchLastSeen(id: string, at: Date): Promise<void>;
 
-  /** `AvatarParts` como JSON; a validação do conteúdo é do servidor (2G), não do banco. */
+  /** `AvatarParts` como JSON (objeto plano, até 32 chaves, valores escalares curtos); o significado das partes é do servidor (2G). */
   getAvatar(userId: string): Promise<JsonObject | null>;
   saveAvatar(userId: string, parts: JsonObject): Promise<void>;
 
@@ -108,9 +142,16 @@ export interface UserRepository {
 
   createReport(input: NewReportInput): Promise<ReportRecord>;
 
+  /** Existe partida `finished` em que os dois foram jogadores da MESMA dupla (`team`). */
+  havePlayedTogether(userA: string, userB: string): Promise<boolean>;
+
   /** O par é ordenado internamente: (a, b) e (b, a) leem o mesmo registro. */
   getPartnerCodes(userId: string, partnerId: string): Promise<PartnerCodesMap | null>;
-  /** Upsert. `InvalidInputError` se algum significado passar de 140 caracteres ou userId === partnerId. */
+  /**
+   * Upsert. `InvalidInputError` se o `signalId` não for do catálogo, algum significado passar de
+   * 140 caracteres ou userId === partnerId; `NotPartnersError` se não houver vínculo
+   * (`havePlayedTogether`).
+   */
   savePartnerCodes(userId: string, partnerId: string, codes: PartnerCodesMap): Promise<void>;
 }
 

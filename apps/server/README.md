@@ -6,16 +6,17 @@ Servidor de jogo em tempo real do Trucaco (Colyseus). **Estado atual (Fase 2, bl
 
 Definidas em `.env.example` na raiz do repositório. Copie para `.env` (nunca versionado).
 
-| Variável                                                                | Uso                                                                    | Exemplo (dev)                                                  |
-| ----------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Postgres do `infra/docker-compose.yml`                                 | `trucaco` / `trucaco_dev_only` / `trucaco` / `5432`            |
-| `DATABASE_URL`                                                          | Conexão Prisma (Fase 2)                                                | `postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco` |
-| `REDIS_PORT`                                                            | Porta do Redis no host                                                 | `6380` (a 6379 pode estar ocupada por outro Redis local)       |
-| `REDIS_URL`                                                             | Conexão Redis (Fase 2)                                                 | `redis://localhost:6380`                                       |
-| `PORT`                                                                  | Porta HTTP/WebSocket do servidor (padrão `2567`)                       | `2567`                                                         |
-| `MATCHMAKE_RATE_LIMIT_PER_MIN`                                          | Limite de `POST /matchmake/*` por IP/min (padrão `20`)                 | `20`                                                           |
-| `TRUST_PROXY`                                                           | `true` só atrás de proxy que define `X-Forwarded-For` (padrão `false`) | `false`                                                        |
-| `JWT_SECRET`                                                            | Segredo do JWT próprio (Fase 2). Só por ambiente                       | valor longo e aleatório                                        |
+| Variável                                                                | Uso                                                                    | Exemplo (dev)                                                       |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Postgres do `infra/docker-compose.yml`                                 | `trucaco` / `trucaco_dev_only` / `trucaco` / `5432`                 |
+| `DATABASE_URL`                                                          | Conexão Prisma (Fase 2)                                                | `postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco`      |
+| `TEST_DATABASE_URL`                                                     | Banco descartável do `test:int` (host local, nome com `test`/`verif`)  | `postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco_test` |
+| `REDIS_PORT`                                                            | Porta do Redis no host                                                 | `6380` (a 6379 pode estar ocupada por outro Redis local)            |
+| `REDIS_URL`                                                             | Conexão Redis (Fase 2)                                                 | `redis://localhost:6380`                                            |
+| `PORT`                                                                  | Porta HTTP/WebSocket do servidor (padrão `2567`)                       | `2567`                                                              |
+| `MATCHMAKE_RATE_LIMIT_PER_MIN`                                          | Limite de `POST /matchmake/*` por IP/min (padrão `20`)                 | `20`                                                                |
+| `TRUST_PROXY`                                                           | `true` só atrás de proxy que define `X-Forwarded-For` (padrão `false`) | `false`                                                             |
+| `JWT_SECRET`                                                            | Segredo do JWT próprio (Fase 2). Só por ambiente                       | valor longo e aleatório                                             |
 
 ## Sala `truco`
 
@@ -50,12 +51,17 @@ export DATABASE_URL=postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco
 pnpm --filter @trucaco/server db:generate   # gera o Prisma Client (o turbo faz isso antes de build/typecheck/test/lint)
 pnpm --filter @trucaco/server db:migrate    # prisma migrate dev (local): cria e aplica migração. Use --create-only para editar o SQL
 pnpm --filter @trucaco/server db:deploy     # prisma migrate deploy (CI/produção): só aplica
-pnpm --filter @trucaco/server test:int      # testes de integração (*.int.test.ts), exigem DATABASE_URL de um banco descartável
+createdb -h localhost -U trucaco trucaco_test                # banco descartável do test:int
+export TEST_DATABASE_URL=postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco_test
+DATABASE_URL=$TEST_DATABASE_URL pnpm --filter @trucaco/server db:deploy   # migra o banco de teste do zero
+pnpm --filter @trucaco/server test:int      # integração (*.int.test.ts); lê TEST_DATABASE_URL, nunca DATABASE_URL
 ```
 
-`pnpm test` NÃO exige banco: exclui `*.int.test.ts`. O `test:int` trunca as tabelas; nunca aponte para um banco com dados. Sem Docker, qualquer Postgres 16 serve (`createdb trucaco`). Rode `db:generate` uma vez após o `pnpm install` se for executar `tsc`/`vitest` direto no pacote, fora do turbo.
+`pnpm test` NÃO exige banco: exclui `*.int.test.ts`. O `test:int` trunca as tabelas e por isso só aceita `TEST_DATABASE_URL`: host `localhost`/`127.0.0.1`/`::1` e nome de banco contendo `test` ou `verif` (`src/db/testDatabase.ts`); qualquer outra coisa falha na inicialização, antes de escrever. O cluster precisa ser UTF-8 com locale UTF-8 (não `C`/`POSIX`), senão `lower()` não dobra letras acentuadas e o apelido único falha (há teste para isso). Sem Docker, qualquer Postgres 16 serve (`createdb trucaco`). Rode `db:generate` uma vez após o `pnpm install` se for executar `tsc`/`vitest` direto no pacote, fora do turbo.
 
 Ao criar uma migração nova com `db:migrate`, confira o SQL: o `CHECK` de apelido, o índice único em `lower(nickname)` e os demais `CHECK` da migração inicial são escritos à mão e o Prisma não os conhece. Migrações nunca rodam contra banco remoto a partir de máquina de desenvolvimento. A imagem de produção não traz o CLI `prisma` (devDependency): `db:deploy` roda em passo de release.
+
+Erros do banco: os repositórios relançam SÓ erros de domínio (`InvalidInputError`, `NicknameTakenError`, `ProviderSubjectTakenError`, `NotPartnersError`, `PersistenceError`), com `code` e nome da constraint. O erro bruto do Prisma carrega a linha inteira (`meta.driverAdapterError.cause.detail`, "Failing row contains ..."), inclusive `deals` com as cartas de todos: **o chamador nunca loga nem repassa o erro bruto do Prisma**. O 2G mapeia `InvalidInputError` para 400, `NotPartnersError` para 403, `NicknameTakenError`/`ProviderSubjectTakenError` para 409 e `PersistenceError` para 500. Todo id recebido é validado como UUID e normalizado para minúsculas. Política do apelido: `validateNickname` (NFC, letras latinas, dígitos, `_`, `.`, `-`, 3 a 16), ver `docs/banco-de-dados.md`.
 
 Acesso: `src/db/` tem as interfaces `UserRepository` e `MatchRepository` (`types.ts`), a implementação Prisma (`prismaRepositories.ts`) e a implementação em memória para testes de sala (`memoryRepositories.ts`, `createMemoryRepositories()`).
 
