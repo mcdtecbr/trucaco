@@ -4,115 +4,19 @@ import {
   applySeriesAction,
   startHand,
   startSeries,
-  teamOf,
   variantById,
 } from '@trucaco/rules';
 import type { Card, HandAction, SeriesState, Seat, VariantId } from '@trucaco/rules';
 import { describe, expect, it } from 'vitest';
-import { legalActionIds, projectState } from './projection';
+import { key, leakViolations } from './leakdetect';
+import { projectState } from './projection';
 import { PlayedCardSchema, createTableState } from './schema';
 import type { SeatPrivateNode } from './schema';
 import { WireSim } from './testkit';
 
 const SEATS = [0, 1, 2, 3] as const;
-const key = (c: Card): string => `${c.rank}${c.suit}`;
-
-/** Varre o JSON decodificado e junta todo objeto com cara de carta (rank e suit preenchidos). */
-function sightings(node: unknown, path: string, out: { path: string; card: Card }[]): void {
-  if (Array.isArray(node)) {
-    node.forEach((n, i) => sightings(n, `${path}[${i}]`, out));
-    return;
-  }
-  if (node === null || typeof node !== 'object') return;
-  const o = node as Record<string, unknown>;
-  if (typeof o.rank === 'string' && typeof o.suit === 'string' && o.rank !== '' && o.suit !== '') {
-    out.push({ path, card: { rank: o.rank as Card['rank'], suit: o.suit as Card['suit'] } });
-  }
-  for (const [k, v] of Object.entries(o)) sightings(v, `${path}.${k}`, out);
-}
-
-/** Cartas citadas em ids de ação (`play:3paus`, `playCovered:Kouros`). */
-function idCards(ids: readonly string[]): Card[] {
-  const out: Card[] = [];
-  for (const id of ids) {
-    const m = /^(?:play|playCovered):(.+?)(paus|copas|espadas|ouros)$/.exec(id);
-    if (m !== null) out.push({ rank: m[1] as Card['rank'], suit: m[2] as Card['suit'] });
-  }
-  return out;
-}
-
-interface Truth {
-  /** Cartas que o assento PODE conhecer: abertas na mesa, vira, mão própria, parceiro na decisão, próprias cobertas. */
-  allowed: Set<string>;
-  /** Cartas que NÃO pode conhecer: mão alheia (salvo parceiro na decisão) e cobertas alheias. */
-  forbidden: Set<string>;
-  ownHand: Card[];
-}
-
-function truthFor(series: SeriesState, seat: Seat): Truth {
-  const h = series.match.hand;
-  const allowed = new Set<string>();
-  const forbidden = new Set<string>();
-  if (h.vira !== null) allowed.add(key(h.vira));
-  const plays = [...h.tricks.flatMap((t) => t.plays), ...h.current];
-  for (const p of plays) {
-    if (!p.covered) allowed.add(key(p.card));
-    else if (p.seat === seat) allowed.add(key(p.card));
-    else forbidden.add(key(p.card));
-  }
-  const ferro = h.special === 'maoDeFerro';
-  const decider = h.phase === 'specialDecision' && teamOf(seat) === h.specialTeam;
-  const ownHand: Card[] = [];
-  h.hands.forEach((cards, s) => {
-    for (const c of cards) {
-      if (s === seat) {
-        if (!ferro) {
-          allowed.add(key(c));
-          ownHand.push(c);
-        } else forbidden.add(key(c)); // dono às cegas também não vê
-      } else if (decider && teamOf(s) === teamOf(seat)) allowed.add(key(c));
-      else forbidden.add(key(c));
-    }
-  });
-  return { allowed, forbidden, ownHand };
-}
-
-interface Shape {
-  privates?: Record<string, { seat: number; hand: Card[]; legalActions: string[] }>;
-}
-
 function checkClientView(json: unknown, series: SeriesState, seat: Seat, label: string): void {
-  const truth = truthFor(series, seat);
-  const found: { path: string; card: Card }[] = [];
-  sightings(json, 'state', found);
-  for (const f of found) {
-    expect(
-      truth.forbidden.has(key(f.card)),
-      `${label}: carta proibida ${key(f.card)} em ${f.path}`,
-    ).toBe(false);
-    expect(
-      truth.allowed.has(key(f.card)),
-      `${label}: carta desconhecida ${key(f.card)} em ${f.path}`,
-    ).toBe(true);
-  }
-  const ids = (json as Shape).privates;
-  expect(ids, `${label}: privates ausente`).toBeDefined();
-  const entries = Object.values(ids ?? {});
-  // Só o bloco do próprio assento chega ao cliente.
-  expect(entries.map((e) => e.seat)).toEqual([seat]);
-  const mine = entries[0];
-  expect(mine).toBeDefined();
-  if (mine === undefined) return;
-  expect(mine.legalActions, label).toEqual(legalActionIds(series, seat));
-  for (const c of idCards(mine.legalActions)) {
-    expect(truth.forbidden.has(key(c)), `${label}: legalAction cita carta proibida`).toBe(false);
-  }
-  const ferro = series.match.hand.special === 'maoDeFerro';
-  if (ferro) expect(mine.hand, `${label}: mão de ferro sem cartas`).toEqual([]);
-  else expect(mine.hand.map(key).sort(), label).toEqual(truth.ownHand.map(key).sort());
-  // handSize público continua correto.
-  const sizes = (json as { players: { handSize: number }[] }).players.map((p) => p.handSize);
-  expect(sizes).toEqual(series.match.hand.hands.map((x) => x.length));
+  expect(leakViolations(json, series, seat, label)).toEqual([]);
 }
 
 interface Scenario {

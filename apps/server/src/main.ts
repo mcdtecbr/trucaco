@@ -11,7 +11,19 @@ function resolvePort(raw: string | undefined): number {
   return port;
 }
 
+/**
+ * Modo de desenvolvimento por opt-in EXPLÍCITO (`--dev`), portátil entre shells. Sem o argumento e sem
+ * `NODE_ENV=development|test`, a auth temporária da sala (TODO 2G) rejeita todas as entradas. O Docker
+ * nunca passa `--dev` e define `NODE_ENV=production`.
+ */
+function applyDevFlag(): void {
+  if (process.argv.includes('--dev') && process.env.NODE_ENV === undefined) {
+    process.env.NODE_ENV = 'development';
+  }
+}
+
 async function main(): Promise<void> {
+  applyDevFlag();
   const server = await createServer({ port: resolvePort(process.env.PORT) });
   console.log(JSON.stringify({ level: 'info', msg: 'server listening', port: server.port }));
 

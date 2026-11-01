@@ -1,6 +1,6 @@
 # @trucaco/server
 
-Servidor de jogo em tempo real do Trucaco (Colyseus). **Estado atual (Fase 2, bloco 2B):** runtime executável (Colyseus + `WebSocketTransport` + express) com `GET /health`. Salas, REST e persistência entram nos próximos blocos. `src/index.ts` tem os exports puros (`buildHealth`, `createServer`); `src/main.ts` é a entrada que sobe o processo.
+Servidor de jogo em tempo real do Trucaco (Colyseus). **Estado atual (Fase 2, bloco 2D):** runtime executável (Colyseus + `WebSocketTransport` + express) com `GET /health` e a sala `truco` (`src/rooms/TrucoRoom.ts`). Reconexão/bot (2E), sinais/sfx/chat (2F), auth e REST (2G), lobby e persistência (2H) entram nos próximos blocos. `src/index.ts` tem os exports puros (`buildHealth`, `createServer`); `src/main.ts` é a entrada que sobe o processo.
 
 ## Variáveis de ambiente
 
@@ -14,6 +14,20 @@ Definidas em `.env.example` na raiz do repositório. Copie para `.env` (nunca ve
 | `REDIS_URL`                                                             | Conexão Redis (Fase 2)                           | `redis://localhost:6380`                                       |
 | `PORT`                                                                  | Porta HTTP/WebSocket do servidor (padrão `2567`) | `2567`                                                         |
 | `JWT_SECRET`                                                            | Segredo do JWT próprio (Fase 2). Só por ambiente | valor longo e aleatório                                        |
+
+## Sala `truco`
+
+Mesa de 4 jogadores, registrada em `createServer` com `server.define('truco', ...)` (`defineTrucoRoom`).
+
+**Opções de criação** (validadas por `validateRoomOptions` de `@trucaco/protocol`; campo extra ou inválido rejeita a criação): `variant` (`paulista`|`mineiro`), `format` (`single`|`bo3`; `bo3` só com `visibility: 'private'`), `ironHand` (boolean), `visibility` (`public`|`private`). Semente do RNG, prazos e placar inicial NÃO são opções do cliente: vêm de `TrucoRoomConfig`, injetada só por código do servidor/teste (`defineTrucoRoom(server, config)`); a semente padrão sai de `crypto.randomInt` e fica em `room.seed`.
+
+**Entrada** (`onAuth` TEMPORÁRIO, `TODO(2G)`): aceita `{ userId, nickname }` das opções de join, SÓ quando `NODE_ENV` é `development` ou `test` EXPLÍCITOS (o `pnpm dev` passa `--dev`, que define `development`). Qualquer outro valor, inclusive `NODE_ENV` ausente e `production` (o que o Dockerfile define), rejeita toda entrada. O bloco 2G troca por JWT. Assento por ordem de chegada (0..3), guardado no servidor (`sessionId -> assento`); o 4º jogador tranca a sala e inicia a série (pé no assento 0). Cada cliente tem `client.view` própria: só recebe o bloco `privates[seuAssento]`.
+
+**Mensagens do cliente** (todas passam por `parseClientMessage`; falha -> `error { code }`, estado intacto; o assento nunca vem da mensagem): `play`, `playBlind`, `bet` (o servidor escolhe `callBet`/`raiseBet`), `accept`, `run`, `special`, `voteCancel` (4 votos cancelam a série). `ready`, `signal`, `sfx` e `chat` são aceitos e IGNORADOS (log debug) até os blocos 2F. Rate limit de ações: `ACTION_MIN_INTERVAL_MS` por assento (`RATE_LIMITED`); 5 `INVALID_PAYLOAD` em 10 s expulsam o cliente (código 1008); tamanho máximo por mensagem `MAX_MESSAGE_BYTES` (limite do transporte, a conexão cai acima disso); 30 mensagens/s por conexão.
+
+**Servidor -> cliente:** `event { seq, at, event }` (um por cliente, `publicEvent` por assento; carta coberta alheia sem identidade), `turnTimer { seat, deadlineAt }`, `error { code }`. O estado (`TableState`) segue por patch com visão por assento. O log de eventos em memória (`room.eventLog`, visão pública) é gravado pelo 2H.
+
+**Timer de turno:** `TURN_TIMEOUT_MS` (20 s), reiniciado a cada ação aceita. Ao estourar, `botAction` do motor joga POR ele (nunca pede nem aumenta aposta). Ao fim da série (`phase: 'finished'`, `winnerTeam`) o timer é cancelado e a sala fecha após `finishDelayMs` (15 s por padrão).
 
 ## Chaves Redis
 

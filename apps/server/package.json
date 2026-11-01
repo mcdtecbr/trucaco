@@ -6,7 +6,7 @@
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsup",
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch src/main.ts --dev",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
