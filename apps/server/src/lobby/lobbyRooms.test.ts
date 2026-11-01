@@ -17,6 +17,8 @@ import { setLogSink } from '../logger';
 import { TrucoRoom } from '../rooms/TrucoRoom';
 import type { TrucoRoomConfig } from '../rooms/TrucoRoom';
 import { buildColyseusServer } from '../server';
+import { leakViolations } from '../game/leakdetect';
+import type { RefHolder } from '../game/leakdetect';
 import { getLobby } from './lobby';
 import type { Grant } from './lobby';
 
@@ -406,6 +408,78 @@ describe('mesa privada por código, partida até o fim e registro', () => {
       http.options.headers = before ?? {};
     }
     await until(() => tb.room.state.players[2]?.status === 'connected', 'dono de volta');
+  });
+
+  it('ponta a ponta: guest -> JWT -> lobby -> queda no meio da partida -> refresh -> reconexão com o JWT novo -> fim e registro, sem vazar carta', async () => {
+    // 4 convidados pelo caminho real, guardando o refresh token do que vai cair.
+    const raw = await Promise.all(Array.from({ length: 4 }, () => call('POST', '/auth/guest')));
+    const users: User[] = raw.map((r) => ({ id: r.body.user.id, token: r.body.accessToken }));
+    everyone.push(...users);
+    const refreshToken = raw[2]!.body.refreshToken as string;
+    const tb = await privateTable({ slowTurns: true, users });
+    await until(() => tb.room.series !== null, 'série iniciada');
+
+    // queda do assento 2
+    const dropped = tb.clients[2]!;
+    dropped.reconnection.enabled = false;
+    dropped.connection.close();
+    await until(() => tb.room.state.players[2]?.status === 'away', 'assento 2 away');
+
+    // intruso (JWT válido de outro jogador da mesa) não retoma o assento alheio
+    const http = t.sdk.http as unknown as { options: { headers?: Record<string, string> } };
+    const before = http.options.headers;
+    http.options.headers = { authorization: `Bearer ${users[1]!.token}` };
+    try {
+      await expect(t.sdk.reconnect(dropped.reconnectionToken)).rejects.toBeDefined();
+    } finally {
+      http.options.headers = before ?? {};
+    }
+    expect(tb.room.state.players[2]?.status).toBe('away');
+
+    // o dono renova o access com o refresh e reconecta com o token NOVO
+    const refreshed = await call('POST', '/auth/refresh', undefined, { refreshToken });
+    expect(refreshed.status).toBe(200);
+    const fresh = refreshed.body.accessToken as string;
+    expect(fresh).not.toBe(users[2]!.token);
+    http.options.headers = { authorization: `Bearer ${fresh}` };
+    let back: SdkRoom;
+    try {
+      back = await t.sdk.reconnect(dropped.reconnectionToken);
+    } finally {
+      http.options.headers = before ?? {};
+    }
+    for (const type of ['event', 'turnTimer', 'presence', 'error', 'signal', 'sfx', 'chat']) {
+      back.onMessage(type, () => undefined);
+    }
+    sdkRooms.push(back);
+    await until(() => tb.room.state.players[2]?.status === 'connected', 'dono de volta');
+
+    // o cliente reconectado enxerga só as próprias cartas (e o estado fica em dia com o servidor)
+    const view = back as unknown as {
+      state: { toJSON(): unknown };
+      serializer: { decoder: RefHolder };
+    };
+    await until(
+      () =>
+        leakViolations(view.state.toJSON(), tb.room.series!, 2, 'reconexão JWT', {
+          decoder: view.serializer.decoder,
+        }).length === 0,
+      'estado do reconectado em dia e sem vazamento',
+    );
+
+    // acelera os turnos: a partida termina e é gravada com os 4 humanos
+    const r = tb.room as unknown as { config: TrucoRoomConfig };
+    r.config = { ...r.config, turnTimeoutMs: 15 };
+    // o turno em curso já tem o prazo lento armado: dispara-o uma vez (o resto usa o prazo curto)
+    const room = tb.room as unknown as {
+      currentTurn: { seat: number } | null;
+      onTurnTimeout(seat: number): void;
+    };
+    if (room.currentTurn !== null) room.onTurnTimeout(room.currentTurn.seat);
+    await until(() => stored().length === 1, 'partida gravada');
+    const { input } = stored()[0]!;
+    expect(input.players.map((p) => p.userId)).toEqual(users.map((u) => u.id));
+    expect(input.status).toBe('finished');
   });
 
   it('direct matchmake de create/join/joinOrCreate da sala truco é bloqueado (403 USE_LOBBY)', async () => {
