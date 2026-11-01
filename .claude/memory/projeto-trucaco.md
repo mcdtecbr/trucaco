@@ -18,3 +18,5 @@ metadata:
 **Why:** as decisões e o plano nasceram numa sessão de brainstorming; só existem nos docs do repo e nesta memória.
 
 **How to apply:** ler `CLAUDE.md` e `docs/plano-desenvolvimento.md` antes de agir. Ferramentas e armadilhas em [[trucaco-ambiente-dev]]; regras de Git em [[feedback_git_convencao]].
+
+**Fase 1 (2026-11-01, direto na `develop`)**: blocos A (cartas, mão, apostas, onze/dez, ferro) e B (partida, série, `GameEvent`, `legalActions`, bot) commitados em `packages/rules`. **Decisões do usuário**: (1) mão de ferro é **opção** na abertura da sala (`ironHand`, padrão ligada; desligada = mão normal); (2) Mineiro tem mão de **10** (11 pontos não é mão especial); (3) **bot nunca pede nem aumenta aposta**, decisão sempre humana, mas o bot **pode dar sinais** (servidor/avatar, Fases 2 e 4). `GameEvent` fica em `rules` (rules não importa `@trucaco/*`); `Card/Rank/Suit` duplicados em `protocol` e `rules`. Em aberto: `viewFor` mostra cartas da mão de ferro mas `publicEvent` as esconde (doc diz "cobertas"); rodízio do pé entre jogos da série; faltam catia-qa (cobertura ≥ 90%), rita-revisora e teo-docs.

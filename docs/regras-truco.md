@@ -16,6 +16,8 @@ Referência normativa para `packages/rules`. Quando o código e este documento d
   - 1ª e 2ª vencidas por duplas diferentes e 3ª empatada: quem venceu a 1ª leva a mão.
 - **Pedir truco (aumentar a aposta)**: qualquer jogador da dupla pode pedir no seu turno de jogar, antes de jogar a carta. A dupla adversária responde com `aceitar`, `correr` (a dupla que pediu ganha o valor atual) ou `aumentar` (pede o próximo valor; aí quem decide é a dupla que pediu primeiro). Uma dupla só pode pedir o próximo aumento se não foi ela a última a aumentar.
 - **Mão especial de "onze"/"dez"** (nome e limiar variam por variante): quando uma dupla está a um aumento de ganhar e a outra não, a dupla na frente vê as cartas uma da outra e decide **jogar** (a mão vale o valor do primeiro truco, sem novos aumentos) ou **correr** (a adversária ganha o valor base da mão). Se ambas estão no limiar, é **mão de ferro**: ninguém vê as próprias cartas, todas são jogadas cobertas, sem truco, vale o valor base.
+- **Mão de ferro é opcional**: quem abre a sala escolhe se ela vale (`ironHand`, padrão ligada). Com a opção desligada e as duas duplas no limiar, a mão é **normal**: cartas abertas, valor base e apostas liberadas. A mão de onze/dez com apenas uma dupla no limiar vale sempre, independente da opção.
+- **Bot**: nunca pede nem aumenta aposta; essa decisão é sempre de jogador humano. Ele corre de aposta pendente, decide a mão de onze/dez e joga a carta mais fraca. O bot pode emitir **sinais** (servidor e avatar, Fases 2 e 4); isso não é função do motor.
 - **Timer de turno**: 20 s por ação (configurável). Ao estourar: carta mais fraca é jogada automaticamente; se havia truco pendente, a resposta automática é `correr`.
 - **Desconexão**: 60 s para reconectar. Depois disso a cadeira é assumida por bot até o fim da mão em curso; se a mão seguinte começar sem o jogador, a mesa pode ser encerrada por voto da maioria.
 
@@ -32,7 +34,7 @@ Referência normativa para `packages/rules`. Quando o código e este documento d
 - **Hierarquia**: manilhas fixas, nesta ordem: **4♣ (zap) > 7♥ (sete copas) > A♠ (espadão) > 7♦ (sete ouros)**. Depois as cartas comuns: 3 > 2 > A (♣♥♦) > K > J > Q > 7 (♣♠) > 6 > 5 > 4 (♥♠♦).
 - **Sem vira.**
 - **Valores**: mão vale **2**; truco → **4**; seis → **6**; oito → **8**; dez → **10**; doze → **12**.
-- **Mão de dez**: dupla com 10 pontos. Decide jogar (vale 4) ou correr (adversária ganha 2).
+- **Mão de dez**: dupla com 10 pontos. Decide jogar (vale 4) ou correr (adversária ganha 2). O limiar é exatamente 10: com 11 pontos não há mão especial.
 - **Mão de ferro**: 10 × 10. Cartas cobertas, vale 2, sem truco.
 
 ## Série (melhor de 3 jogos)
