@@ -251,7 +251,7 @@ describe('TrucoRoom: entrada e assentos', () => {
     expect(game.server.locked).toBe(true);
     const state = (game.players[2] as Player).room.state as {
       phase: string;
-      players: { nickname: string; userId: string; status: string }[];
+      players: { nickname: string; status: string }[];
     };
     await until(() => state.phase === 'playing', 'fase playing no cliente');
     expect(state.players.map((p) => p.nickname)).toEqual([
@@ -278,6 +278,115 @@ describe('TrucoRoom: entrada e assentos', () => {
     const server = await t.createRoom<TrucoRoom>('truco', OPTS);
     await t.connectTo(server, { userId: 'dup', nickname: 'A' });
     await expect(t.connectTo(server, { userId: 'dup', nickname: 'B' })).rejects.toThrow();
+  });
+});
+
+describe('TrucoRoom: saída antes do início e estado por assento', () => {
+  it('quem sai entre o 4º join e o tick não deixa a série começar com assento vazio', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    // Segura o tick de início: simula a saída chegando antes de `startGame` rodar.
+    const held: { fn: () => void; cleared: boolean }[] = [];
+    const clock = server.clock as unknown as {
+      setTimeout: (fn: () => void, ms: number) => { clear: () => void };
+    };
+    const original = clock.setTimeout.bind(server.clock);
+    clock.setTimeout = (fn) => {
+      const entry = { fn, cleared: false };
+      held.push(entry);
+      return {
+        clear: () => {
+          entry.cleared = true;
+        },
+      };
+    };
+    try {
+      for (let i = 0; i < 3; i++) {
+        await t.connectTo(server as unknown as Room, { userId: `r${i}`, nickname: `R${i}` });
+      }
+      const fourth = await t.connectTo(server as unknown as Room, { userId: 'r3', nickname: 'R3' });
+      expect(held.length).toBe(1);
+      expect(server.locked).toBe(true);
+      await fourth.leave();
+      await until(() => server.clients.length === 3, 'sala com 3 clientes');
+      await until(() => !server.locked, 'sala destrancada');
+      expect(held[0]?.cleared).toBe(true);
+      // Mesmo que o tick já estivesse na fila, o guarda impede a série com assento vazio.
+      held[0]?.fn();
+      expect(server.series).toBeNull();
+      expect(server.state.phase).toBe('waiting');
+    } finally {
+      clock.setTimeout = original;
+    }
+    await t.connectTo(server as unknown as Room, { userId: 'r4', nickname: 'R4' });
+    await until(() => server.series !== null, 'série iniciada');
+    expect(server.state.players.map((p) => p.status)).toEqual([
+      'connected',
+      'connected',
+      'connected',
+      'connected',
+    ]);
+    expect(server.state.players.map((p) => p.nickname)).toEqual(['R0', 'R1', 'R2', 'R4']);
+  });
+
+  it('o próximo ocupante do assento não herda strikes de payload inválido', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    await t.connectTo(server as unknown as Room, { userId: 'k', nickname: 'K' });
+    const a = await t.connectTo(server as unknown as Room, { userId: 'a', nickname: 'A' });
+    let aErrors = 0;
+    a.onMessage('error', () => aErrors++);
+    for (let i = 0; i < 4; i++) a.send('play', { card: 1 });
+    await until(() => aErrors === 4, '4 erros de A');
+    await a.leave();
+    await until(() => server.clients.length === 1, 'A saiu');
+    const b = await t.connectTo(server as unknown as Room, { userId: 'b', nickname: 'B' });
+    let code = -1;
+    b.onLeave((c) => {
+      code = c;
+    });
+    let bErrors = 0;
+    b.onMessage('error', () => bErrors++);
+    for (let i = 0; i < 4; i++) b.send('play', { card: 1 });
+    await until(() => bErrors === 4, '4 erros de B');
+    expect(code).toBe(-1);
+    expect(server.clients.length).toBe(2);
+    b.send('play', { card: 1 });
+    await until(() => code === 1008, 'B expulso no 5º');
+  });
+
+  it('o userId nunca entra no estado compartilhado', async () => {
+    const game = await createGame('truco', OPTS);
+    await until(() => game.server.series !== null, 'série iniciada');
+    await settle(game, 'início');
+    for (const p of game.players) {
+      const text = JSON.stringify(json(p));
+      expect(text).not.toContain('user-');
+      expect(text).not.toContain('userId');
+    }
+  });
+});
+
+describe('TrucoRoom: sinal e sfx inválidos contam para a expulsão e o log é limitado', () => {
+  it('INVALID_SIGNAL/INVALID_SFX expulsam no 5º e geram um único warn por janela', async () => {
+    const game = await createGame('truco', OPTS);
+    await until(() => game.server.series !== null, 'série iniciada');
+    const victim = game.players[2] as Player;
+    let code = -1;
+    victim.room.onLeave((c) => {
+      code = c;
+    });
+    const before = logLines.filter((l) => l.includes('mensagem inválida')).length;
+    victim.room.send('signal', { signalId: 'nao-existe' });
+    victim.room.send('sfx', { sfxId: 'nao-existe' });
+    victim.room.send('signal', { signalId: 'nao-existe' });
+    victim.room.send('sfx', { sfxId: 'nao-existe' });
+    victim.room.send('play', { card: 1 });
+    await until(() => code !== -1, 'saída do cliente');
+    expect(code).toBe(1008);
+    expect(victim.errors).toEqual(
+      expect.arrayContaining(['INVALID_SIGNAL', 'INVALID_SFX', 'INVALID_PAYLOAD']),
+    );
+    const warns = logLines.filter((l) => l.includes('mensagem inválida')).length - before;
+    expect(warns).toBe(1);
   });
 });
 

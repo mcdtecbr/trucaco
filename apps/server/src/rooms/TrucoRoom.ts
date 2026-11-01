@@ -66,6 +66,8 @@ export const POLICY_CLOSE_CODE = 1008;
 /** `INVALID_PAYLOAD` repetido: este número dentro desta janela expulsa o cliente. */
 export const INVALID_PAYLOAD_LIMIT = 5;
 export const INVALID_PAYLOAD_WINDOW_MS = 10_000;
+/** No máximo 1 `warn` de mensagem inválida por assento nesta janela (o resto vira contador). */
+export const INVALID_WARN_WINDOW_MS = 5_000;
 /** Atraso padrão entre o fim da série e o fechamento da sala. */
 export const DEFAULT_FINISH_DELAY_MS = 15_000;
 /** Máximo de mensagens por segundo por conexão (piso do Colyseus: acima disso desconecta). */
@@ -172,6 +174,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private seq = 0;
   /** sessionId -> assento. Fica SÓ no servidor; o assento nunca vem da mensagem. */
   private readonly seatBySession = new Map<string, Seat>();
+  /**
+   * assento -> `userId`. SÓ em memória do servidor: o `userId` nunca entra no estado compartilhado
+   * (a mesa toda o receberia). Para a UI a identidade pública é `nickname` + `seat`.
+   */
+  private readonly userBySeat = new Map<Seat, string>();
+  private readonly warnState = new Map<Seat, { at: number; suppressed: number }>();
+  private startTimer: Timer | null = null;
   private readonly lastActionAt = new Map<Seat, number>();
   private readonly invalidAt = new Map<Seat, number[]>();
   /** Expirações de turno seguidas por assento (só registro; "ausente"/bot permanente são do 2E). */
@@ -200,22 +209,32 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.onMessage('*', (client, type, message) => this.handleMessage(client, type, message));
   }
 
-  // TODO(2G): trocar por validação de JWT. Ver `devAuth`.
-  override onAuth(_client: Client, options: unknown): JoinAuth {
+  /**
+   * TODO(2G): trocar por validação de JWT (o `userId` virá do token, nunca do payload). Ver `devAuth`.
+   *
+   * Autenticação ESTÁTICA, não de instância: no `@colyseus/core` 0.18 o `onAuth` de instância só roda
+   * DEPOIS de `onCreate`, então `create`/`joinOrCreate` criariam a sala sem credencial. O `static
+   * onAuth(token, options, context)` roda no matchmaker ANTES de criar a sala ou reservar assento
+   * (`create`, `join`, `joinById`, `joinOrCreate`). O que ele devolve vira `client.auth` e chega ao
+   * `onJoin(client, options, auth)`. Lançar `ServerError` aborta a requisição sem criar sala.
+   */
+  static override async onAuth(_token: string, options: unknown): Promise<JoinAuth> {
     return devAuth(options, process.env.NODE_ENV);
   }
 
-  override onJoin(client: Client, _options: unknown, auth: JoinAuth): void {
-    for (const p of this.state.players) {
-      if (p.status !== 'empty' && p.userId === auth.userId) {
-        throw new ServerError(409, 'ALREADY_SEATED');
-      }
+  override onJoin(client: Client, _options: unknown, auth: JoinAuth | undefined): void {
+    // Sem dado do `onAuth` estático (reserva criada por fora do matchmaker HTTP): recusa.
+    if (auth === undefined || typeof auth.userId !== 'string') {
+      throw new ServerError(401, 'UNAUTHORIZED');
+    }
+    for (const userId of this.userBySeat.values()) {
+      if (userId === auth.userId) throw new ServerError(409, 'ALREADY_SEATED');
     }
     const seat = this.firstFreeSeat();
     if (seat === null) throw new ServerError(409, 'ROOM_FULL');
     this.seatBySession.set(client.sessionId, seat);
+    this.userBySeat.set(seat, auth.userId);
     setPlayer(this.state, seat, {
-      userId: auth.userId,
       nickname: auth.nickname,
       avatar: '{}',
       status: 'connected',
@@ -228,8 +247,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.lock().catch((err: unknown) => log.error('truco: lock falhou', { err: String(err) }));
       // Adiado para o próximo tick do relógio: o 4º cliente já terminou de entrar e recebe os
       // primeiros eventos da partida (mensagens enviadas durante o `onJoin` chegam antes de o
-      // cliente registrar os handlers).
-      this.clock.setTimeout(() => this.startGame(), 0);
+      // cliente registrar os handlers). Cancelável: se alguém sai antes do tick, a sala destranca.
+      this.startTimer = this.clock.setTimeout(() => this.startGame(), 0);
     }
   }
 
@@ -240,7 +259,22 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (this.state.phase === 'waiting') {
       // Antes da partida o assento volta a ficar livre.
       this.seatBySession.delete(client.sessionId);
-      setPlayer(this.state, seat, { userId: '', nickname: '', avatar: '', status: 'empty' });
+      this.userBySeat.delete(seat);
+      // Nada do ocupante anterior pode ser herdado pelo próximo (strikes, rate limit, contadores).
+      this.invalidAt.delete(seat);
+      this.lastActionAt.delete(seat);
+      this.warnState.delete(seat);
+      this.timeouts.delete(seat);
+      setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty' });
+      if (this.startTimer !== null) {
+        this.startTimer.clear();
+        this.startTimer = null;
+      }
+      if (this.locked) {
+        this.unlock().catch((err: unknown) =>
+          log.error('truco: unlock falhou', { err: String(err) }),
+        );
+      }
     } else {
       // TODO(2E): allowReconnection(60 s) e bot após expirar. Por ora só marca desconectado.
       setPlayer(this.state, seat, { status: 'disconnected' });
@@ -248,6 +282,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   override onDispose(): void {
+    this.startTimer?.clear();
     this.turnTimer?.clear();
     this.closeTimer?.clear();
   }
@@ -261,8 +296,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   private startGame(): void {
+    this.startTimer = null;
     const options = this.options;
-    if (options === null) return;
+    if (options === null || this.series !== null || this.seatBySession.size !== TABLE_SEATS) return;
     const variant = variantById(options.variant);
     const ironHand = options.ironHand;
     const started = startSeries({
@@ -312,9 +348,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     const parsed = parseClientMessage(buildRaw(type, payload));
     if (!parsed.ok) {
-      log.warn('truco: mensagem inválida', { room: this.roomId, seat, code: parsed.code });
       this.reject(client, parsed.code);
-      if (parsed.code === 'INVALID_PAYLOAD') this.countInvalid(client, seat);
+      this.countInvalid(client, seat, parsed.code);
       return;
     }
     const msg = parsed.message;
@@ -369,8 +404,26 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return true;
   }
 
-  private countInvalid(client: Client, seat: Seat): void {
+  /** `warn` limitado: 1 por assento por janela, com o total suprimido na linha seguinte. */
+  private warnInvalid(seat: Seat, code: ErrorCode, now: number): void {
+    const st = this.warnState.get(seat);
+    if (st !== undefined && now - st.at < INVALID_WARN_WINDOW_MS) {
+      st.suppressed++;
+      return;
+    }
+    log.warn('truco: mensagem inválida', {
+      room: this.roomId,
+      seat,
+      code,
+      suppressed: st?.suppressed ?? 0,
+    });
+    this.warnState.set(seat, { at: now, suppressed: 0 });
+  }
+
+  /** Conta payload inválido (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) e expulsa o abuso. */
+  private countInvalid(client: Client, seat: Seat, code: ErrorCode): void {
     const now = Date.now();
+    this.warnInvalid(seat, code, now);
     const recent = (this.invalidAt.get(seat) ?? []).filter(
       (t) => now - t < INVALID_PAYLOAD_WINDOW_MS,
     );

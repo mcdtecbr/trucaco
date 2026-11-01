@@ -79,7 +79,6 @@ export const OptionsSchema = schema(
 export const PlayerSchema = schema(
   {
     seat: t.int8(),
-    userId: t.string(),
     nickname: t.string(),
     /** JSON do avatar (partes escolhidas). */
     avatar: t.string(),
@@ -188,7 +187,6 @@ export function createTableState(roomCode: string, options: TableOptions): Table
 }
 
 export interface PlayerInfo {
-  readonly userId?: string;
   readonly nickname?: string;
   readonly avatar?: string;
   readonly status?: PlayerStatus;
@@ -199,7 +197,6 @@ export interface PlayerInfo {
 export function setPlayer(state: TableState, seat: Seat, info: PlayerInfo): void {
   const p = state.players[seat];
   if (p === undefined) return;
-  if (info.userId !== undefined) p.userId = info.userId;
   if (info.nickname !== undefined) p.nickname = info.nickname;
   if (info.avatar !== undefined) p.avatar = info.avatar;
   if (info.status !== undefined) p.status = info.status;

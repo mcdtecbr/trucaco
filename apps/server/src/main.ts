@@ -22,9 +22,23 @@ function applyDevFlag(): void {
   }
 }
 
+function positiveInt(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${name} inválida: ${raw}`);
+  return n;
+}
+
 async function main(): Promise<void> {
   applyDevFlag();
-  const server = await createServer({ port: resolvePort(process.env.PORT) });
+  const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
+  const server = await createServer({
+    port: resolvePort(process.env.PORT),
+    matchmakeLimit: {
+      ...(max !== undefined ? { max } : {}),
+      trustProxy: process.env.TRUST_PROXY === 'true',
+    },
+  });
   console.log(JSON.stringify({ level: 'info', msg: 'server listening', port: server.port }));
 
   let shuttingDown = false;
