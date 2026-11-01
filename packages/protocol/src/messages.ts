@@ -69,7 +69,10 @@ export type ServerMessage =
 
 export type ParseResult =
   | { readonly ok: true; readonly message: ClientMessage }
-  | { readonly ok: false; readonly code: 'INVALID_PAYLOAD' | 'INVALID_SIGNAL' | 'INVALID_SFX' };
+  | {
+      readonly ok: false;
+      readonly code: 'INVALID_PAYLOAD' | 'INVALID_SIGNAL' | 'INVALID_SFX' | 'CHAT_BLOCKED';
+    };
 
 const BAD: ParseResult = { ok: false, code: 'INVALID_PAYLOAD' };
 const good = (message: ClientMessage): ParseResult => ({ ok: true, message });
@@ -160,7 +163,8 @@ function cleanChatText(raw: string): string | null {
  * do cliente. Função pura, nunca lança (Proxy/getter hostil vira `INVALID_PAYLOAD`). Decisão: campos
  * extras são REJEITADOS (`INVALID_PAYLOAD`), em especial `seat`, que o servidor nunca aceita do
  * cliente. Só propriedades próprias contam e cada uma é lida uma vez. Não verifica legalidade de
- * jogo (isso é do motor).
+ * jogo (isso é do motor). Exceção: chat de formato válido cujo TEXTO a limpeza recusa devolve
+ * `CHAT_BLOCKED` (não é abuso; o servidor não expulsa por isso).
  */
 export function parseClientMessage(raw: unknown): ParseResult {
   try {
@@ -235,7 +239,9 @@ function parseUnsafe(input: unknown): ParseResult {
       }
       if (!onlyKeys(raw, ['type', 'scope', 'text']) || typeof raw.text !== 'string') return BAD;
       const text = cleanChatText(raw.text);
-      if (text === null) return BAD;
+      // Formato válido, texto recusado pela limpeza (ZWJ, controle, bidi, longo, vazio): NÃO é abuso
+      // de protocolo, então não é INVALID_PAYLOAD (o servidor não conta strike).
+      if (text === null) return { ok: false, code: 'CHAT_BLOCKED' };
       return good({ type, scope, text });
     }
     default:

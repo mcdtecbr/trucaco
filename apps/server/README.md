@@ -34,21 +34,28 @@ Mesa de 4 jogadores, registrada em `createServer` com `server.define('truco', ..
 
 ## Sinais, sfx e chat (bloco 2F)
 
-O assento do remetente vem SEMPRE do servidor (`seatBySession`); `seat` no payload do cliente é rejeitado (`INVALID_PAYLOAD`). Todo texto passa por `parseClientMessage` (limpeza e limite de 140 code points; controle, bidi e ZWJ são rejeitados). Nada disto entra no estado compartilhado (schema), em `eventLog`, no replay de reconexão, no banco ou em log.
+O assento do remetente vem SEMPRE do servidor (`seatBySession`); `seat` no payload do cliente é rejeitado (`INVALID_PAYLOAD`). Todo texto passa por `parseClientMessage` (limpeza e limite de 140 code points; controle, bidi e ZWJ são rejeitados com `error CHAT_BLOCKED`). Nada disto entra no estado compartilhado (schema), em `eventLog`, no replay de reconexão, no banco ou em log.
 
-| Cliente envia                               | Servidor entrega                                                                          | Cooldown por assento       |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
-| `signal { signalId }`                       | `signal { seat, signalId, at }` a TODOS os 4 (público, adversários veem)                  | `SIGNAL_COOLDOWN_MS` (3 s) |
-| `sfx { sfxId }`                             | `sfx { seat, sfxId, at }` a todos os 4                                                    | `SFX_COOLDOWN_MS` (5 s)    |
-| `chat { scope: 'partner', text\|phraseId }` | `chat { scope, seat, text\|phraseId, at }` SÓ ao parceiro `(seat+2)%4` e eco ao remetente | `CHAT_COOLDOWN_MS` (2 s)   |
-| `chat { scope: 'table', text\|phraseId }`   | o mesmo `chat` aos 4                                                                      | `CHAT_COOLDOWN_MS` (2 s)   |
+| Cliente envia                               | Servidor entrega                                                                    | Cooldown por assento       |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------- |
+| `signal { signalId }`                       | `signal { seat, signalId, at }` a TODOS os 4 (público, adversários veem)            | `SIGNAL_COOLDOWN_MS` (3 s) |
+| `sfx { sfxId }`                             | `sfx { seat, sfxId, at }` a todos os 4                                              | `SFX_COOLDOWN_MS` (5 s)    |
+| `chat { scope: 'partner', text\|phraseId }` | `chat { scope, seat, text\|phraseId, at }` SÓ à dupla (`teamOf`) e eco ao remetente | `CHAT_COOLDOWN_MS` (2 s)   |
+| `chat { scope: 'table', text\|phraseId }`   | o mesmo `chat` aos 4                                                                | `CHAT_COOLDOWN_MS` (2 s)   |
 
-- **Dentro do cooldown:** `error { code: 'RATE_LIMITED' }` ao remetente, nada é enviado, sem strike. Os contadores são mapas por ASSENTO e sobrevivem a queda, reconexão e retomada do bot (sair e voltar não zera); também não são zerados quando alguém sai na espera. O limite global de mensagens por segundo (`maxMessagesPerSecond`) e os strikes de payload inválido (`INVALID_SIGNAL`, `INVALID_SFX`, `INVALID_PAYLOAD`, 5 em 10 s expulsam) continuam valendo.
+- **Dentro do cooldown:** `error { code: 'RATE_LIMITED' }` ao remetente, nada é enviado, sem strike. Os contadores são mapas por ASSENTO e sobrevivem a queda, reconexão e retomada do bot (sair e voltar não zera); também não são zerados quando alguém sai na espera (de propósito: cooldowns de sinal/sfx/chat ficam por assento; só strikes e contadores de ação são limpos). O limite global de mensagens por segundo (`maxMessagesPerSecond`) e os strikes de payload inválido (`INVALID_SIGNAL`, `INVALID_SFX`, `INVALID_PAYLOAD`, 5 em 10 s expulsam) continuam valendo.
 - **Fases:** `signal`, `sfx` e chat da dupla só em `playing` (com série em andamento); fora disso são IGNORADOS em silêncio (sem erro, sem gastar cooldown). Chat da mesa vale em qualquer fase (inclusive na espera antes dos 4 sentarem e após o fim da série).
 - **Quem envia/recebe:** só humano com socket vivo. Assento expulso, caído ou com bot não envia. Parceiro bot ou com socket caído (janela de reconexão) NÃO recebe: a mensagem é descartada em silêncio e NADA é reenviado quando ele volta. Bots não recebem chat (e ainda não sinalizam; o broadcast aceita um assento de bot no futuro).
+- **Texto de chat recusado (`CHAT_BLOCKED`):** não é INVALID_PAYLOAD e NÃO conta strike nem expulsa (emoji com ZWJ é comum no celular). Para não virar spam grátis, a rejeição consome o MESMO cooldown de chat (`CHAT_COOLDOWN_MS`): dentro dele responde `RATE_LIMITED`; um texto válido logo após um rejeitado também recebe `RATE_LIMITED`. Payload malformado de verdade (chaves extras como `seat`, tipo errado, `scope` inválido) segue `INVALID_PAYLOAD` com strike.
 - **Logs:** `signal`/`sfx` em `info` (assento e id); chat só metadados em `debug` (assento, escopo, tamanho), nunca o texto.
 - **Moderação (extensão):** `canReceiveChat(from, to)` em `TrucoRoom` é o ponto para silenciar/bloquear entre jogadores (Fase 3).
 - **Config só do servidor:** `signalCooldownMs`, `sfxCooldownMs`, `chatCooldownMs` em `TrucoRoomConfig` (padrões vêm de `@trucaco/protocol`). Sem variável de ambiente nova.
+
+### Moderação pendente
+
+- Silenciar, bloquear e denunciar por `userId` (ponto de extensão `canReceiveChat`) antes do beta público.
+- Avaliar desligar o chat da mesa em `waiting` na fila pública (hoje sem moderação).
+- Política de retenção de chat para denúncias: decisão futura (hoje nada de chat é persistido).
 
 ## Reconexão e bot de ausência (bloco 2E)
 

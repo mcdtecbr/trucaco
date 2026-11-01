@@ -17,7 +17,7 @@ import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
 import { buildColyseusServer } from '../server';
-import { defineTrucoRoom, devAuth, devReconnectUserId } from './TrucoRoom';
+import { defineTrucoRoom, devAuth, devReconnectUserId, isChatRecipient } from './TrucoRoom';
 import type { TrucoRoom, TrucoRoomConfig } from './TrucoRoom';
 
 type SdkRoom = Awaited<ReturnType<ColyseusTestServer['connectTo']>>;
@@ -1850,23 +1850,32 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       expect(inboxOf(p).sfxs).toEqual([]);
       expect(inboxOf(p).chats).toEqual([]);
     }
+    // chat da MESA ainda vale depois do fim da série e chega aos 4
+    q.room.send('chat', { scope: 'table', text: 'gg' });
+    await until(
+      () => g.players.every((p) => inboxOf(p).chats.length === 1),
+      'chat da mesa após o fim chegou aos 4',
+    );
+    for (const p of g.players) expect(inboxOf(p).chats.map((c) => c.text)).toEqual(['gg']);
   });
 
-  it('(i)(j) INVALID_SIGNAL/INVALID_SFX/chat inválido contam strike; controle, bidi e ZWJ são rejeitados', async () => {
+  it('(i)(j) INVALID_SIGNAL/INVALID_SFX contam strike; texto de chat recusado vira CHAT_BLOCKED sem strike', async () => {
     const game = await startedRec('truco-soc');
     const v = game.players[1] as Player;
     v.room.send('signal', { signalId: 'nao-existe' });
     v.room.send('sfx', { sfxId: 'nao-existe' });
-    v.room.send('chat', { scope: 'table', text: 'ab\u202ecd' });
-    v.room.send('chat', { scope: 'table', text: 'a\u200db' });
-    v.room.send('chat', { scope: 'table', text: 'a\u0007b' });
+    await until(() => v.errors.length === 2, 'dois erros');
+    for (const text of ['ab\u202ecd', 'a\u200db', 'a\u0007b']) {
+      v.room.send('chat', { scope: 'table', text });
+      await sleep(450);
+    }
     await until(() => v.errors.length === 5, 'cinco erros');
     expect(v.errors).toEqual([
       'INVALID_SIGNAL',
       'INVALID_SFX',
-      'INVALID_PAYLOAD',
-      'INVALID_PAYLOAD',
-      'INVALID_PAYLOAD',
+      'CHAT_BLOCKED',
+      'CHAT_BLOCKED',
+      'CHAT_BLOCKED',
     ]);
     await sleep(100);
     for (const p of game.players) {
@@ -1874,6 +1883,34 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       expect(inboxOf(p).signals).toEqual([]);
     }
     expect(logLines.some((l) => l.includes('ab\u202ecd'))).toBe(false);
+  });
+
+  it('CHAT_BLOCKED 10x seguidas (emoji ZWJ) não expulsa; rejeição respeita o cooldown de chat', async () => {
+    const game = await startedRec('truco-soc-short');
+    const v = game.players[1] as Player;
+    for (let i = 0; i < 10; i++) {
+      v.room.send('chat', { scope: 'table', text: '👨\u200d👩\u200d👧' });
+      await sleep(80);
+    }
+    await until(() => v.errors.length === 10, 'dez erros');
+    expect(v.errors.every((c) => c === 'CHAT_BLOCKED')).toBe(true);
+    expect(game.server.clients.length).toBe(4);
+    // dentro do cooldown a rejeição vira RATE_LIMITED (sem spam grátis) e ainda sem strike
+    for (let i = 0; i < 6; i++) v.room.send('chat', { scope: 'table', text: 'a\u200db' });
+    await until(() => v.errors.length === 16, 'mais seis erros');
+    expect(v.errors.slice(10).every((c) => c === 'CHAT_BLOCKED' || c === 'RATE_LIMITED')).toBe(
+      true,
+    );
+    expect(v.errors.slice(10).filter((c) => c === 'RATE_LIMITED').length).toBeGreaterThan(0);
+    expect(game.server.clients.length).toBe(4);
+    // malformado de verdade continua expulsando
+    let code = -1;
+    v.room.onLeave((c) => {
+      code = c;
+    });
+    for (let i = 0; i < 5; i++) v.room.send('chat', { scope: 'table', text: 'oi', seat: 0 });
+    await until(() => code !== -1, 'expulso por malformado');
+    expect(code).toBe(1008);
   });
 
   it('(k) expulso por abuso não consegue enviar sinal, sfx nem chat', async () => {
@@ -1888,6 +1925,17 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       expect(inboxOf(p).signals).toEqual([]);
       expect(inboxOf(p).sfxs).toEqual([]);
       expect(inboxOf(p).chats).toEqual([]);
+    }
+  });
+});
+
+describe('isChatRecipient (destinatários do chat)', () => {
+  it('table: todos; partner: remetente (eco) e a dupla, nunca adversário', () => {
+    for (let from = 0; from < 4; from++) {
+      for (let to = 0; to < 4; to++) {
+        expect(isChatRecipient('table', from, to)).toBe(true);
+        expect(isChatRecipient('partner', from, to)).toBe(to === from || to === (from + 2) % 4);
+      }
     }
   });
 });

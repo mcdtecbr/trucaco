@@ -50,6 +50,7 @@ import {
   publicEvent,
   startHand,
   startSeries,
+  teamOf,
   variantById,
 } from '@trucaco/rules';
 import type {
@@ -77,6 +78,11 @@ type Timer = ReturnType<Room['clock']['setTimeout']>;
 
 /** Código de política do WebSocket (RFC 6455, 1008) usado ao expulsar quem insiste em payload inválido. */
 export const POLICY_CLOSE_CODE = 1008;
+/** Destinatário de chat: `table` todos; `partner` o remetente (eco) e quem é da mesma dupla (`teamOf`). */
+export function isChatRecipient(scope: 'partner' | 'table', from: Seat, to: Seat): boolean {
+  return scope === 'table' || to === from || teamOf(to) === teamOf(from);
+}
+
 /** `INVALID_PAYLOAD` repetido: este número dentro desta janela expulsa o cliente. */
 export const INVALID_PAYLOAD_LIMIT = 5;
 export const INVALID_PAYLOAD_WINDOW_MS = 10_000;
@@ -414,7 +420,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       // Antes da partida o assento volta a ficar livre.
       this.seatBySession.delete(client.sessionId);
       this.userBySeat.delete(seat);
-      // Nada do ocupante anterior pode ser herdado pelo próximo (strikes, rate limit, contadores).
+      // Nada do ocupante anterior pode ser herdado pelo próximo (strikes, contadores). EXCEÇÃO de
+      // propósito: cooldowns de sinal/sfx/chat (`lastSignalAt`, `lastSfxAt`, `lastChatAt`) ficam por
+      // assento, para sair e voltar na espera não zerar o rate limit.
       this.invalidAt.delete(seat);
       this.lastActionAt.delete(seat);
       this.warnState.delete(seat);
@@ -730,6 +738,17 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     const parsed = parseClientMessage(buildRaw(type, payload));
     if (!parsed.ok) {
+      if (parsed.code === 'CHAT_BLOCKED') {
+        // Texto recusado pela limpeza (ex.: emoji com ZWJ) não é abuso: sem strike nem expulsão.
+        // Mas custa cooldown de chat (o MESMO de `social`, inclusive para quem acerta depois), para
+        // que rejeições não sejam spam grátis.
+        const cooldown = this.config.chatCooldownMs ?? CHAT_COOLDOWN_MS;
+        this.reject(
+          client,
+          this.cooldownPassed(this.lastChatAt, seat, cooldown) ? parsed.code : 'RATE_LIMITED',
+        );
+        return;
+      }
       this.reject(client, parsed.code);
       this.countInvalid(client, seat, parsed.code);
       return;
@@ -789,6 +808,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * Ponto de extensão para silenciar/bloquear (Fase 3/moderação): decide se o chat de `from` pode
    * chegar a `to`. Hoje só exige humano com socket vivo (bot e assento caído nunca recebem, e nada é
    * enfileirado para quando voltarem).
+   * PONTO DE EXTENSÃO: na Fase 3, consultar silenciar/bloquear por `userId` (de `from` e `to`) aqui.
+   * Hoje ignora `_from` de propósito.
    */
   private canReceiveChat(_from: Seat, to: Seat): boolean {
     return !this.botSeats.has(to) && !this.droppedSeats.has(to);
@@ -802,7 +823,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * - Dentro do cooldown: `RATE_LIMITED` ao remetente, nada é enviado (igual ao rate limit de ações);
    *   não gera strike.
    * - `signal`/`sfx`: broadcast PÚBLICO aos 4 (é o design: adversários também veem).
-   * - `chat` `partner`: só ao parceiro `(seat+2)%4` e eco ao remetente; `table`: aos 4. Parceiro bot ou
+   * - `chat` `partner`: só à dupla (`isChatRecipient`) e eco ao remetente; `table`: aos 4. Parceiro bot ou
    *   com socket caído: descartado em silêncio. Chat NUNCA entra em `eventLog`, estado, replay,
    *   persistência nem log (só metadados em debug: assento, escopo, tamanho).
    * - Bot ainda não sinaliza, mas nada aqui impede: um futuro `emitSignal(seat, id)` pode reusar o
@@ -835,11 +856,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       const base = { scope: msg.scope, seat, at };
       const payload =
         'text' in msg ? { ...base, text: msg.text } : { ...base, phraseId: msg.phraseId };
-      const partner = (seat + 2) % TABLE_SEATS;
       for (const c of this.clients) {
         const to = this.seatBySession.get(c.sessionId);
         if (to === undefined) continue;
-        if (msg.scope === 'partner' && to !== seat && to !== partner) continue;
+        if (!isChatRecipient(msg.scope, seat, to)) continue;
         if (to !== seat && !this.canReceiveChat(seat, to)) continue;
         c.send('chat', payload);
       }

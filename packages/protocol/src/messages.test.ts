@@ -30,7 +30,7 @@ describe('parseClientMessage válidas', () => {
   it('texto no limite passa e acima falha', () => {
     const t = 'a'.repeat(CHAT_MAX_LENGTH);
     ok({ type: 'chat', scope: 'table', text: t }, { type: 'chat', scope: 'table', text: t });
-    bad({ type: 'chat', scope: 'table', text: t + 'a' });
+    bad({ type: 'chat', scope: 'table', text: t + 'a' }, 'CHAT_BLOCKED');
   });
 });
 
@@ -81,14 +81,20 @@ describe('parseClientMessage inválidas', () => {
     bad({ type: 'chat', scope: 'all', text: 'oi' });
     bad({ type: 'chat', text: 'oi' });
     bad({ type: 'chat', scope: 'table' });
-    bad({ type: 'chat', scope: 'table', text: '   ' });
+    bad({ type: 'chat', scope: 'table', text: '   ' }, 'CHAT_BLOCKED');
     bad({ type: 'chat', scope: 'table', text: 5 });
-    bad({ type: 'chat', scope: 'table', text: 'x'.repeat(100_000) });
+    bad({ type: 'chat', scope: 'table', text: 'x'.repeat(100_000) }, 'CHAT_BLOCKED');
     bad({ type: 'chat', scope: 'table', text: 'oi', phraseId: 'good_luck' });
   });
 });
 
 describe('chat: caracteres perigosos', () => {
+  it('emoji com ZWJ é CHAT_BLOCKED, e formato malformado continua INVALID_PAYLOAD', () => {
+    bad({ type: 'chat', scope: 'table', text: '👨‍👩‍👧' }, 'CHAT_BLOCKED');
+    bad({ type: 'chat', scope: 'table', text: '👨‍👩‍👧', seat: 1 });
+    bad({ type: 'chat', scope: 'x', text: '👨‍👩‍👧' });
+    bad({ type: 'chat', scope: 'table', text: 7 });
+  });
   const chat = (text: string): unknown => ({ type: 'chat', scope: 'table', text });
   it('rejeita zero-width, bidi, controle, BOM e surrogate solto', () => {
     for (const t of [
@@ -108,13 +114,13 @@ describe('chat: caracteres perigosos', () => {
       '\uDC00',
       'ab\uD83D',
     ]) {
-      bad(chat(t));
+      bad(chat(t), 'CHAT_BLOCKED');
     }
   });
   it('quebras de linha e tab viram espaço', () => {
     ok(chat('a\nb\r\nc\td'), { type: 'chat', scope: 'table', text: 'a b  c d' });
-    bad(chat('\n \t\r'));
-    bad(chat('   '));
+    bad(chat('\n \t\r'), 'CHAT_BLOCKED');
+    bad(chat('   '), 'CHAT_BLOCKED');
   });
   it('zalgo: até 3 combinantes passam, mais que 3 (após NFC) rejeitam', () => {
     ok(chat('é̂̃'.normalize('NFD')), {
@@ -122,8 +128,8 @@ describe('chat: caracteres perigosos', () => {
       scope: 'table',
       text: 'é̂̃'.normalize('NFC'),
     });
-    bad(chat('a' + '́'.repeat(139)));
-    bad(chat('a' + '́'.repeat(5)));
+    bad(chat('a' + '́'.repeat(139)), 'CHAT_BLOCKED');
+    bad(chat('a' + '́'.repeat(5)), 'CHAT_BLOCKED');
   });
   it('normaliza NFC e conta o limite em code points depois', () => {
     ok(chat('é'), { type: 'chat', scope: 'table', text: 'é' });
@@ -132,8 +138,8 @@ describe('chat: caracteres perigosos', () => {
       scope: 'table',
       text: '😀'.repeat(CHAT_MAX_LENGTH),
     });
-    bad(chat('😀'.repeat(CHAT_MAX_LENGTH + 1)));
-    bad(chat('a'.repeat(CHAT_MAX_LENGTH * 2 + 1)));
+    bad(chat('😀'.repeat(CHAT_MAX_LENGTH + 1)), 'CHAT_BLOCKED');
+    bad(chat('a'.repeat(CHAT_MAX_LENGTH * 2 + 1)), 'CHAT_BLOCKED');
   });
   it('texto normal pt-BR, emoji e HTML passam intactos (escape é do cliente)', () => {
     for (const text of ['Ação já! Truco, são três cartões 👍🏽', '<img src=x onerror=alert(1)>']) {
