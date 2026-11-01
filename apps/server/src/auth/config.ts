@@ -12,6 +12,13 @@ export interface AuthConfig {
   readonly audience: string;
   readonly accessTtlSec: number;
   readonly refreshTtlSec: number;
+  /**
+   * Janela de graça (s) em que reapresentar o refresh recém-rotacionado NÃO é reuso (resposta perdida,
+   * duas abas). 0 desliga. Ver `AuthService.refresh`.
+   */
+  readonly refreshReuseGraceSec: number;
+  /** Teto absoluto de vida de uma família (s) desde a criação; a rotação não renova além dele. */
+  readonly refreshFamilyMaxSec: number;
   /** Tolerância de relógio na verificação do JWT (segundos). */
   readonly clockToleranceSec: number;
 }
@@ -42,6 +49,8 @@ export interface ServerConfig {
 }
 
 export const JWT_SECRET_MIN_BYTES = 32;
+/** Segredo com menos símbolos distintos que isto (ex.: um caractere repetido) é recusado. */
+export const JWT_SECRET_MIN_DISTINCT = 8;
 /** Prefixo do valor de exemplo do `.env.example`: recusado fora de dev/test. */
 const PLACEHOLDER_PREFIX = 'troque-por';
 
@@ -100,6 +109,11 @@ function resolveSecret(env: Env, devLike: boolean): Uint8Array {
   if (bytes.length < JWT_SECRET_MIN_BYTES) {
     throw new Error(`JWT_SECRET precisa ter pelo menos ${JWT_SECRET_MIN_BYTES} bytes.`);
   }
+  if (new Set(raw).size < JWT_SECRET_MIN_DISTINCT) {
+    throw new Error(
+      `JWT_SECRET com entropia obviamente baixa (menos de ${JWT_SECRET_MIN_DISTINCT} símbolos distintos).`,
+    );
+  }
   if (!devLike && raw.startsWith(PLACEHOLDER_PREFIX)) {
     throw new Error('JWT_SECRET ainda é o valor de exemplo do .env.example.');
   }
@@ -127,6 +141,14 @@ export function loadServerConfig(env: Env = process.env): ServerConfig {
       audience: env['JWT_AUDIENCE'] || 'trucaco-api',
       accessTtlSec: intInRange(env, 'ACCESS_TOKEN_TTL_SECONDS', 900, 60, 3600),
       refreshTtlSec: intInRange(env, 'REFRESH_TOKEN_TTL_SECONDS', 2_592_000, 3600, 7_776_000),
+      refreshReuseGraceSec: intInRange(env, 'REFRESH_REUSE_GRACE_SECONDS', 20, 0, 60),
+      refreshFamilyMaxSec: intInRange(
+        env,
+        'REFRESH_FAMILY_MAX_SECONDS',
+        7_776_000,
+        3600,
+        31_536_000,
+      ),
       clockToleranceSec: 5,
     },
     redisUrl,

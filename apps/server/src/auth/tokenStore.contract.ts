@@ -8,15 +8,29 @@ import type { TokenStore } from './tokenStore';
 
 const hex = (): string => randomUUID().replaceAll('-', '').repeat(2);
 
-export function tokenStoreContract(name: string, make: () => TokenStore): void {
+/** Relógio da bateria: tempo real mais um deslocamento controlável (a graça e o teto usam este relógio). */
+export interface TestClock {
+  now: () => number;
+  advance: (ms: number) => void;
+}
+
+export function tokenStoreContract(name: string, make: (clock: () => number) => TokenStore): void {
   describe(`TokenStore (${name})`, () => {
     const opened: TokenStore[] = [];
+    let offset = 0;
+    const clock: TestClock = {
+      now: () => Date.now() + offset,
+      advance: (ms) => {
+        offset += ms;
+      },
+    };
     const fresh = (): TokenStore => {
-      const store = make();
+      const store = make(clock.now);
       opened.push(store);
       return store;
     };
     afterEach(async () => {
+      offset = 0;
       for (const store of opened.splice(0)) await store.close();
     });
 
@@ -31,12 +45,27 @@ export function tokenStoreContract(name: string, make: () => TokenStore): void {
       await store.createFamily(input);
       return input;
     };
-    const rot = (store: TokenStore, from: string, jti = randomUUID(), ttlSec = 60) => {
+    const rot = (
+      store: TokenStore,
+      from: string,
+      jti = randomUUID(),
+      ttlSec = 60,
+      graceSec = 0,
+      familyMaxSec = 7_776_000,
+    ) => {
       const to = hex();
       return {
         to,
         jti,
-        run: () => store.rotate({ refreshHash: from, newRefreshHash: to, newJti: jti, ttlSec }),
+        run: () =>
+          store.rotate({
+            refreshHash: from,
+            newRefreshHash: to,
+            newJti: jti,
+            ttlSec,
+            graceSec,
+            familyMaxSec,
+          }),
       };
     };
 
@@ -127,6 +156,66 @@ export function tokenStoreContract(name: string, make: () => TokenStore): void {
       const f = await family(store, 1);
       await new Promise((r) => setTimeout(r, 1200));
       expect(await rot(store, f.refreshHash).run()).toEqual({ status: 'unknown' });
+    });
+
+    it('lookup devolve dono e família sem efeito colateral', async () => {
+      const store = fresh();
+      const f = await family(store);
+      expect(await store.lookup(f.refreshHash)).toEqual({
+        userId: f.userId,
+        familyId: f.familyId,
+      });
+      expect(await store.lookup(hex())).toBeNull();
+      expect((await rot(store, f.refreshHash).run()).status).toBe('rotated');
+    });
+
+    it('graça: reapresentar logo após rotacionar emite UM sucessor irmão; a 2ª vez é reuso', async () => {
+      const store = fresh();
+      const f = await family(store);
+      const first = rot(store, f.refreshHash, randomUUID(), 60, 20);
+      expect((await first.run()).status).toBe('rotated');
+      clock.advance(5_000);
+      const again = rot(store, f.refreshHash, randomUUID(), 60, 20);
+      expect(await again.run()).toEqual({
+        status: 'rotated',
+        userId: f.userId,
+        familyId: f.familyId,
+        graced: true,
+      });
+      // os dois sucessores valem (a cadeia bifurcou)
+      expect((await rot(store, first.to, randomUUID(), 60, 20).run()).status).toBe('rotated');
+      expect((await rot(store, again.to, randomUUID(), 60, 20).run()).status).toBe('rotated');
+      // segunda reapresentação do original: reuso, revoga a família
+      const third = await rot(store, f.refreshHash, randomUUID(), 60, 20).run();
+      expect(third.status).toBe('reuse');
+      expect((await rot(store, again.to, randomUUID(), 60, 20).run()).status).toBe('revoked');
+    });
+
+    it('fora da graça (ou graça 0) a reapresentação é reuso e revoga a família', async () => {
+      const store = fresh();
+      const f = await family(store);
+      expect((await rot(store, f.refreshHash, randomUUID(), 60, 20).run()).status).toBe('rotated');
+      clock.advance(21_000);
+      expect((await rot(store, f.refreshHash, randomUUID(), 60, 20).run()).status).toBe('reuse');
+
+      const g = await family(store);
+      expect((await rot(store, g.refreshHash).run()).status).toBe('rotated');
+      expect((await rot(store, g.refreshHash).run()).status).toBe('reuse');
+    });
+
+    it('teto absoluto da família: a rotação não renova além de createdAt + familyMaxSec', async () => {
+      const store = fresh();
+      const f = await family(store, 60);
+      const a = rot(store, f.refreshHash, randomUUID(), 60, 0, 100);
+      clock.advance(50_000);
+      expect((await a.run()).status).toBe('rotated');
+      const b = rot(store, a.to, randomUUID(), 60, 0, 100);
+      clock.advance(40_000);
+      expect((await b.run()).status).toBe('rotated');
+      clock.advance(11_000); // 101 s desde a criação
+      expect(await rot(store, b.to, randomUUID(), 60, 0, 100).run()).toEqual({
+        status: 'unknown',
+      });
     });
   });
 }

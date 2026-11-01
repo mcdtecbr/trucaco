@@ -23,6 +23,8 @@ const CFG: AuthConfig = {
   audience: 'trucaco-api',
   accessTtlSec: 900,
   refreshTtlSec: 3600,
+  refreshReuseGraceSec: 20,
+  refreshFamilyMaxSec: 7_776_000,
   clockToleranceSec: 5,
 };
 const USER = randomUUID();
@@ -31,7 +33,7 @@ const b64 = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('bas
 
 describe('loadServerConfig', () => {
   const base = { NODE_ENV: 'production', REDIS_URL: 'redis://localhost:6380' };
-  const secret = 'x'.repeat(40);
+  const secret = 'aB3dE5gH7jK9mN1pQ3sT5vX7zC9fL2oR4uW6yA8d';
 
   it('produção exige JWT_SECRET (sem padrão), com 32 bytes e fora do valor de exemplo', () => {
     expect(() => loadServerConfig(base)).toThrow(/JWT_SECRET/);
@@ -43,6 +45,36 @@ describe('loadServerConfig', () => {
       }),
     ).toThrow(/exemplo/);
     expect(loadServerConfig({ ...base, JWT_SECRET: secret }).auth.secret.length).toBe(40);
+  });
+
+  it('segredo de entropia obviamente baixa é recusado (também em dev/test)', () => {
+    for (const weak of ['x'.repeat(40), 'ab'.repeat(20), '1234567'.repeat(6)]) {
+      expect(() => loadServerConfig({ ...base, JWT_SECRET: weak })).toThrow(/entropia/);
+      expect(() => loadServerConfig({ NODE_ENV: 'test', JWT_SECRET: weak })).toThrow(/entropia/);
+    }
+  });
+
+  it('janela de graça e teto da família: padrões e limites', () => {
+    const ok = { ...base, JWT_SECRET: secret };
+    expect(loadServerConfig(ok).auth).toMatchObject({
+      refreshReuseGraceSec: 20,
+      refreshFamilyMaxSec: 7_776_000,
+    });
+    expect(
+      loadServerConfig({ ...ok, REFRESH_REUSE_GRACE_SECONDS: '0' }).auth.refreshReuseGraceSec,
+    ).toBe(0);
+    expect(
+      loadServerConfig({ ...ok, REFRESH_REUSE_GRACE_SECONDS: '60' }).auth.refreshReuseGraceSec,
+    ).toBe(60);
+    for (const bad of ['-1', '61', 'x', '1.5']) {
+      expect(() => loadServerConfig({ ...ok, REFRESH_REUSE_GRACE_SECONDS: bad })).toThrow(/GRACE/);
+    }
+    expect(() => loadServerConfig({ ...ok, REFRESH_FAMILY_MAX_SECONDS: '10' })).toThrow(
+      /FAMILY_MAX/,
+    );
+    expect(
+      loadServerConfig({ ...ok, REFRESH_FAMILY_MAX_SECONDS: '86400' }).auth.refreshFamilyMaxSec,
+    ).toBe(86400);
   });
 
   it('NODE_ENV ausente ou desconhecido NÃO ganha segredo efêmero', () => {
@@ -191,10 +223,10 @@ describe('AccessTokenService (JWT HS256)', () => {
 
 describe('AuthService', () => {
   let now = Date.now();
-  const setup = () => {
+  const setup = (over: Partial<AuthConfig> = {}) => {
     const repos = createMemoryRepositories();
     const tokens = new MemoryTokenStore(() => now);
-    const auth = new AuthService(repos.users, tokens, CFG, () => now);
+    const auth = new AuthService(repos.users, tokens, { ...CFG, ...over }, () => now);
     return { repos, tokens, auth };
   };
 
@@ -217,7 +249,8 @@ describe('AuthService', () => {
     expect(second.refreshToken).not.toBe(g.pair.refreshToken);
     const third = await auth.refresh(second.refreshToken);
     await expect(auth.authenticateAccess(third.accessToken)).resolves.toBeDefined();
-    // reuso do 1º: derruba tudo
+    // reuso do 1º FORA da janela de graça: derruba tudo
+    now += 21_000;
     await expect(auth.refresh(g.pair.refreshToken)).rejects.toMatchObject({
       code: 'INVALID_REFRESH_TOKEN',
     });
@@ -246,8 +279,8 @@ describe('AuthService', () => {
     });
   });
 
-  it('concorrência: dois refresh com o mesmo token, só um vence', async () => {
-    const { auth } = setup();
+  it('concorrência sem graça: dois refresh com o mesmo token, só um vence', async () => {
+    const { auth } = setup({ refreshReuseGraceSec: 0 });
     const g = await auth.createGuest();
     const results = await Promise.allSettled([
       auth.refresh(g.pair.refreshToken),
@@ -255,6 +288,85 @@ describe('AuthService', () => {
       auth.refresh(g.pair.refreshToken),
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+  });
+
+  it('concorrência com graça: no máximo o original e UM irmão; o terceiro revoga a família', async () => {
+    const { auth } = setup();
+    const g = await auth.createGuest();
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => auth.refresh(g.pair.refreshToken)),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
+    await expect(auth.refresh(g.pair.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+  });
+
+  it('graça: resposta perdida (mesmo token reapresentado) devolve par novo, e o ramo perdido não atrapalha', async () => {
+    const { auth } = setup();
+    const g = await auth.createGuest();
+    const lost = await auth.refresh(g.pair.refreshToken); // a resposta "se perdeu"
+    now += 3_000;
+    const retry = await auth.refresh(g.pair.refreshToken); // o cliente repete
+    expect(retry.refreshToken).not.toBe(lost.refreshToken);
+    await expect(auth.authenticateAccess(retry.accessToken)).resolves.toBeDefined();
+    // o cliente segue com o par da retentativa
+    const next = await auth.refresh(retry.refreshToken);
+    await expect(auth.authenticateAccess(next.accessToken)).resolves.toBeDefined();
+    // reapresentar o original DE NOVO (2ª vez) já é reuso: revoga tudo
+    await expect(auth.refresh(g.pair.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+    await expect(auth.refresh(next.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+  });
+
+  it('graça: fora da janela (ou com graça 0) o reuso revoga a família', async () => {
+    const a = setup();
+    const g = await a.auth.createGuest();
+    await a.auth.refresh(g.pair.refreshToken);
+    now += 21_000;
+    await expect(a.auth.refresh(g.pair.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+    const b = setup({ refreshReuseGraceSec: 0 });
+    const h = await b.auth.createGuest();
+    const second = await b.auth.refresh(h.pair.refreshToken);
+    await expect(b.auth.refresh(h.pair.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+    await expect(b.auth.refresh(second.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+  });
+
+  it('falha do banco ANTES de rotacionar não gasta o refresh token', async () => {
+    const { auth, repos } = setup();
+    const g = await auth.createGuest();
+    const real = repos.users.findById.bind(repos.users);
+    let failures = 1;
+    repos.users.findById = async (id: string) => {
+      if (failures-- > 0) throw new Error('banco fora');
+      return real(id);
+    };
+    await expect(auth.refresh(g.pair.refreshToken)).rejects.toThrow('banco fora');
+    // o mesmo token continua válido e a família NÃO foi revogada
+    const pair = await auth.refresh(g.pair.refreshToken);
+    await expect(auth.authenticateAccess(pair.accessToken)).resolves.toBeDefined();
+  });
+
+  it('teto absoluto da família: a rotação não renova além de createdAt + REFRESH_FAMILY_MAX', async () => {
+    const { auth } = setup({ refreshTtlSec: 3600, refreshFamilyMaxSec: 7200 });
+    const g = await auth.createGuest();
+    now += 3_000_000;
+    const a = await auth.refresh(g.pair.refreshToken); // t=3000 s
+    now += 3_000_000;
+    const b = await auth.refresh(a.refreshToken); // t=6000 s: expira em 7200, não em 9600
+    now += 1_201_000; // t=7201 s: dentro do TTL de 3600 s, mas além do teto
+    await expect(auth.refresh(b.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
   });
 
   it('o store só vê o hash (SHA-256), nunca o token em claro', async () => {
@@ -326,6 +438,22 @@ describe('logger: redação', () => {
     });
   });
 
+  it('redige refresh token (43 caracteres base64url) em campo inocente e dentro da msg', async () => {
+    const refresh = 'aB3dE5gH7jK9mN1pQ3sT5vX7zC9fL2oR4uW6yA8dEfG'.slice(0, 43);
+    expect(refresh).toHaveLength(43);
+    expect(redact({ note: refresh, uuid: '3fa85f64-5717-4562-b3fc-2c963f66afa6' })).toEqual({
+      note: REDACTED,
+      uuid: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+    });
+    const { log } = await import('../logger');
+    const lines: string[] = [];
+    const restore = setLogSink((_l, msg) => lines.push(msg));
+    log.warn(`falhou com ${refresh} e Bearer abc.def`);
+    restore();
+    expect(lines[0]).not.toContain(refresh);
+    expect(lines[0]).toContain(REDACTED);
+  });
+
   it('log.* aplica a redação antes do destino', async () => {
     const { log } = await import('../logger');
     const lines: string[] = [];
@@ -355,4 +483,4 @@ describe('assertSafeTestRedisUrl', () => {
   });
 });
 
-tokenStoreContract('memória', () => new MemoryTokenStore());
+tokenStoreContract('memória', (clock) => new MemoryTokenStore(clock));

@@ -6,7 +6,13 @@
  */
 import { Redis } from 'ioredis';
 import { log } from '../logger';
-import type { CreateFamilyInput, RotateInput, RotateResult, TokenStore } from './tokenStore';
+import {
+  TokenStoreUnavailableError,
+  type CreateFamilyInput,
+  type RotateInput,
+  type RotateResult,
+  type TokenStore,
+} from './tokenStore';
 
 export const REDIS_PREFIX = 'trucaco:v1:';
 
@@ -15,26 +21,38 @@ local old = KEYS[1]
 local new = KEYS[2]
 local prefix = ARGV[1]
 local now = ARGV[2]
+local nowN = tonumber(now)
 local ttl = tonumber(ARGV[3])
 local newJti = ARGV[4]
+local graceMs = tonumber(ARGV[5])
+local maxSec = tonumber(ARGV[6])
 local fid = redis.call('HGET', old, 'familyId')
 if not fid then return {'unknown'} end
 local userId = redis.call('HGET', old, 'userId')
 local fam = prefix .. 'rtfam:' .. fid
 if redis.call('EXISTS', fam) == 0 then return {'unknown'} end
 if redis.call('HEXISTS', fam, 'revokedAt') == 1 then return {'revoked', userId, fid} end
+local created = tonumber(redis.call('HGET', fam, 'createdAt')) or nowN
+local remaining = maxSec - math.floor((nowN - created) / 1000)
+if remaining <= 0 then return {'unknown'} end
+if remaining < ttl then ttl = remaining end
+local graced = ''
 if redis.call('HSETNX', old, 'usedAt', now) == 0 then
-  redis.call('HSET', fam, 'revokedAt', now)
-  local last = redis.call('HGET', fam, 'lastJti')
-  if not last then last = '' end
-  return {'reuse', userId, fid, last}
+  local usedAt = tonumber(redis.call('HGET', old, 'usedAt')) or 0
+  if graceMs > 0 and (nowN - usedAt) <= graceMs and redis.call('HSETNX', old, 'graceUsed', '1') == 1 then
+    graced = '1'
+  else
+    redis.call('HSET', fam, 'revokedAt', now)
+    local last = redis.call('HGET', fam, 'lastJti')
+    if not last then last = '' end
+    return {'reuse', userId, fid, last}
+  end
 end
 redis.call('HSET', new, 'userId', userId, 'familyId', fid, 'issuedAt', now)
 redis.call('EXPIRE', new, ttl)
 redis.call('HSET', fam, 'lastJti', newJti)
 redis.call('EXPIRE', fam, ttl)
-redis.call('EXPIRE', prefix .. 'userfam:' .. userId, ttl)
-return {'rotated', userId, fid}
+return {'rotated', userId, fid, graced, tostring(ttl)}
 `;
 
 const REVOKE_LUA = `
@@ -51,6 +69,8 @@ type RotateCommand = (
   now: string,
   ttl: number,
   newJti: string,
+  graceMs: number,
+  maxSec: number,
 ) => Promise<string[]>;
 
 interface RedisWithScripts {
@@ -86,67 +106,124 @@ export class RedisTokenStore implements TokenStore {
     await this.redis.ping();
   }
 
-  async createFamily(input: CreateFamilyInput): Promise<void> {
-    const nowMs = String(this.now());
-    const fam = `${REDIS_PREFIX}rtfam:${input.familyId}`;
-    const rt = `${REDIS_PREFIX}rt:${input.refreshHash}`;
-    const userfam = `${REDIS_PREFIX}userfam:${input.userId}`;
-    const result = await this.redis
-      .multi()
-      .hset(rt, { userId: input.userId, familyId: input.familyId, issuedAt: nowMs })
-      .expire(rt, input.ttlSec)
-      .hset(fam, { userId: input.userId, createdAt: nowMs, lastJti: input.jti })
-      .expire(fam, input.ttlSec)
-      .sadd(userfam, input.familyId)
-      .expire(userfam, input.ttlSec)
-      .exec();
-    if (result === null || result.some(([err]) => err !== null)) {
-      throw new Error('redis: createFamily falhou');
+  /** Qualquer falha do ioredis (conexão, timeout, resposta de erro) vira `TokenStoreUnavailableError`. */
+  private async run<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      log.error('redis: comando falhou', { name: err instanceof Error ? err.name : 'unknown' });
+      throw new TokenStoreUnavailableError();
     }
+  }
+
+  async createFamily(input: CreateFamilyInput): Promise<void> {
+    await this.run(async () => {
+      const nowMs = String(this.now());
+      const fam = `${REDIS_PREFIX}rtfam:${input.familyId}`;
+      const rt = `${REDIS_PREFIX}rt:${input.refreshHash}`;
+      const userfam = `${REDIS_PREFIX}userfam:${input.userId}`;
+      const result = await this.redis
+        .multi()
+        .hset(rt, { userId: input.userId, familyId: input.familyId, issuedAt: nowMs })
+        .expire(rt, input.ttlSec)
+        .hset(fam, { userId: input.userId, createdAt: nowMs, lastJti: input.jti })
+        .expire(fam, input.ttlSec)
+        .sadd(userfam, input.familyId)
+        .expire(userfam, input.ttlSec)
+        .exec();
+      if (result === null || result.some(([err]) => err !== null)) {
+        throw new Error('redis: createFamily falhou');
+      }
+      await this.pruneUserFamilies(input.userId);
+    });
+  }
+
+  /** Remove de `userfam:<id>` as famílias cujo `rtfam` expirou (o conjunto não cresce sem limite). */
+  private async pruneUserFamilies(userId: string): Promise<void> {
+    const key = `${REDIS_PREFIX}userfam:${userId}`;
+    const ids = await this.redis.smembers(key);
+    if (ids.length === 0) return;
+    const checks = this.redis.pipeline();
+    for (const id of ids) checks.exists(`${REDIS_PREFIX}rtfam:${id}`);
+    const res = (await checks.exec()) ?? [];
+    const dead = ids.filter((_, i) => res[i]?.[1] === 0);
+    if (dead.length > 0) await this.redis.srem(key, ...dead);
+  }
+
+  async lookup(refreshHash: string): Promise<{ userId: string; familyId: string } | null> {
+    return this.run(async () => {
+      const [userId, familyId] = await this.redis.hmget(
+        `${REDIS_PREFIX}rt:${refreshHash}`,
+        'userId',
+        'familyId',
+      );
+      return userId !== null && userId !== undefined && familyId !== null && familyId !== undefined
+        ? { userId, familyId }
+        : null;
+    });
   }
 
   async rotate(input: RotateInput): Promise<RotateResult> {
-    const reply = await this.scripts.trucacoRotate(
-      `${REDIS_PREFIX}rt:${input.refreshHash}`,
-      `${REDIS_PREFIX}rt:${input.newRefreshHash}`,
-      REDIS_PREFIX,
-      String(this.now()),
-      input.ttlSec,
-      input.newJti,
-    );
-    const [status, userId, familyId, lastJti] = reply;
-    if (status === 'rotated' && userId !== undefined && familyId !== undefined) {
-      return { status, userId, familyId };
-    }
-    if (status === 'revoked' && userId !== undefined && familyId !== undefined) {
-      return { status, userId, familyId };
-    }
-    if (status === 'reuse' && userId !== undefined && familyId !== undefined) {
-      return {
-        status,
-        userId,
-        familyId,
-        lastJti: lastJti === undefined || lastJti === '' ? null : lastJti,
-      };
-    }
-    return { status: 'unknown' };
+    return this.run(async () => {
+      const reply = await this.scripts.trucacoRotate(
+        `${REDIS_PREFIX}rt:${input.refreshHash}`,
+        `${REDIS_PREFIX}rt:${input.newRefreshHash}`,
+        REDIS_PREFIX,
+        String(this.now()),
+        input.ttlSec,
+        input.newJti,
+        input.graceSec * 1000,
+        input.familyMaxSec,
+      );
+      const [status, userId, familyId, extra, ttl] = reply;
+      if (status === 'rotated' && userId !== undefined && familyId !== undefined) {
+        // Fora do Lua (Cluster-safe, sem chave não declarada): `GT` nunca encurta o TTL do conjunto.
+        await this.redis.expire(`${REDIS_PREFIX}userfam:${userId}`, Number(ttl), 'GT');
+        return extra === '1'
+          ? { status, userId, familyId, graced: true }
+          : { status, userId, familyId };
+      }
+      if (status === 'revoked' && userId !== undefined && familyId !== undefined) {
+        return { status, userId, familyId };
+      }
+      if (status === 'reuse' && userId !== undefined && familyId !== undefined) {
+        return {
+          status,
+          userId,
+          familyId,
+          lastJti: extra === undefined || extra === '' ? null : extra,
+        };
+      }
+      return { status: 'unknown' };
+    });
   }
 
   async revokeFamily(familyId: string): Promise<void> {
-    await this.scripts.trucacoRevoke(`${REDIS_PREFIX}rtfam:${familyId}`, String(this.now()));
+    await this.run(async () => {
+      await this.scripts.trucacoRevoke(`${REDIS_PREFIX}rtfam:${familyId}`, String(this.now()));
+    });
   }
 
   async revokeAllForUser(userId: string): Promise<void> {
-    const ids = await this.redis.smembers(`${REDIS_PREFIX}userfam:${userId}`);
-    for (const id of ids) await this.revokeFamily(id);
+    await this.run(async () => {
+      const ids = await this.redis.smembers(`${REDIS_PREFIX}userfam:${userId}`);
+      for (const id of ids) {
+        await this.scripts.trucacoRevoke(`${REDIS_PREFIX}rtfam:${id}`, String(this.now()));
+      }
+      await this.pruneUserFamilies(userId);
+    });
   }
 
   async revokeJti(jti: string, ttlSec: number): Promise<void> {
-    await this.redis.set(`${REDIS_PREFIX}jti:revoked:${jti}`, '1', 'EX', Math.max(1, ttlSec));
+    await this.run(() =>
+      this.redis.set(`${REDIS_PREFIX}jti:revoked:${jti}`, '1', 'EX', Math.max(1, ttlSec)),
+    );
   }
 
   async isJtiRevoked(jti: string): Promise<boolean> {
-    return (await this.redis.exists(`${REDIS_PREFIX}jti:revoked:${jti}`)) === 1;
+    return this.run(
+      async () => (await this.redis.exists(`${REDIS_PREFIX}jti:revoked:${jti}`)) === 1,
+    );
   }
 
   async close(): Promise<void> {

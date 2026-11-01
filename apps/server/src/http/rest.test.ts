@@ -7,7 +7,7 @@ import { SignJWT } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthService } from '../auth/authService';
 import { DEFAULT_LIMITS, type AuthConfig, type RestLimits } from '../auth/config';
-import { MemoryTokenStore } from '../auth/tokenStore';
+import { MemoryTokenStore, TokenStoreUnavailableError, type TokenStore } from '../auth/tokenStore';
 import { createMemoryRepositories } from '../db';
 import type { UserRepository } from '../db/types';
 import { setLogSink } from '../logger';
@@ -20,6 +20,8 @@ const CFG: AuthConfig = {
   audience: 'trucaco-api',
   accessTtlSec: 900,
   refreshTtlSec: 3600,
+  refreshReuseGraceSec: 20,
+  refreshFamilyMaxSec: 7_776_000,
   clockToleranceSec: 5,
 };
 
@@ -28,6 +30,8 @@ interface Opts {
   corsOrigins?: string[];
   trustProxy?: boolean;
   users?: UserRepository;
+  cfg?: Partial<AuthConfig>;
+  tokens?: TokenStore;
 }
 
 const running: HttpServer[] = [];
@@ -38,7 +42,10 @@ afterEach(async () => {
 async function start(opts: Opts = {}) {
   const repos = createMemoryRepositories();
   const users = opts.users ?? repos.users;
-  const auth = new AuthService(users, new MemoryTokenStore(), CFG);
+  const auth = new AuthService(users, opts.tokens ?? new MemoryTokenStore(), {
+    ...CFG,
+    ...opts.cfg,
+  });
   const app = express();
   installBaseMiddleware(app, { corsOrigins: opts.corsOrigins ?? [], hsts: false });
   mountRest(app, {
@@ -47,7 +54,6 @@ async function start(opts: Opts = {}) {
     limits: { ...DEFAULT_LIMITS, perIpPerMin: 10_000, perUserPerMin: 10_000, ...opts.limits },
     corsOrigins: opts.corsOrigins ?? [],
     trustProxy: opts.trustProxy === true,
-    hsts: false,
   });
   mountFallbacks(app);
   const server = await new Promise<HttpServer>((resolve) => {
@@ -135,7 +141,7 @@ describe('POST /auth/guest', () => {
 
 describe('POST /auth/refresh', () => {
   it('rotaciona; o token antigo reapresentado derruba a família (reuso)', async () => {
-    const { call, guest } = await start();
+    const { call, guest } = await start({ cfg: { refreshReuseGraceSec: 0 } });
     const g = await guest();
     const r1 = await call('POST', '/auth/refresh', { body: { refreshToken: g.refreshToken } });
     expect(r1.status).toBe(200);
@@ -152,8 +158,42 @@ describe('POST /auth/refresh', () => {
     expect((await call('GET', '/me', { token: p1.accessToken })).status).toBe(401);
   });
 
-  it('dois refresh simultâneos com o mesmo token: só um vence', async () => {
+  it('graça: reapresentar o token recém-rotacionado devolve par novo (200), uma única vez', async () => {
     const { call, guest } = await start();
+    const g = await guest();
+    const r1 = await call('POST', '/auth/refresh', { body: { refreshToken: g.refreshToken } });
+    const r2 = await call('POST', '/auth/refresh', { body: { refreshToken: g.refreshToken } });
+    expect([r1.status, r2.status]).toEqual([200, 200]);
+    const p2 = (await r2.json()) as { refreshToken: string };
+    expect(p2.refreshToken).not.toBe(g.refreshToken);
+    const r3 = await call('POST', '/auth/refresh', { body: { refreshToken: g.refreshToken } });
+    expect(r3.status).toBe(401);
+    expect(await code(r3)).toBe('INVALID_REFRESH_TOKEN');
+  });
+
+  it('Redis fora do ar: 503 SERVICE_UNAVAILABLE (não 401 nem 500), sem vazar a causa', async () => {
+    const { guest } = await start();
+    const g = await guest();
+    const down = new Proxy(new MemoryTokenStore(), {
+      get: (_t, prop) =>
+        prop === 'close'
+          ? async () => undefined
+          : async () => {
+              throw new TokenStoreUnavailableError();
+            },
+    }) as unknown as TokenStore;
+    const s = await start({ tokens: down });
+    const refresh = await s.call('POST', '/auth/refresh', {
+      body: { refreshToken: g.refreshToken },
+    });
+    expect(refresh.status).toBe(503);
+    expect(await code(refresh)).toBe('SERVICE_UNAVAILABLE');
+    const me = await s.call('GET', '/me', { token: g.accessToken });
+    expect(me.status).toBe(503);
+  });
+
+  it('dois refresh simultâneos com o mesmo token: só um vence', async () => {
+    const { call, guest } = await start({ cfg: { refreshReuseGraceSec: 0 } });
     const g = await guest();
     const rs = await Promise.all(
       Array.from({ length: 6 }, () =>

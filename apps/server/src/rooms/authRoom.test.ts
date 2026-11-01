@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AuthService } from '../auth/authService';
 import type { AuthConfig } from '../auth/config';
 import { AccessTokenService } from '../auth/jwt';
-import { MemoryTokenStore } from '../auth/tokenStore';
+import { MemoryTokenStore, TokenStoreUnavailableError } from '../auth/tokenStore';
 import { createMemoryRepositories } from '../db';
 import { setLogSink } from '../logger';
 import { buildColyseusServer } from '../server';
@@ -26,6 +26,8 @@ const CFG: AuthConfig = {
   audience: 'trucaco-api',
   accessTtlSec: 900,
   refreshTtlSec: 3600,
+  refreshReuseGraceSec: 20,
+  refreshFamilyMaxSec: 7_776_000,
   clockToleranceSec: 5,
 };
 const ROOM: TrucoRoomConfig = {
@@ -154,9 +156,13 @@ describe('entrada na sala com JWT', () => {
       .token;
     const gone = await auth.createGuest();
     repos.store.users.delete(gone.user.id);
-    const revoked = await auth.createGuest();
-    const rotated = await auth.refresh(revoked.pair.refreshToken);
-    await expect(auth.refresh(revoked.pair.refreshToken)).rejects.toBeDefined(); // reuso: revoga lastJti
+    // Sem janela de graça: a reapresentação imediata é reuso e revoga o `jti` vigente.
+    const strict = new AuthService(repos.users, tokens, { ...CFG, refreshReuseGraceSec: 0 });
+    const revoked = await strict.createGuest();
+    const rotated = await strict.refresh(revoked.pair.refreshToken);
+    await expect(strict.refresh(revoked.pair.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
     const attempts: (string | undefined)[] = [
       undefined,
       'lixo',
@@ -170,12 +176,12 @@ describe('entrada na sala com JWT', () => {
         withBearer(token, () =>
           t.sdk.create('truco', { ...OPTS, userId: s.user.id, nickname: 'X' }),
         ),
-      ).rejects.toBeDefined();
+      ).rejects.toMatchObject({ code: 401 });
       await expect(
         withBearer(token, () =>
           t.sdk.joinOrCreate('truco', { ...OPTS, userId: s.user.id, nickname: 'X' }),
         ),
-      ).rejects.toBeDefined();
+      ).rejects.toMatchObject({ code: 401 });
     }
     expect(await roomCount()).toBe(before);
   });
@@ -212,8 +218,10 @@ describe('entrada na sala com JWT', () => {
   it('static onAuth ignora o `token` do core (pode vir da query do WS): vale só o cabeçalho', async () => {
     const s = await auth.createGuest();
     const ctx = (h: Record<string, string>) => ({ headers: new Headers(h) }) as never;
-    await expect(TrucoRoom.onAuth(s.pair.accessToken, {}, ctx({}))).rejects.toBeDefined();
-    await expect(TrucoRoom.onAuth(undefined, {}, undefined)).rejects.toBeDefined();
+    await expect(TrucoRoom.onAuth(s.pair.accessToken, {}, ctx({}))).rejects.toMatchObject({
+      code: 401,
+    });
+    await expect(TrucoRoom.onAuth(undefined, {}, undefined)).rejects.toMatchObject({ code: 401 });
     const ok = await TrucoRoom.onAuth(
       undefined,
       {},
@@ -253,11 +261,13 @@ describe('reconexão com JWT', () => {
     await dropSeat(server, rooms, 0);
     await expect(
       reconnect(rooms, 0, (sessions[1] as Session).pair.accessToken),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ code: 403 });
     const stranger = await auth.createGuest();
-    await expect(reconnect(rooms, 0, stranger.pair.accessToken)).rejects.toBeDefined();
-    await expect(reconnect(rooms, 0, undefined)).rejects.toBeDefined();
-    await expect(reconnect(rooms, 0, 'lixo')).rejects.toBeDefined();
+    await expect(reconnect(rooms, 0, stranger.pair.accessToken)).rejects.toMatchObject({
+      code: 403,
+    });
+    await expect(reconnect(rooms, 0, undefined)).rejects.toMatchObject({ code: 401 });
+    await expect(reconnect(rooms, 0, 'lixo')).rejects.toMatchObject({ code: 401 });
     expect(statusOf(server, 0)).toBe('away');
     // o dono ainda consegue
     await reconnect(rooms, 0, (sessions[0] as Session).pair.accessToken);
@@ -272,7 +282,7 @@ describe('reconexão com JWT', () => {
     const expired = (
       await new AccessTokenService(CFG, () => Date.now() - 2 * 900_000).sign(s.user.id)
     ).token;
-    await expect(reconnect(rooms, 2, expired)).rejects.toBeDefined();
+    await expect(reconnect(rooms, 2, expired)).rejects.toMatchObject({ code: 401 });
     const fresh = await auth.refresh(s.pair.refreshToken);
     await reconnect(rooms, 2, fresh.accessToken);
     await until(() => statusOf(server, 2) === 'connected', 'reconectou com token novo');
@@ -356,13 +366,118 @@ describe('reconexão com JWT', () => {
     // token de reconexão de um cliente CONECTADO: nem o dono nem estranho o usam para derrubá-lo
     await expect(
       reconnect(rooms, 1, (sessions[1] as Session).pair.accessToken),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ code: 403 });
     await expect(
       reconnect(rooms, 1, (sessions[0] as Session).pair.accessToken),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ code: 403 });
     await sleep(100);
     expect(server.clients.length).toBe(4);
     expect(statusOf(server, 1)).toBe('connected');
+  });
+
+  it('wrapper de /matchmake/reconnect (HTTP cru): sem Authorization 401, JWT de outro 403, dono 200', async () => {
+    const { server, sessions, rooms } = await table();
+    await until(() => server.series !== null, 'série');
+    await dropSeat(server, rooms, 0); // assento em janela de reconexão
+    const port = ((t.server.transport.server as { address(): unknown }).address() as AddressInfo)
+      .port;
+    const [roomId, rtoken] = (rooms[0] as SdkRoom).reconnectionToken.split(':') as [string, string];
+    const post = (headers: Record<string, string>): Promise<Response> =>
+      fetch(`http://127.0.0.1:${port}/matchmake/reconnect/${roomId}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ reconnectionToken: rtoken }),
+      });
+    expect((await post({})).status).toBe(401);
+    expect((await post({ authorization: 'Bearer lixo' })).status).toBe(401);
+    const other = (sessions[1] as Session).pair.accessToken;
+    expect((await post({ authorization: `Bearer ${other}` })).status).toBe(403);
+    const stranger = await auth.createGuest();
+    expect((await post({ authorization: `Bearer ${stranger.pair.accessToken}` })).status).toBe(403);
+    expect(statusOf(server, 0)).toBe('away');
+    const owner = (sessions[0] as Session).pair.accessToken;
+    expect((await post({ authorization: `Bearer ${owner}` })).status).toBe(200);
+  });
+
+  it('token store fora do ar na reconexão: 503 (HTTP cru) e 503 no upgrade, nunca 401', async () => {
+    const { server, sessions, rooms } = await table();
+    await until(() => server.series !== null, 'série');
+    await dropSeat(server, rooms, 0);
+    const port = ((t.server.transport.server as { address(): unknown }).address() as AddressInfo)
+      .port;
+    const [roomId, rtoken] = (rooms[0] as SdkRoom).reconnectionToken.split(':') as [string, string];
+    const original = tokens.isJtiRevoked.bind(tokens);
+    tokens.isJtiRevoked = async () => {
+      throw new TokenStoreUnavailableError();
+    };
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/matchmake/reconnect/${roomId}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${(sessions[0] as Session).pair.accessToken}`,
+        },
+        body: JSON.stringify({ reconnectionToken: rtoken }),
+      });
+      expect(res.status).toBe(503);
+    } finally {
+      tokens.isJtiRevoked = original;
+    }
+  });
+});
+
+describe('dependência fora do ar no onAuth da sala', () => {
+  const create = async (): Promise<Response> => {
+    const s = await auth.createGuest();
+    const port = ((t.server.transport.server as { address(): unknown }).address() as AddressInfo)
+      .port;
+    return fetch(`http://127.0.0.1:${port}/matchmake/create/truco`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${s.pair.accessToken}`,
+      },
+      body: JSON.stringify(OPTS),
+    });
+  };
+
+  it('Redis fora do ar: 503 (não 401), sem criar sala e sem vazar a mensagem do erro', async () => {
+    const before = await roomCount();
+    const original = tokens.isJtiRevoked.bind(tokens);
+    tokens.isJtiRevoked = async () => {
+      throw new Error('ECONNREFUSED redis://:senha@10.0.0.9:6379');
+    };
+    try {
+      const res = await create();
+      expect(res.status).toBe(503);
+      expect(await res.text()).not.toContain('senha');
+    } finally {
+      tokens.isJtiRevoked = original;
+    }
+    expect(await roomCount()).toBe(before);
+    expect(logLines.join('\n')).not.toContain('senha');
+  });
+
+  it('Prisma (findById/getAvatar) falhando: 503 genérico, sem a mensagem do erro, sem sala', async () => {
+    const before = await roomCount();
+    const users = repos.users;
+    const findById = users.findById.bind(users);
+    const getAvatar = users.getAvatar.bind(users);
+    for (const method of ['findById', 'getAvatar'] as const) {
+      users[method] = (async () => {
+        throw new Error('connection to db at 10.1.2.3 password=segredo');
+      }) as never;
+      try {
+        const res = await create();
+        expect(res.status).toBe(503);
+        expect(await res.text()).not.toContain('segredo');
+      } finally {
+        users.findById = findById;
+        users.getAvatar = getAvatar;
+      }
+    }
+    expect(await roomCount()).toBe(before);
+    expect(logLines.join('\n')).not.toContain('segredo');
   });
 });
 

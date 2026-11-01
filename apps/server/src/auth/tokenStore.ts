@@ -5,8 +5,25 @@
  * Semântica idêntica nas duas (testada pela mesma bateria).
  */
 
+/**
+ * O armazenamento está fora do ar (Redis sem conexão, timeout de comando, resposta de erro). Mapeada
+ * para 503 (REST e `onAuth` da sala), nunca 401/500. Sem mensagem do erro original (pode ter host).
+ */
+export class TokenStoreUnavailableError extends Error {
+  constructor() {
+    super('token store indisponível');
+    this.name = 'TokenStoreUnavailableError';
+  }
+}
+
 export type RotateResult =
-  | { readonly status: 'rotated'; readonly userId: string; readonly familyId: string }
+  | {
+      readonly status: 'rotated';
+      readonly userId: string;
+      readonly familyId: string;
+      /** `true` = reapresentação dentro da janela de graça (um sucessor irmão foi emitido). */
+      readonly graced?: boolean;
+    }
   /** Hash desconhecido, expirado ou de família expirada: sem efeito colateral. */
   | { readonly status: 'unknown' }
   /** Família já revogada (logout, banimento ou reuso anterior). */
@@ -35,9 +52,18 @@ export interface RotateInput {
   /** `jti` do novo access (vira `lastJti` da família). */
   readonly newJti: string;
   readonly ttlSec: number;
+  /**
+   * Janela de graça (s): reapresentar o token JÁ rotacionado dentro dela não é reuso; emite UM sucessor
+   * irmão (o primeiro continua válido) e é a única vez. 0 = sem graça (qualquer reapresentação revoga).
+   */
+  readonly graceSec: number;
+  /** Teto absoluto de vida da família desde a criação (s): a rotação não renova além dele. */
+  readonly familyMaxSec: number;
 }
 
 export interface TokenStore {
+  /** Dono e família de um refresh (sem efeito colateral). `null` = desconhecido/expirado. */
+  lookup(refreshHash: string): Promise<{ userId: string; familyId: string } | null>;
   createFamily(input: CreateFamilyInput): Promise<void>;
   /** ATÔMICO: dois `rotate` com o mesmo hash nunca produzem dois `rotated`. */
   rotate(input: RotateInput): Promise<RotateResult>;
@@ -52,6 +78,7 @@ export interface TokenStore {
 
 interface FamilyEntry {
   userId: string;
+  createdAt: number;
   lastJti: string;
   revokedAt: number | null;
   expiresAt: number;
@@ -61,6 +88,7 @@ interface TokenEntry {
   userId: string;
   familyId: string;
   usedAt: number | null;
+  graceUsed: boolean;
   expiresAt: number;
 }
 
@@ -75,6 +103,7 @@ export class MemoryTokenStore implements TokenStore {
     const expiresAt = this.now() + input.ttlSec * 1000;
     this.families.set(input.familyId, {
       userId: input.userId,
+      createdAt: this.now(),
       lastJti: input.jti,
       revokedAt: null,
       expiresAt,
@@ -83,8 +112,15 @@ export class MemoryTokenStore implements TokenStore {
       userId: input.userId,
       familyId: input.familyId,
       usedAt: null,
+      graceUsed: false,
       expiresAt,
     });
+  }
+
+  async lookup(refreshHash: string): Promise<{ userId: string; familyId: string } | null> {
+    const token = this.tokens.get(refreshHash);
+    if (token === undefined || token.expiresAt <= this.now()) return null;
+    return { userId: token.userId, familyId: token.familyId };
   }
 
   async rotate(input: RotateInput): Promise<RotateResult> {
@@ -95,16 +131,33 @@ export class MemoryTokenStore implements TokenStore {
     if (family === undefined || family.expiresAt <= now) return { status: 'unknown' };
     const { userId, familyId } = token;
     if (family.revokedAt !== null) return { status: 'revoked', userId, familyId };
+    const remainingMs = family.createdAt + input.familyMaxSec * 1000 - now;
+    if (remainingMs <= 0) return { status: 'unknown' };
+    let graced = false;
     if (token.usedAt !== null) {
-      family.revokedAt = now;
-      return { status: 'reuse', userId, familyId, lastJti: family.lastJti };
+      if (input.graceSec > 0 && !token.graceUsed && now - token.usedAt <= input.graceSec * 1000) {
+        token.graceUsed = true;
+        graced = true;
+      } else {
+        family.revokedAt = now;
+        return { status: 'reuse', userId, familyId, lastJti: family.lastJti };
+      }
+    } else {
+      token.usedAt = now;
     }
-    token.usedAt = now;
-    const expiresAt = now + input.ttlSec * 1000;
-    this.tokens.set(input.newRefreshHash, { userId, familyId, usedAt: null, expiresAt });
+    const expiresAt = now + Math.min(input.ttlSec * 1000, remainingMs);
+    this.tokens.set(input.newRefreshHash, {
+      userId,
+      familyId,
+      usedAt: null,
+      graceUsed: false,
+      expiresAt,
+    });
     family.lastJti = input.newJti;
-    family.expiresAt = expiresAt;
-    return { status: 'rotated', userId, familyId };
+    family.expiresAt = Math.max(family.expiresAt, expiresAt);
+    return graced
+      ? { status: 'rotated', userId, familyId, graced: true }
+      : { status: 'rotated', userId, familyId };
   }
 
   async revokeFamily(familyId: string): Promise<void> {

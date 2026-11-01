@@ -79,7 +79,7 @@ export class AuthService {
       userId: user.id,
       refreshHash: hashRefresh(refreshToken),
       jti: access.jti,
-      ttlSec: this.cfg.refreshTtlSec,
+      ttlSec: Math.min(this.cfg.refreshTtlSec, this.cfg.refreshFamilyMaxSec),
     });
     return {
       user,
@@ -88,20 +88,40 @@ export class AuthService {
   }
 
   /**
-   * Rotaciona: o refresh apresentado morre e um novo par nasce. Reapresentar um já rotacionado revoga
-   * a família inteira (e o access vigente). Toda falha é `INVALID_REFRESH_TOKEN`, sem distinguir causa.
+   * Rotaciona: o refresh apresentado morre e um novo par nasce. Toda falha é `INVALID_REFRESH_TOKEN`,
+   * sem distinguir causa.
+   *
+   * Janela de graça (`refreshReuseGraceSec`): resposta perdida ou duas abas fazem o cliente reapresentar o
+   * token que ACABOU de rotacionar. Só o hash é guardado, então não dá para reemitir o MESMO sucessor
+   * (guardá-lo, mesmo cifrado, deixaria um token utilizável no Redis). Dentro da janela, UMA vez por
+   * token, nasce um sucessor irmão e o primeiro segue válido (a cadeia bifurca; o ramo que o cliente
+   * perdeu é inofensivo). Custo de segurança: um ladrão do token antigo que o apresente nos primeiros
+   * segundos ganha um ramo, limitado a uma vez e à janela; fora dela, ou na segunda reapresentação, é
+   * reuso e a família inteira é revogada (com o access vigente).
+   *
+   * O usuário é validado ANTES de rotacionar: se o banco falhar, o token não é gasto.
    */
   async refresh(presented: string): Promise<TokenPair> {
     if (typeof presented !== 'string' || !REFRESH_FORMAT.test(presented)) {
       throw new AuthError('INVALID_REFRESH_TOKEN');
     }
+    const presentedHash = hashRefresh(presented);
+    const owner = await this.tokens.lookup(presentedHash);
+    if (owner === null) throw new AuthError('INVALID_REFRESH_TOKEN');
+    const user = await this.users.findById(owner.userId);
+    if (user === null) {
+      await this.tokens.revokeFamily(owner.familyId);
+      throw new AuthError('INVALID_REFRESH_TOKEN');
+    }
     const refreshToken = newRefresh();
     const newJti = randomUUID();
     const result = await this.tokens.rotate({
-      refreshHash: hashRefresh(presented),
+      refreshHash: presentedHash,
       newRefreshHash: hashRefresh(refreshToken),
       newJti,
       ttlSec: this.cfg.refreshTtlSec,
+      graceSec: this.cfg.refreshReuseGraceSec,
+      familyMaxSec: this.cfg.refreshFamilyMaxSec,
     });
     if (result.status === 'reuse') {
       if (result.lastJti !== null)
@@ -117,10 +137,8 @@ export class AuthService {
       throw new AuthError('INVALID_REFRESH_TOKEN');
     }
     if (result.status !== 'rotated') throw new AuthError('INVALID_REFRESH_TOKEN');
-    const user = await this.users.findById(result.userId);
-    if (user === null) {
-      await this.tokens.revokeFamily(result.familyId);
-      throw new AuthError('INVALID_REFRESH_TOKEN');
+    if (result.graced === true) {
+      log.info('auth: refresh reapresentado na janela de graça', { user: result.userId });
     }
     const access = await this.jwt.sign(user.id, newJti);
     return { accessToken: access.token, refreshToken, expiresIn: this.cfg.accessTtlSec };

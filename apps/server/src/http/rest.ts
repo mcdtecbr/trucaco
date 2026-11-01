@@ -22,6 +22,7 @@ import {
   type UserRepository,
 } from '../db/types';
 import { normalizeId, validateNickname } from '../db/validation';
+import { TokenStoreUnavailableError } from '../auth/tokenStore';
 
 export const BODY_LIMIT = '8kb';
 
@@ -31,6 +32,10 @@ export interface RestOptions {
   readonly limits: RestLimits;
   readonly corsOrigins: readonly string[];
   readonly trustProxy: boolean;
+}
+
+export interface BaseMiddlewareOptions {
+  readonly corsOrigins: readonly string[];
   /** Liga `Strict-Transport-Security` (produção atrás de TLS). */
   readonly hsts: boolean;
 }
@@ -48,10 +53,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Cabeçalhos de segurança e CORS por lista exata de origens. Primeiro middleware da API. */
-export function installBaseMiddleware(
-  app: Application,
-  opts: Pick<RestOptions, 'corsOrigins' | 'hsts'>,
-): void {
+export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOptions): void {
   app.disable('x-powered-by');
   const allowed = new Set(opts.corsOrigins);
   app.use((req, res, next) => {
@@ -383,7 +385,10 @@ export function mountFallbacks(app: Application): void {
       name: typeof e.name === 'string' ? e.name : 'unknown',
       code: err instanceof PersistenceError ? err.code : typeof e.code === 'string' ? e.code : null,
     });
-    const unavailable = e.name === 'MaxRetriesPerRequestError' || e.name === 'ReplyError';
+    const unavailable =
+      err instanceof TokenStoreUnavailableError ||
+      e.name === 'MaxRetriesPerRequestError' ||
+      e.name === 'ReplyError';
     if (unavailable) fail(res, 503, 'SERVICE_UNAVAILABLE');
     else fail(res, 500, 'INTERNAL');
   });

@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Server, ServerError, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
@@ -135,7 +135,6 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
           limits: { ...DEFAULT_LIMITS, ...deps.limits },
           corsOrigins: deps.corsOrigins ?? [],
           trustProxy: deps.trustProxy === true,
-          hsts: false,
         });
       }
       mountFallbacks(app);
@@ -145,33 +144,67 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
     greet: false,
   });
   defineTrucoRoom(colyseus, room);
+  // O roteador do core só é registrado em `listen`; o nosso listener entra à frente dele depois disso.
+  const listen = colyseus.listen.bind(colyseus);
+  colyseus.listen = (port, hostname, backlog, listeningListener) =>
+    listen(port, hostname, backlog, (err?: Error) => {
+      attachPreflightGuard(colyseus, deps.corsOrigins ?? []);
+      listeningListener?.(err as never);
+    });
   return colyseus;
 }
 
 /**
- * CORS do `/matchmake/*` (o core usa `*` com credenciais por padrão): só as origens da lista. A API usa
- * `Authorization: Bearer`, sem cookies. Estado do core, global ao processo (um servidor por processo).
+ * CORS. O roteador do `@colyseus/core` é um listener `request` PREPENDIDO que responde a QUALQUER `OPTIONS`
+ * (de qualquer caminho, inclusive `/me`) com 204 e `DEFAULT_CORS_HEADERS + getCorsHeaders()`, e põe esses
+ * mesmos cabeçalhos em toda resposta, antes do express. Logo é essa camada que decide, não o middleware
+ * express. Aqui: lista exata de origens; para origem da lista, os cabeçalhos completos (a API usa
+ * `Authorization: Bearer`, sem cookies, então sem `Allow-Credentials`); para qualquer outra, NENHUM
+ * cabeçalho `Access-Control-*` (só `Vary: Origin`). Nunca `*`, `null` nem origem refletida sem lista.
+ * Estado do core, global ao processo (um servidor por processo).
  */
+export const CORS_ALLOW_METHODS = 'GET, POST, PUT, OPTIONS';
+export const CORS_ALLOW_HEADERS = 'Authorization, Content-Type';
+
 function restrictMatchmakeCors(origins: readonly string[]): void {
   const allowed = new Set(origins);
   const controller = matchMaker.controller as unknown as {
     DEFAULT_CORS_HEADERS: Record<string, string>;
     getCorsHeaders: (headers: Headers) => Record<string, string>;
   };
-  controller.DEFAULT_CORS_HEADERS = {
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Max-Age': '600',
-  };
-  controller.getCorsHeaders = (headers) => {
+  // Nada por padrão: o core aplicaria isto também a origens fora da lista.
+  controller.DEFAULT_CORS_HEADERS = {};
+  controller.getCorsHeaders = (headers): Record<string, string> => {
     const origin = headers.get('origin');
-    const out: Record<string, string> = {};
-    if (origin !== null && allowed.has(origin)) {
-      out['Access-Control-Allow-Origin'] = origin;
-      out['Vary'] = 'Origin';
-    }
-    return out;
+    if (origin === null) return {};
+    if (!allowed.has(origin)) return { Vary: 'Origin' };
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
+      'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
+      'Access-Control-Max-Age': '600',
+      Vary: 'Origin',
+    };
   };
+}
+
+/**
+ * Preflight de origem fora da lista: o core responderia 204 (sem `Access-Control-*`, o navegador já
+ * bloqueia). Pedimos 403 trocando o `writeHead` do core nessa resposta; o `end()` dele segue normal.
+ * Listener prepended depois do `listen` (à frente do roteador do core).
+ */
+function attachPreflightGuard(colyseus: Server, origins: readonly string[]): void {
+  const server = colyseus.transport.server;
+  if (server === undefined) return;
+  const allowed = new Set(origins);
+  server.prependListener('request', (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== 'OPTIONS') return;
+    const origin = req.headers.origin;
+    if (typeof origin !== 'string' || allowed.has(origin)) return;
+    const raw = res as unknown as { writeHead: (status: number, headers?: object) => unknown };
+    const original = raw.writeHead.bind(res) as typeof raw.writeHead;
+    raw.writeHead = (): unknown => original(403, { Vary: 'Origin' });
+  });
 }
 
 /**
@@ -196,7 +229,10 @@ function guardMatchmakeReconnect(): void {
   controller.invokeMethod = async (method, roomName, clientOptions, authOptions) => {
     if (method === 'reconnect') {
       const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
-      if (!identity.ok) throw new ServerError(401, 'UNAUTHORIZED');
+      if (!identity.ok) {
+        if (identity.reason === 'unavailable') throw new ServerError(503, 'SERVICE_UNAVAILABLE');
+        throw new ServerError(401, 'UNAUTHORIZED');
+      }
       let target: unknown;
       try {
         target = matchMaker.getLocalRoomById(roomName);

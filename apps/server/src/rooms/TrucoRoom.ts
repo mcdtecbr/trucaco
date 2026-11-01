@@ -71,7 +71,8 @@ import {
 } from '../game/schema';
 import type { TableState } from '../game/schema';
 import { log } from '../logger';
-import { bearerFromHeader } from '../auth/authService';
+import { AuthError, bearerFromHeader } from '../auth/authService';
+import { InvalidInputError } from '../db/types';
 import { devReconnectUserId, getRoomAuth, USER_ID_MAX } from './roomAuth';
 
 export { devReconnectUserId };
@@ -192,6 +193,14 @@ export function devAuth(options: unknown, nodeEnv: string | undefined): JoinAuth
     throw new ServerError(401, 'UNAUTHORIZED');
   }
   return { userId, nickname: nick };
+}
+
+/** Falha de dependência (Redis/banco) no `onAuth`: 503 genérico, sem a mensagem do erro original. */
+function unavailable(err: unknown): ServerError {
+  log.error('truco: dependência indisponível no onAuth', {
+    name: err instanceof Error ? err.name : 'unknown',
+  });
+  return new ServerError(503, 'SERVICE_UNAVAILABLE');
 }
 
 function generateRoomCode(): string {
@@ -373,17 +382,24 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     let userId: string;
     try {
       userId = (await deps.auth.authenticateAccess(bearer)).userId;
-    } catch {
-      throw new ServerError(401, 'UNAUTHORIZED');
+    } catch (err) {
+      if (err instanceof AuthError) throw new ServerError(401, 'UNAUTHORIZED');
+      throw unavailable(err);
     }
-    const user = await deps.users.findById(userId);
-    if (user === null) throw new ServerError(401, 'UNAUTHORIZED');
-    const avatar = await deps.users.getAvatar(user.id);
-    return {
-      userId: user.id,
-      nickname: user.nickname,
-      avatar: avatar === null ? '{}' : JSON.stringify(avatar),
-    };
+    try {
+      const user = await deps.users.findById(userId);
+      if (user === null) throw new ServerError(401, 'UNAUTHORIZED');
+      const avatar = await deps.users.getAvatar(user.id);
+      return {
+        userId: user.id,
+        nickname: user.nickname,
+        avatar: avatar === null ? '{}' : JSON.stringify(avatar),
+      };
+    } catch (err) {
+      if (err instanceof ServerError) throw err;
+      if (err instanceof InvalidInputError) throw new ServerError(401, 'UNAUTHORIZED');
+      throw unavailable(err);
+    }
   }
 
   override onJoin(client: Client, _options: unknown, auth: JoinAuth | undefined): void {

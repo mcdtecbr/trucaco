@@ -1,6 +1,7 @@
 import { matchMaker } from '@colyseus/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '@trucaco/protocol';
+import { normalizeIp } from './rateLimit';
 import { SlidingWindowLimiter, createServer, type RunningServer } from './server';
 
 describe('createServer', () => {
@@ -84,5 +85,43 @@ describe('SlidingWindowLimiter', () => {
     expect(l.allow('a', 200)).toBe(false);
     expect(l.allow('b', 200)).toBe(true);
     expect(l.allow('a', 1001)).toBe(true);
+  });
+});
+
+describe('SlidingWindowLimiter: teto de chaves', () => {
+  it('descarta as chaves mais antigas ao passar do teto, sem crescer sem limite', () => {
+    const l = new SlidingWindowLimiter(1, 60_000, 100);
+    for (let i = 0; i < 10_000; i++) expect(l.allow(`ip${i}`, i)).toBe(true);
+    expect(l.size).toBe(100);
+    // chave recente ainda é lembrada; a antiga foi esquecida (ganha nova cota)
+    expect(l.allow('ip9999', 10_000)).toBe(false);
+    expect(l.allow('ip0', 10_001)).toBe(true);
+  });
+
+  it('chave tocada recentemente sobrevive; rejeitadas não são contadas', () => {
+    const l = new SlidingWindowLimiter(2, 1000, 3);
+    l.allow('a', 0);
+    l.allow('b', 1);
+    l.allow('c', 2);
+    l.allow('a', 3); // renova 'a'
+    l.allow('d', 4); // expulsa 'b' (a mais antiga)
+    expect(l.allow('a', 5)).toBe(false); // a tinha 2 acessos
+    expect(l.allow('b', 6)).toBe(true);
+    expect(l.allow('x', 0)).toBe(true);
+  });
+});
+
+describe('normalizeIp', () => {
+  it('IPv4 fica; IPv4 mapeado em IPv6 vira IPv4; IPv6 vira o /64', () => {
+    expect(normalizeIp('203.0.113.7')).toBe('203.0.113.7');
+    expect(normalizeIp('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    expect(normalizeIp('::ffff:cb00:7107')).toBe('203.0.113.7');
+    expect(normalizeIp('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
+    expect(normalizeIp('2001:db8:1:2:1::9')).toBe('2001:db8:1:2::/64');
+    expect(normalizeIp('2001:DB8:1:2::1')).toBe(normalizeIp('2001:db8:1:2:ffff::'));
+    expect(normalizeIp('2001:db8:1:3::1')).not.toBe(normalizeIp('2001:db8:1:2::1'));
+    expect(normalizeIp('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(normalizeIp('::1')).toBe('0:0:0:0::/64');
+    expect(normalizeIp('lixo'.repeat(40))).toHaveLength(64);
   });
 });

@@ -10,8 +10,9 @@
  */
 import type { UserRepository } from '../db/types';
 import type { AuthService } from '../auth/authService';
-import { bearerFromHeader } from '../auth/authService';
+import { AuthError, bearerFromHeader } from '../auth/authService';
 import { isDevLike } from '../auth/config';
+import { log } from '../logger';
 
 export interface RoomAuthDeps {
   readonly auth: AuthService | null;
@@ -51,12 +52,13 @@ export function devReconnectUserId(
 
 export type Identity =
   | { readonly ok: true; readonly userId: string }
-  | { readonly ok: false; readonly reason: 'missing' | 'invalid' };
+  | { readonly ok: false; readonly reason: 'missing' | 'invalid' | 'unavailable' };
 
 /**
  * Resolve o `userId` de um token apresentado (JWT; ou `dev:` quando permitido). `missing` = nada foi
  * apresentado (cliente deve autenticar); `invalid` = apresentado mas recusado (inclui expirado: o
- * cliente tenta `/auth/refresh`).
+ * cliente tenta `/auth/refresh`); `unavailable` = Redis/banco fora do ar (503, não 401: o cliente não
+ * deve descartar a sessão).
  */
 export async function identityFromToken(
   token: string | undefined,
@@ -73,8 +75,12 @@ export async function identityFromToken(
   try {
     const principal = await deps.auth.authenticateAccess(token);
     return { ok: true, userId: principal.userId };
-  } catch {
-    return { ok: false, reason: 'invalid' };
+  } catch (err) {
+    if (err instanceof AuthError) return { ok: false, reason: 'invalid' };
+    log.error('roomAuth: dependência indisponível', {
+      name: err instanceof Error ? err.name : '?',
+    });
+    return { ok: false, reason: 'unavailable' };
   }
 }
 

@@ -28,8 +28,14 @@ export function setLogSink(next: LogSink): () => void {
 /** Nomes de campo que nunca saem em log (token, hash, cabeçalho de auth, cookie, segredo, corpo de /auth). */
 const SENSITIVE_KEY =
   /token|authorization|cookie|secret|password|passwd|hash|jwt|bearer|credential|body/i;
-/** Valor com cara de JWT (`eyJ...`.`...`.`...`) ou de Bearer: redigido mesmo em campo de nome inocente. */
-const SENSITIVE_VALUE = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|Bearer\s+\S+/;
+/**
+ * Valor com cara de JWT (`eyJ...`.`...`.`...`), de Bearer ou de refresh token (32 bytes em base64url =
+ * exatamente 43 caracteres): redigido mesmo em campo de nome inocente.
+ */
+const SENSITIVE_VALUE =
+  /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|Bearer\s+\S+|(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/;
+/** Mesmos padrões, global, para trocar o trecho dentro de um texto livre (`msg`). */
+const SENSITIVE_VALUE_GLOBAL = new RegExp(SENSITIVE_VALUE.source, 'g');
 export const REDACTED = '[REDACTED]';
 
 /** Defesa em profundidade: o logger redige campos sensíveis mesmo que um chamador os passe por engano. */
@@ -47,7 +53,7 @@ export function redact(fields: LogFields): LogFields {
 const emit =
   (level: LogLevel) =>
   (msg: string, fields: LogFields = {}): void =>
-    sink(level, msg, redact(fields));
+    sink(level, msg.replace(SENSITIVE_VALUE_GLOBAL, REDACTED), redact(fields));
 
 export const log = {
   debug: emit('debug'),

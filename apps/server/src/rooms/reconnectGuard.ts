@@ -64,6 +64,9 @@ export const reconnectUpgradeGuard: BeforeUpgradeHandler = async (request, conte
     const dev = devReconnectUserId(context.token, process.env.NODE_ENV);
     if (dev !== undefined) identity = { ok: true, userId: dev };
   }
+  if (!identity.ok && identity.reason === 'unavailable') {
+    return new Response(null, { status: 503 });
+  }
   if (!identity.ok) {
     // 401: o cliente deve renovar o access (`/auth/refresh`) e reconectar. Nunca registrar o token.
     log.warn('truco: reconexão recusada (sem identidade válida)', { room: roomId });
