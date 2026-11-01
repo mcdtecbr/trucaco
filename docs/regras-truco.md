@@ -47,11 +47,11 @@ Uma única implementação, com objeto `Variant`:
 ```ts
 interface Variant {
   id: 'paulista' | 'mineiro';
-  baseHandValue: number;              // 1 | 2
-  betLadder: number[];                // [3,6,9,12] | [4,6,8,10,12]
-  fixedManilhas: Card[] | null;       // null (usa vira) | [4♣,7♥,A♠,7♦]
-  specialHandThreshold: number;       // 11 | 10
-  commonRank: Rank[];                 // 3,2,A,K,J,Q,7,6,5,4
+  baseHandValue: number; // 1 | 2
+  betLadder: number[]; // [3,6,9,12] | [4,6,8,10,12]
+  fixedManilhas: Card[] | null; // null (usa vira) | [4♣,7♥,A♠,7♦]
+  specialHandThreshold: number; // 11 | 10
+  commonRank: Rank[]; // 3,2,A,K,J,Q,7,6,5,4
 }
 ```
 

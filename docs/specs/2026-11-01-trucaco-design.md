@@ -10,15 +10,15 @@ Fora do escopo do MVP: mesa de 6, matchmaking público ranqueado, loja/monetiza�
 
 ## 2. Decisões de stack
 
-| Decisão | Escolha | Alternativas descartadas e motivo |
-|---|---|---|
-| Cliente | React Native + Expo (web/iOS/Android), TypeScript | PWA só (sem loja de apps); Flutter (stack fora do ecossistema JS/.NET do time); Unity (WebGL pesado, avatares 3D além da necessidade) |
-| Servidor | Node + TypeScript + Colyseus | Socket.IO puro (reescreveria salas, sync e reconexão); .NET SignalR (regras não compartilhariam código com o cliente) |
-| Avatar | Rive, rig único com partes trocáveis e state machine | Lottie (sem state machine, customização difícil); 3D (pesado); spritesheets (muita arte manual) |
-| Dados | PostgreSQL via Prisma; Redis | — |
-| Auth | Google, Apple e convidado; JWT próprio | E-mail/senha (atrito e responsabilidade); só convidado (sem persistência entre dispositivos) |
-| Infra | GitHub (`mcdtecbr/trucaco`), GitHub Actions, Fly.io, Expo EAS | Azure DevOps + Container Apps (custo e complexidade iniciais) |
-| MVP | Paulista e Mineiro, mesa de 4 | — |
+| Decisão  | Escolha                                                       | Alternativas descartadas e motivo                                                                                                     |
+| -------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Cliente  | React Native + Expo (web/iOS/Android), TypeScript             | PWA só (sem loja de apps); Flutter (stack fora do ecossistema JS/.NET do time); Unity (WebGL pesado, avatares 3D além da necessidade) |
+| Servidor | Node + TypeScript + Colyseus                                  | Socket.IO puro (reescreveria salas, sync e reconexão); .NET SignalR (regras não compartilhariam código com o cliente)                 |
+| Avatar   | Rive, rig único com partes trocáveis e state machine          | Lottie (sem state machine, customização difícil); 3D (pesado); spritesheets (muita arte manual)                                       |
+| Dados    | PostgreSQL via Prisma; Redis                                  | —                                                                                                                                     |
+| Auth     | Google, Apple e convidado; JWT próprio                        | E-mail/senha (atrito e responsabilidade); só convidado (sem persistência entre dispositivos)                                          |
+| Infra    | GitHub (`mcdtecbr/trucaco`), GitHub Actions, Fly.io, Expo EAS | Azure DevOps + Container Apps (custo e complexidade iniciais)                                                                         |
+| MVP      | Paulista e Mineiro, mesa de 4                                 | —                                                                                                                                     |
 
 ## 3. Arquitetura
 
@@ -95,13 +95,13 @@ Dependências permitidas: `rules` e `protocol` não dependem de nada interno. `a
 
 ## 11. Riscos e mitigação
 
-| Risco | Mitigação |
-|---|---|
-| Arte Rive leva mais tempo que o código | Fase 4 começa com rig simples; avatar placeholder até lá; `packages/avatar` desacopla catálogo de arte |
-| Regras regionais divergentes geram disputa | `docs/regras-truco.md` é normativo; mudanças por ADR |
-| Rive em RN e web usa pacotes diferentes | Componente com `.native.tsx`/`.web.tsx` e API única |
-| Latência/reconexão em mobile | Colyseus `allowReconnection`, estado completo re-enviado ao reconectar, bot |
-| Toxicidade no chat | Filtro, rate limit, denúncia, bloqueio desde o MVP |
+| Risco                                      | Mitigação                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Arte Rive leva mais tempo que o código     | Fase 4 começa com rig simples; avatar placeholder até lá; `packages/avatar` desacopla catálogo de arte |
+| Regras regionais divergentes geram disputa | `docs/regras-truco.md` é normativo; mudanças por ADR                                                   |
+| Rive em RN e web usa pacotes diferentes    | Componente com `.native.tsx`/`.web.tsx` e API única                                                    |
+| Latência/reconexão em mobile               | Colyseus `allowReconnection`, estado completo re-enviado ao reconectar, bot                            |
+| Toxicidade no chat                         | Filtro, rate limit, denúncia, bloqueio desde o MVP                                                     |
 
 ## 12. Fases
 

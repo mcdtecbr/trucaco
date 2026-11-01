@@ -3,6 +3,7 @@
 Truco online (Paulista e Mineiro) para web, iOS e Android. Mesa de 4 jogadores (6 na fase 8), avatar animado em Rive que faz sinais de truco visíveis a toda a mesa, chat privado da dupla para combinar sinais, balões de conversa na mesa.
 
 Documentos de referência, leia antes de qualquer tarefa não trivial:
+
 - `docs/specs/2026-11-01-trucaco-design.md`: arquitetura, componentes, fluxo de dados, decisões.
 - `docs/plano-desenvolvimento.md`: fases, entregas e agente responsável por etapa.
 - `docs/regras-truco.md`: regras de Paulista e Mineiro no detalhe que o motor implementa.
@@ -10,20 +11,20 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 
 ## Time de agentes
 
-| Agente | Papel | Escreve código? |
-|---|---|---|
-| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa | Não |
-| `tales-regras` | Motor de regras do Truco em `packages/rules` (Paulista e Mineiro) + testes | Sim |
-| `caio-colyseus` | Servidor Colyseus em `apps/server`: lobby, salas, schema de estado, reconexão, sinais, chat, `onAuth`, REST | Sim |
-| `fabio-frontend` | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, cartas, estado, cliente Colyseus | Sim |
-| `rai-avatar` | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, integração RN/web | Sim |
-| `dalva-dba` | Postgres (Prisma), Redis, migrações, índices | Sim |
-| `catia-qa` | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright) | Sim (só testes) |
-| `duda-debugger` | Reproduz bugs, causa raiz, correção mínima com teste de regressão | Sim |
-| `rita-revisora` | Revisão de diff via Codex CLI, uma vez antes do commit | Não |
-| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências | Não |
-| `diego-devops` | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes | Sim |
-| `teo-docs` | README, ADRs, changelog, docs de regras e sinais | Sim (só docs) |
+| Agente            | Papel                                                                                                       | Escreve código? |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- | --------------- |
+| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                       | Não             |
+| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista e Mineiro) + testes                                  | Sim             |
+| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, schema de estado, reconexão, sinais, chat, `onAuth`, REST | Sim             |
+| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, cartas, estado, cliente Colyseus             | Sim             |
+| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, integração RN/web        | Sim             |
+| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                | Sim             |
+| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                        | Sim (só testes) |
+| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                           | Sim             |
+| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                      | Não             |
+| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                           | Não             |
+| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                         | Sim             |
+| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                            | Sim (só docs)   |
 
 ## Fluxo padrão para uma funcionalidade nova
 
@@ -63,7 +64,7 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 ## Convenções do projeto
 
 - **Linguagem**: TypeScript estrito em todo o monorepo (`strict: true`, sem `any` implícito). Sem JavaScript solto.
-- **Gerenciador**: pnpm workspaces + Turborepo. Scripts na raiz (disponíveis a partir da Fase 0): `pnpm dev`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:e2e`.
+- **Gerenciador**: pnpm workspaces + Turborepo. Scripts na raiz: `pnpm dev`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm format`, `pnpm db:up`/`db:down`. O script de E2E (`test:e2e`) nasce na Fase 3. No Windows com Git Bash, `pnpm` vem de `corepack enable --install-directory ~/.local/bin pnpm`.
 - **Testes**: Vitest em `packages/*` e `apps/server`; `@colyseus/testing` para salas; Maestro (mobile) e Playwright (web) para E2E. Arquivo de teste ao lado do código: `nome.test.ts`.
 - **Lint e formato**: ESLint + Prettier, configuração única na raiz.
 - **Pastas**: ver `README.md`. `packages/rules` não importa nada de rede, banco ou UI. `packages/protocol` só tipos, schemas e constantes.
