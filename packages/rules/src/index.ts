@@ -31,3 +31,11 @@ export type {
 } from './hand';
 export { viewFor } from './view';
 export type { HandView, PlayedCardView, TrickView } from './view';
+export { handEvents, publicEvent, scoresAfterHand } from './events';
+export type { ActionResult, GameEvent, PublicGameEvent, Transition } from './events';
+export { applyMatchAction, startMatch } from './match';
+export type { MatchState, StartMatchParams } from './match';
+export { applySeriesAction, cancelSeries, gamesToWin, isSeriesOver, startSeries } from './series';
+export type { SeriesConfig, SeriesState, StartSeriesParams } from './series';
+export { legalActions, pendingSeat } from './legal';
+export { botAction } from './bot';

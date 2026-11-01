@@ -30,7 +30,9 @@ export type RuleErrorCode =
   | 'BET_PENDING'
   | 'NO_PENDING_BET'
   | 'SPECIAL_DECISION_PENDING'
-  | 'NO_SPECIAL_DECISION';
+  | 'NO_SPECIAL_DECISION'
+  | 'GAME_FINISHED'
+  | 'SERIES_FINISHED';
 
 export interface RuleError {
   readonly code: RuleErrorCode;
