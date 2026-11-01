@@ -152,7 +152,7 @@ export interface TableOptions {
   readonly visibility: Visibility;
 }
 
-export type PlayerStatus = 'empty' | 'connected' | 'disconnected' | 'away';
+export type PlayerStatus = 'empty' | 'connected' | 'away' | 'bot';
 
 export const TABLE_SEATS = 4;
 

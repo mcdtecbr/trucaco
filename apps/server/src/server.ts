@@ -4,6 +4,7 @@ import { Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { MAX_MESSAGE_BYTES } from '@trucaco/protocol';
 import { buildHealth } from './index';
+import { reconnectUpgradeGuard } from './rooms/reconnectGuard';
 import { defineTrucoRoom } from './rooms/TrucoRoom';
 import type { TrucoRoomConfig } from './rooms/TrucoRoom';
 
@@ -111,7 +112,11 @@ export interface RunningServer {
 export function buildColyseusServer(room: TrucoRoomConfig = {}): Server {
   const colyseus = new Server({
     // Teto de tamanho por mensagem do cliente (o `ws` fecha a conexão acima disso).
-    transport: new WebSocketTransport({ maxPayload: MAX_MESSAGE_BYTES }),
+    // `beforeUpgrade`: o core 0.18 não reautentica na reconexão; o guard exige o `userId` do assento.
+    transport: new WebSocketTransport({
+      maxPayload: MAX_MESSAGE_BYTES,
+      beforeUpgrade: reconnectUpgradeGuard,
+    }),
     express: (app) => {
       app.get('/health', (_req, res) => {
         res.json(buildHealth());

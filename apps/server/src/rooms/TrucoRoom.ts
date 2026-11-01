@@ -10,21 +10,31 @@
  * limit -> `HandAction` -> `applySeriesAction` -> `series` novo -> eventos a cada cliente ->
  * `projectState` + timer de turno + `turnTimer`.
  *
- * Fora deste bloco (ver README): reconexão e bot de ausência (2E), sinais/sfx/chat (2F), auth real
- * (2G), lobby e persistência (2H).
+ * Reconexão e bot de ausência (2E): ver `onDrop`/`onReconnect`/`onLeave` e o README. API do core 0.18:
+ * `onDrop` (queda sem consentimento) chama `allowReconnection`; `onReconnect` restaura o assento;
+ * `onLeave` só roda na saída definitiva (consentida, janela expirada ou sem direito a janela).
+ *
+ * Fora deste bloco (ver README): sinais/sfx/chat (2F), auth real (2G), lobby e persistência (2H).
  */
 import { randomInt } from 'node:crypto';
-import { Room, ServerError } from '@colyseus/core';
+import { CloseCode, Room, ServerError } from '@colyseus/core';
 import type { Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  RECONNECT_SECONDS,
   TURN_TIMEOUT_MS,
   parseClientMessage,
   validateRoomOptions,
 } from '@trucaco/protocol';
-import type { ClientMessage, ErrorCode, RoomOptions, ServerMessage } from '@trucaco/protocol';
+import type {
+  ClientMessage,
+  ErrorCode,
+  PresenceStatus,
+  RoomOptions,
+  ServerMessage,
+} from '@trucaco/protocol';
 import {
   applySeriesAction,
   botAction,
@@ -72,6 +82,12 @@ export const INVALID_WARN_WINDOW_MS = 5_000;
 export const DEFAULT_FINISH_DELAY_MS = 15_000;
 /** Máximo de mensagens por segundo por conexão (piso do Colyseus: acima disso desconecta). */
 export const MAX_MESSAGES_PER_SECOND = 30;
+/** Atraso de "pensar" do bot de ausência (para a jogada não ser instantânea). */
+export const DEFAULT_BOT_THINK_MS = 600;
+/** Reconexões (e retomadas por novo join) por assento na partida; acima disso o bot fica com a cadeira. */
+export const DEFAULT_MAX_RECONNECTS = 20;
+/** Expirações de turno seguidas que marcam o assento como ausente (`away`). */
+export const IDLE_TIMEOUTS = 2;
 
 /**
  * Parâmetros do SERVIDOR/teste (nunca vêm de opções do cliente): injetados por `defineTrucoRoom`.
@@ -91,6 +107,17 @@ export interface TrucoRoomConfig {
   readonly maxMessagesPerSecond?: number;
   /** Placar inicial do 1º jogo (só para teste de mão de onze/dez/ferro). */
   readonly initialScores?: readonly [number, number];
+  /** Janela de reconexão em segundos (aceita fração, para teste). Padrão `RECONNECT_SECONDS`. */
+  readonly reconnectSeconds?: number;
+  /** Atraso do bot de ausência antes de jogar. Padrão `DEFAULT_BOT_THINK_MS`. */
+  readonly botThinkMs?: number;
+  /**
+   * Tempo sem NENHUM humano conectado até cancelar a série. Padrão: a janela de reconexão
+   * (`reconnectSeconds * 1000`).
+   */
+  readonly abandonMs?: number;
+  /** Teto de reconexões/retomadas por assento. Padrão `DEFAULT_MAX_RECONNECTS`. */
+  readonly maxReconnects?: number;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`; futuramente do JWT, bloco 2G). */
@@ -134,6 +161,24 @@ export function devAuth(options: unknown, nodeEnv: string | undefined): JoinAuth
     throw new ServerError(401, 'UNAUTHORIZED');
   }
   return { userId, nickname: nick };
+}
+
+/**
+ * TODO(2G): AUTENTICAÇÃO TEMPORÁRIA DA RECONEXÃO. O core 0.18 NÃO roda `onAuth` ao reconectar: a
+ * única credencial é o token de reconexão (aleatório, por sessão, rotativo). Para o `userId` do novo
+ * socket valer o do assento, o servidor exige uma identidade no upgrade do WebSocket
+ * (`reconnectUpgradeGuard`, `beforeUpgrade` do transporte), que chega em `context.token`
+ * (`_authToken` na URL ou `Authorization: Bearer`). Em dev/test o token é `dev:<userId>`; em qualquer
+ * outro `NODE_ENV` (inclusive ausente) nada é aceito. O 2G troca por verificação de JWT.
+ */
+export function devReconnectUserId(
+  token: string | null | undefined,
+  nodeEnv: string | undefined,
+): string | undefined {
+  if (nodeEnv !== 'development' && nodeEnv !== 'test') return undefined;
+  if (typeof token !== 'string' || !token.startsWith('dev:')) return undefined;
+  const userId = token.slice(4);
+  return userId.length > 0 && userId.length <= USER_ID_MAX ? userId : undefined;
 }
 
 function generateRoomCode(): string {
@@ -183,11 +228,27 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private startTimer: Timer | null = null;
   private readonly lastActionAt = new Map<Seat, number>();
   private readonly invalidAt = new Map<Seat, number[]>();
-  /** Expirações de turno seguidas por assento (só registro; "ausente"/bot permanente são do 2E). */
+  /**
+   * Expirações de turno seguidas por assento. Ao chegar a `IDLE_TIMEOUTS` o assento aparece como
+   * `away`; qualquer ação aceita zera.
+   */
   readonly timeouts = new Map<Seat, number>();
   private readonly cancelVotes = new Set<Seat>();
   private turnTimer: Timer | null = null;
   private closeTimer: Timer | null = null;
+  /** Assentos cujo humano saiu de vez: o bot joga. Persiste até o dono voltar (mesmo `userId`). */
+  private readonly botSeats = new Set<Seat>();
+  /** Assentos com socket caído e janela de reconexão aberta (`allowReconnection`). */
+  private readonly droppedSeats = new Set<Seat>();
+  /** Último `seq` de evento enviado ao socket do assento (base do replay na reconexão). */
+  private readonly lastSeq = new Map<Seat, number>();
+  /** Reconexões e retomadas por assento (teto `maxReconnects`). */
+  private readonly reconnectCount = new Map<Seat, number>();
+  private readonly seatPresence = new Map<Seat, PresenceStatus>();
+  private currentTurn: { seat: Seat; deadlineAt: number } | null = null;
+  private botTimer: Timer | null = null;
+  private abandonTimer: Timer | null = null;
+  private closing = false;
 
   constructor(private readonly config: TrucoRoomConfig = {}) {
     super();
@@ -227,13 +288,20 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (auth === undefined || typeof auth.userId !== 'string') {
       throw new ServerError(401, 'UNAUTHORIZED');
     }
-    for (const userId of this.userBySeat.values()) {
-      if (userId === auth.userId) throw new ServerError(409, 'ALREADY_SEATED');
+    // Quem já tem assento só volta ao PRÓPRIO assento, e só se o bot o ocupa (saída definitiva).
+    for (const [owned, userId] of this.userBySeat) {
+      if (userId === auth.userId) {
+        this.reclaimSeat(client, owned);
+        return;
+      }
     }
+    if (this.series !== null) throw new ServerError(409, 'ROOM_FULL');
     const seat = this.firstFreeSeat();
     if (seat === null) throw new ServerError(409, 'ROOM_FULL');
     this.seatBySession.set(client.sessionId, seat);
     this.userBySeat.set(seat, auth.userId);
+    this.lastSeq.set(seat, this.seq);
+    this.seatPresence.set(seat, 'online');
     setPlayer(this.state, seat, {
       nickname: auth.nickname,
       avatar: '{}',
@@ -243,7 +311,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     // O core NÃO cria `client.view`: sem isto o cliente receberia o estado sem o bloco privado.
     client.view = createSeatView(this.state, seat);
     log.info('truco: jogador sentou', { room: this.roomId, seat });
-    if (this.seatBySession.size === TABLE_SEATS) {
+    if (this.userBySeat.size === TABLE_SEATS) {
       this.lock().catch((err: unknown) => log.error('truco: lock falhou', { err: String(err) }));
       // Adiado para o próximo tick do relógio: o 4º cliente já terminou de entrar e recebe os
       // primeiros eventos da partida (mensagens enviadas durante o `onJoin` chegam antes de o
@@ -252,7 +320,52 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
   }
 
-  override onLeave(client: Client): void {
+  /**
+   * Queda SEM consentimento (core 0.18: `onDrop`). Antes da partida o assento é liberado pelo
+   * `onLeave` que o core chama logo depois. Durante a partida o assento fica `away`, o timer normal
+   * joga por ele e abre-se a janela de reconexão (`allowReconnection`). Sem retorno, o core chama
+   * `onLeave` e o bot assume.
+   */
+  override onDrop(client: Client, code?: number): void {
+    const seat = this.seatBySession.get(client.sessionId);
+    if (seat === undefined) return;
+    if (this.state.phase === 'waiting' || this.closing) return;
+    if ((this.reconnectCount.get(seat) ?? 0) >= this.maxReconnects()) {
+      // Sem direito a janela: o core segue direto para `onLeave` (bot imediato).
+      log.warn('truco: teto de reconexões, sem janela', { room: this.roomId, seat });
+      return;
+    }
+    log.info('truco: jogador desconectou', { room: this.roomId, seat, code: code ?? 0 });
+    this.droppedSeats.add(seat);
+    this.refreshPresence(seat);
+    this.afterRosterChange();
+    // Não aguardar: o core espera a promessa; o retorno cai em `onReconnect` e a expiração em `onLeave`.
+    const reconnection = this.allowReconnection(
+      client,
+      this.config.reconnectSeconds ?? RECONNECT_SECONDS,
+    );
+    reconnection.catch(() => undefined);
+  }
+
+  /**
+   * O jogador voltou pelo token de reconexão (o core já validou o token DESTA sessão e o
+   * `reconnectUpgradeGuard` já exigiu o mesmo `userId` do assento). A `sessionId` é a mesma de antes;
+   * o `Client` é novo e herda `auth`/`userData` e a `view` ANTIGA, que é descartada aqui.
+   */
+  override onReconnect(client: Client): void {
+    const seat = this.seatBySession.get(client.sessionId);
+    const auth = client.auth as JoinAuth | undefined;
+    if (seat === undefined || auth === undefined || this.userBySeat.get(seat) !== auth.userId) {
+      log.error('truco: reconexão com assento inconsistente', { room: this.roomId });
+      client.leave(POLICY_CLOSE_CODE);
+      return;
+    }
+    log.info('truco: jogador reconectou', { room: this.roomId, seat });
+    this.resume(client, seat);
+  }
+
+  /** Saída DEFINITIVA: consentida, janela expirada, sem direito a janela ou reconexão falha. */
+  override onLeave(client: Client, code?: number): void {
     const seat = this.seatBySession.get(client.sessionId);
     if (seat === undefined) return;
     client.view?.dispose();
@@ -265,6 +378,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.lastActionAt.delete(seat);
       this.warnState.delete(seat);
       this.timeouts.delete(seat);
+      this.lastSeq.delete(seat);
+      this.seatPresence.delete(seat);
+      this.reconnectCount.delete(seat);
       setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty' });
       if (this.startTimer !== null) {
         this.startTimer.clear();
@@ -275,30 +391,225 @@ export class TrucoRoom extends Room<{ state: TableState }> {
           log.error('truco: unlock falhou', { err: String(err) }),
         );
       }
-    } else {
-      // TODO(2E): allowReconnection(60 s) e bot após expirar. Por ora só marca desconectado.
-      setPlayer(this.state, seat, { status: 'disconnected' });
+      return;
     }
+    // Partida em curso: o humano não volta pela janela. O bot assume AGORA (sem esperar 60 s).
+    this.seatBySession.delete(client.sessionId);
+    this.droppedSeats.delete(seat);
+    if (this.closing) return;
+    log.info('truco: bot assumiu o assento', {
+      room: this.roomId,
+      seat,
+      consented: code === CloseCode.CONSENTED,
+    });
+    this.becomeBot(seat);
+  }
+
+  override async disconnect(closeCode?: number): Promise<void> {
+    this.closing = true;
+    await super.disconnect(closeCode);
   }
 
   override onDispose(): void {
+    this.closing = true;
     this.startTimer?.clear();
     this.turnTimer?.clear();
     this.closeTimer?.clear();
+    this.botTimer?.clear();
+    this.abandonTimer?.clear();
+  }
+
+  /**
+   * Verificação da identidade de uma RECONEXÃO, chamada pelo `reconnectUpgradeGuard` antes do upgrade
+   * do WebSocket: a sessão tem de ter assento e o `userId` apresentado tem de ser o do assento.
+   * (O token de reconexão em si é validado pelo core, por sessão.)
+   */
+  authorizeReconnect(sessionId: string, userId: string | undefined): boolean {
+    const seat = this.seatBySession.get(sessionId);
+    if (seat === undefined || userId === undefined) return false;
+    return this.userBySeat.get(seat) === userId;
+  }
+
+  // ---------------------------------------------------------------- presença e bot
+
+  private maxReconnects(): number {
+    return this.config.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
+  }
+
+  /** Humano do assento tem socket vivo e não é bot. */
+  private connectedHumans(): Seat[] {
+    return [...this.userBySeat.keys()].filter(
+      (s) => !this.botSeats.has(s) && !this.droppedSeats.has(s),
+    );
+  }
+
+  /** Assentos de humanos (conectados ou na janela de reconexão). */
+  private humanSeats(): Seat[] {
+    return [...this.userBySeat.keys()].filter((s) => !this.botSeats.has(s));
+  }
+
+  private presenceOf(seat: Seat): PresenceStatus {
+    if (this.botSeats.has(seat)) return 'bot';
+    if (this.droppedSeats.has(seat) || (this.timeouts.get(seat) ?? 0) >= IDLE_TIMEOUTS) {
+      return 'away';
+    }
+    return 'online';
+  }
+
+  /** Recalcula a presença do assento; se mudou, atualiza o schema e avisa a mesa. */
+  private refreshPresence(seat: Seat): void {
+    const status = this.presenceOf(seat);
+    if (this.seatPresence.get(seat) === status) return;
+    this.seatPresence.set(seat, status);
+    setPlayer(this.state, seat, {
+      status: status === 'online' ? 'connected' : status,
+      isBot: status === 'bot',
+    });
+    const msg: Omit<Extract<ServerMessage, { type: 'presence' }>, 'type'> = { seat, status };
+    this.broadcast('presence', msg);
+  }
+
+  /** Efeitos de mudar quem está presente: votos, abandono. */
+  private afterRosterChange(): void {
+    this.pruneVotes();
+    this.checkVotes();
+    this.checkAbandon();
+  }
+
+  private becomeBot(seat: Seat): void {
+    this.botSeats.add(seat);
+    this.refreshPresence(seat);
+    const series = this.series;
+    if (series !== null && !isSeriesOver(series)) {
+      // O core só deixa entrar de novo (mesmo `userId`) numa sala destrancada.
+      if (this.locked) {
+        this.unlock().catch((err: unknown) =>
+          log.error('truco: unlock falhou', { err: String(err) }),
+        );
+      }
+    }
+    this.afterRosterChange();
+    const now = this.series;
+    if (now !== null && !isSeriesOver(now) && pendingSeat(now) === seat) this.sync();
+  }
+
+  /** Dono do assento que o bot ocupa voltando por um novo join (mesmo `userId`). */
+  private reclaimSeat(client: Client, seat: Seat): void {
+    if (this.series === null || !this.botSeats.has(seat)) {
+      throw new ServerError(409, 'ALREADY_SEATED');
+    }
+    if ((this.reconnectCount.get(seat) ?? 0) >= this.maxReconnects()) {
+      throw new ServerError(409, 'ROOM_FULL');
+    }
+    this.seatBySession.set(client.sessionId, seat);
+    log.info('truco: dono retomou o assento do bot', { room: this.roomId, seat });
+    this.resume(client, seat);
+  }
+
+  /**
+   * Devolve o assento ao humano (reconexão ou novo join): vista própria nova, presença, replay dos
+   * eventos perdidos, relógio do turno. Cancela o bot do turno (nunca duas ações no mesmo turno).
+   */
+  private resume(client: Client, seat: Seat): void {
+    this.reconnectCount.set(seat, (this.reconnectCount.get(seat) ?? 0) + 1);
+    this.botSeats.delete(seat);
+    this.droppedSeats.delete(seat);
+    this.timeouts.set(seat, 0);
+    // O core copia a view ANTIGA para o novo `Client`; ela é descartada e recriada.
+    client.view?.dispose();
+    client.view = createSeatView(this.state, seat);
+    this.refreshPresence(seat);
+    this.sendCatchUp(client, seat);
+    for (const [other, status] of this.seatPresence) {
+      if (other === seat) continue;
+      const msg: Omit<Extract<ServerMessage, { type: 'presence' }>, 'type'> = {
+        seat: other,
+        status,
+      };
+      client.send('presence', msg);
+    }
+    const series = this.series;
+    if (series !== null && !isSeriesOver(series) && pendingSeat(series) === seat) {
+      // Cancela o bot agendado e dá ao jogador o relógio do turno.
+      this.sync();
+    } else if (this.currentTurn !== null) {
+      client.send('turnTimer', this.currentTurn);
+    }
+    this.afterRosterChange();
+  }
+
+  /**
+   * Reenvia os eventos com `seq` maior que o último enviado ao socket anterior, em ordem, na visão
+   * pública sem assento (`eventLog`). A identidade da PRÓPRIA carta coberta NÃO vem daqui: está em
+   * `privates[seat].ownCovered` do estado completo. Eventos enviados a um socket já morto, antes de o
+   * servidor notar a queda, contam como entregues: o cliente deve tratar salto de `seq` como pedido
+   * de resincronização pelo estado.
+   */
+  private sendCatchUp(client: Client, seat: Seat): void {
+    const from = this.lastSeq.get(seat) ?? this.seq;
+    for (const e of this.eventLog) {
+      if (e.seq <= from) continue;
+      const payload: EventPayload = { seq: e.seq, at: e.at, event: e.event };
+      client.send('event', payload);
+    }
+    this.lastSeq.set(seat, this.seq);
+  }
+
+  /** Série cancelada porque nenhum humano está conectado por `abandonMs`. */
+  private checkAbandon(): void {
+    const series = this.series;
+    if (series === null || isSeriesOver(series) || this.closing) {
+      this.clearAbandon();
+      return;
+    }
+    if (this.connectedHumans().length > 0) {
+      this.clearAbandon();
+      return;
+    }
+    if (this.abandonTimer !== null) return;
+    if (this.humanSeats().length === 0) {
+      // Todos os humanos saíram de vez: ninguém volta pela janela.
+      this.abandon();
+      return;
+    }
+    const ms = this.config.abandonMs ?? (this.config.reconnectSeconds ?? RECONNECT_SECONDS) * 1000;
+    this.abandonTimer = this.clock.setTimeout(() => this.abandon(), ms);
+  }
+
+  private clearAbandon(): void {
+    this.abandonTimer?.clear();
+    this.abandonTimer = null;
+  }
+
+  private abandon(): void {
+    this.abandonTimer = null;
+    const series = this.series;
+    if (series === null || isSeriesOver(series) || this.closing) return;
+    if (this.connectedHumans().length > 0) return;
+    log.info('truco: série cancelada por abandono', { room: this.roomId });
+    this.cancelNow(series);
+  }
+
+  private cancelNow(series: SeriesState): ErrorCode | null {
+    const r = cancelSeries(series);
+    if (!r.ok) return r.error.code;
+    this.series = r.state;
+    this.emitEvents(r.events);
+    this.sync();
+    return null;
   }
 
   // ---------------------------------------------------------------- partida
 
   private firstFreeSeat(): Seat | null {
-    const taken = new Set(this.seatBySession.values());
-    for (let s = 0; s < TABLE_SEATS; s++) if (!taken.has(s)) return s;
+    for (let s = 0; s < TABLE_SEATS; s++) if (!this.userBySeat.has(s)) return s;
     return null;
   }
 
   private startGame(): void {
     this.startTimer = null;
     const options = this.options;
-    if (options === null || this.series !== null || this.seatBySession.size !== TABLE_SEATS) return;
+    if (options === null || this.series !== null || this.userBySeat.size !== TABLE_SEATS) return;
     const variant = variantById(options.variant);
     const ironHand = options.ironHand;
     const started = startSeries({
@@ -392,6 +703,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       return;
     }
     this.timeouts.set(seat, 0);
+    this.refreshPresence(seat);
   }
 
   /** Rate limit por assento (em memória da sala). */
@@ -489,22 +801,45 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return null;
   }
 
+  /**
+   * Voto de cancelamento: vale a UNANIMIDADE dos humanos conectados (bots não votam; ausente não
+   * conta). O voto vale só dentro da mão: zera a cada `handStarted` e some quando o votante cai.
+   */
   private voteCancel(seat: Seat): ErrorCode | null {
     const series = this.series;
     if (series === null) return 'NOT_YOUR_TURN';
     if (isSeriesOver(series)) return 'SERIES_FINISHED';
     this.cancelVotes.add(seat);
+    this.publishVotes();
+    return this.checkVotes();
+  }
+
+  private publishVotes(): void {
     setCancelVotes(
       this.state,
       [...this.cancelVotes].sort((a, b) => a - b),
     );
-    if (this.cancelVotes.size < TABLE_SEATS) return null;
-    const r = cancelSeries(series);
-    if (!r.ok) return r.error.code;
-    this.series = r.state;
-    this.emitEvents(r.events);
-    this.sync();
-    return null;
+  }
+
+  /** Descarta voto de quem não é humano conectado (caiu, virou bot). */
+  private pruneVotes(): void {
+    const voters = new Set(this.connectedHumans());
+    let changed = false;
+    for (const s of [...this.cancelVotes]) {
+      if (!voters.has(s)) {
+        this.cancelVotes.delete(s);
+        changed = true;
+      }
+    }
+    if (changed) this.publishVotes();
+  }
+
+  private checkVotes(): ErrorCode | null {
+    const series = this.series;
+    if (series === null || isSeriesOver(series) || this.cancelVotes.size === 0) return null;
+    const voters = this.connectedHumans();
+    if (voters.length === 0 || !voters.every((s) => this.cancelVotes.has(s))) return null;
+    return this.cancelNow(series);
   }
 
   // ---------------------------------------------------------------- eventos
@@ -520,20 +855,29 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         if (seat === undefined) continue;
         const payload: EventPayload = { seq, at, event: publicEvent(ev, seat) };
         client.send('event', payload);
+        this.lastSeq.set(seat, seq);
       }
+    }
+    // Voto de cancelamento vale só dentro da mão.
+    if (this.cancelVotes.size > 0 && events.some((e) => e.type === 'handStarted')) {
+      this.cancelVotes.clear();
+      this.publishVotes();
     }
   }
 
   // ---------------------------------------------------------------- timer e projeção
 
-  /** Projeta o schema e (re)arma o timer do turno, ou encerra a sala se a série acabou. */
+  /** Projeta o schema e (re)arma o timer do turno (e o do bot), ou encerra a sala se a série acabou. */
   private sync(): void {
     const series = this.series;
     if (series === null) return;
     this.turnTimer?.clear();
     this.turnTimer = null;
+    this.botTimer?.clear();
+    this.botTimer = null;
     const seat = isSeriesOver(series) ? null : pendingSeat(series);
     if (seat === null) {
+      this.currentTurn = null;
       projectState(series, this.state);
       if (isSeriesOver(series)) this.scheduleClose();
       else log.error('truco: série em andamento sem assento pendente', { room: this.roomId });
@@ -542,9 +886,34 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const timeoutMs = this.config.turnTimeoutMs ?? TURN_TIMEOUT_MS;
     const deadlineAt = Date.now() + timeoutMs;
     this.turnTimer = this.clock.setTimeout(() => this.onTurnTimeout(seat), timeoutMs);
+    if (this.botSeats.has(seat)) {
+      // Bot de ausência: age logo (com um pequeno "pensar"); o timer acima é só a rede de segurança.
+      const scheduled = series;
+      const thinkMs = this.config.botThinkMs ?? DEFAULT_BOT_THINK_MS;
+      this.botTimer = this.clock.setTimeout(() => this.onBotTurn(seat, scheduled), thinkMs);
+    }
     projectState(series, this.state, { turnDeadlineAt: deadlineAt });
+    this.currentTurn = { seat, deadlineAt };
     const msg: Omit<Extract<ServerMessage, { type: 'turnTimer' }>, 'type'> = { seat, deadlineAt };
     this.broadcast('turnTimer', msg);
+  }
+
+  /**
+   * Vez do bot de ausência. Só age se AINDA é o mesmo estado agendado, o assento ainda é bot e é a
+   * vez dele; usa `botAction` (nunca pede nem aumenta aposta) e a mesma porta das ações humanas.
+   */
+  private onBotTurn(seat: Seat, scheduled: SeriesState): void {
+    this.botTimer = null;
+    const series = this.series;
+    if (this.closing || series === null || series !== scheduled || isSeriesOver(series)) return;
+    if (!this.botSeats.has(seat) || pendingSeat(series) !== seat) return;
+    const action = botAction(series, seat, this.rng);
+    if (action === null) {
+      log.error('truco: bot sem ação', { room: this.roomId, seat });
+      return;
+    }
+    const code = this.applyAndPublish(action);
+    if (code !== null) log.error('truco: jogada do bot recusada', { seat, code });
   }
 
   /** Prazo estourado: o motor joga POR ele (`botAction`: nunca pede nem aumenta aposta). */
@@ -557,8 +926,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       log.error('truco: bot sem ação no timeout', { room: this.roomId, seat });
       return;
     }
-    const consecutive = (this.timeouts.get(seat) ?? 0) + 1;
-    this.timeouts.set(seat, consecutive);
+    const isBot = this.botSeats.has(seat);
+    const consecutive = isBot ? 0 : (this.timeouts.get(seat) ?? 0) + 1;
+    if (!isBot) this.timeouts.set(seat, consecutive);
     log.info('truco: turno expirou, jogada automática', {
       room: this.roomId,
       seat,
@@ -567,6 +937,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     });
     const code = this.applyAndPublish(action);
     if (code !== null) log.error('truco: jogada automática recusada', { seat, code });
+    else if (!isBot) this.refreshPresence(seat);
   }
 
   private scheduleClose(): void {
