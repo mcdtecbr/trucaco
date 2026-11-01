@@ -92,6 +92,16 @@ export class PrismaUserRepository implements UserRepository {
     await this.db.user.updateMany({ where: { id: normalizeId(id) }, data: { lastSeenAt: at } });
   }
 
+  async updateNickname(rawId: string, rawNickname: string): Promise<void> {
+    const id = normalizeId(rawId);
+    const nickname = validateNickname(rawNickname);
+    // A unicidade (índice em lower(nickname)) é traduzida por `guarded` em `NicknameTakenError`.
+    const result = await guarded(() =>
+      this.db.user.updateMany({ where: { id }, data: { nickname } }),
+    );
+    if (result.count === 0) throw new InvalidInputError('Usuário inexistente.');
+  }
+
   async getAvatar(userId: string): Promise<JsonObject | null> {
     const row = await this.db.avatar.findUnique({ where: { userId: normalizeId(userId) } });
     return row !== null && isJsonObject(row.parts) ? row.parts : null;

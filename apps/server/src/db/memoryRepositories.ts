@@ -104,6 +104,18 @@ export class MemoryUserRepository implements UserRepository {
     if (user !== undefined) this.store.users.set(id, { ...user, lastSeenAt: at });
   }
 
+  async updateNickname(rawId: string, rawNickname: string): Promise<void> {
+    const id = normalizeId(rawId);
+    const nickname = validateNickname(rawNickname);
+    const user = this.store.users.get(id);
+    if (user === undefined) throw new InvalidInputError('Usuário inexistente.');
+    const lower = nickname.toLowerCase();
+    for (const other of this.store.users.values()) {
+      if (other.id !== id && other.nickname.toLowerCase() === lower) throw new NicknameTakenError();
+    }
+    this.store.users.set(id, { ...user, nickname });
+  }
+
   async getAvatar(userId: string): Promise<JsonObject | null> {
     return this.store.avatars.get(normalizeId(userId)) ?? null;
   }

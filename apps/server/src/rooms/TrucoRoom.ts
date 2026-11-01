@@ -19,7 +19,7 @@
  */
 import { randomInt } from 'node:crypto';
 import { CloseCode, Room, ServerError } from '@colyseus/core';
-import type { Client, Server } from '@colyseus/core';
+import type { AuthContext, Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
   CHAT_COOLDOWN_MS,
@@ -71,6 +71,10 @@ import {
 } from '../game/schema';
 import type { TableState } from '../game/schema';
 import { log } from '../logger';
+import { bearerFromHeader } from '../auth/authService';
+import { devReconnectUserId, getRoomAuth, USER_ID_MAX } from './roomAuth';
+
+export { devReconnectUserId };
 
 export const TRUCO_ROOM_NAME = 'truco';
 
@@ -147,10 +151,12 @@ export interface TrucoRoomConfig {
   readonly chatCooldownMs?: number;
 }
 
-/** Dados de identidade do jogador (vêm do `onAuth`; futuramente do JWT, bloco 2G). */
+/** Dados de identidade do jogador (vêm do `onAuth`: JWT + banco; nunca do payload do cliente). */
 export interface JoinAuth {
   readonly userId: string;
   readonly nickname: string;
+  /** JSON das partes do avatar (do banco). Ausente em `devAuth`. */
+  readonly avatar?: string;
 }
 
 export interface LoggedEvent {
@@ -161,15 +167,13 @@ export interface LoggedEvent {
 }
 
 const NICKNAME_MAX = 24;
-const USER_ID_MAX = 64;
 const CONTROL = /[\p{C}]/u;
 
 /**
- * TODO(2G): AUTENTICAÇÃO TEMPORÁRIA. Aceita `{userId, nickname}` das opções de join SEM prova de
- * identidade, e por isso só funciona fora de produção. Falha FECHADO: só `development` e `test`
- * EXPLÍCITOS passam; `production`, qualquer outro valor e `NODE_ENV` AUSENTE rejeitam tudo (um deploy
- * que esqueça a variável não pode abrir a mesa). O bloco 2G troca isto por
- * validação de JWT (`userId` do token, nunca do payload).
+ * Identidade SEM prova, só para testes e `pnpm dev`: aceita `{userId, nickname}` das opções de join.
+ * Falha FECHADO: só `development` e `test` EXPLÍCITOS passam (e `onAuth` só a chama com a flag
+ * `allowDevAuth`, ver `roomAuth.ts`); `production`, qualquer outro valor e `NODE_ENV` AUSENTE
+ * rejeitam tudo.
  */
 export function devAuth(options: unknown, nodeEnv: string | undefined): JoinAuth {
   if (nodeEnv !== 'development' && nodeEnv !== 'test') {
@@ -188,24 +192,6 @@ export function devAuth(options: unknown, nodeEnv: string | undefined): JoinAuth
     throw new ServerError(401, 'UNAUTHORIZED');
   }
   return { userId, nickname: nick };
-}
-
-/**
- * TODO(2G): AUTENTICAÇÃO TEMPORÁRIA DA RECONEXÃO. O core 0.18 NÃO roda `onAuth` ao reconectar: a
- * única credencial é o token de reconexão (aleatório, por sessão, rotativo). Para o `userId` do novo
- * socket valer o do assento, o servidor exige uma identidade no upgrade do WebSocket
- * (`reconnectUpgradeGuard`, `beforeUpgrade` do transporte), que chega em `context.token`
- * (`_authToken` na URL ou `Authorization: Bearer`). Em dev/test o token é `dev:<userId>`; em qualquer
- * outro `NODE_ENV` (inclusive ausente) nada é aceito. O 2G troca por verificação de JWT.
- */
-export function devReconnectUserId(
-  token: string | null | undefined,
-  nodeEnv: string | undefined,
-): string | undefined {
-  if (nodeEnv !== 'development' && nodeEnv !== 'test') return undefined;
-  if (typeof token !== 'string' || !token.startsWith('dev:')) return undefined;
-  const userId = token.slice(4);
-  return userId.length > 0 && userId.length <= USER_ID_MAX ? userId : undefined;
 }
 
 function generateRoomCode(): string {
@@ -293,6 +279,54 @@ export class TrucoRoom extends Room<{ state: TableState }> {
 
   constructor(private readonly config: TrucoRoomConfig = {}) {
     super();
+    this.installReservationGuard();
+  }
+
+  /**
+   * Admissão ANTES de reservar assento. O `static onAuth` não sabe qual sala será alvo (`joinById`
+   * não passa o id), então a checagem de "quem pode ocupar" fica aqui, no `_reserveSeat` do core (a
+   * única porta de reserva, também usada por `allowReconnection`, que passa direto). Recusa, sem
+   * gastar vaga nem prender timeout de reserva: banido; dono de assento que não está com bot; estranho
+   * com a série em andamento (inclusive assento de bot). O dono do assento do bot retoma pelo MESMO
+   * `userId`. `onJoin` repete as regras como segunda barreira.
+   */
+  private installReservationGuard(): void {
+    type Reserve = (
+      sessionId: string,
+      joinOptions: unknown,
+      authData: unknown,
+      seconds?: number,
+      allowReconnection?: boolean,
+      devModeReconnectionToken?: string,
+    ) => Promise<boolean>;
+    const host = this as unknown as { _reserveSeat: Reserve };
+    const original = host._reserveSeat.bind(this);
+    host._reserveSeat = (
+      sessionId,
+      joinOptions,
+      authData,
+      seconds,
+      allowReconnection,
+      devToken,
+    ) => {
+      if (allowReconnection !== true && !this.mayReserve(authData)) return Promise.resolve(false);
+      return original(sessionId, joinOptions, authData, seconds, allowReconnection, devToken);
+    };
+  }
+
+  private mayReserve(authData: unknown): boolean {
+    const auth = authData as Partial<JoinAuth> | undefined;
+    if (auth === undefined || auth === null || typeof auth.userId !== 'string') return false;
+    if (this.bannedUsers.has(auth.userId)) return false;
+    for (const [seat, userId] of this.userBySeat) {
+      if (userId !== auth.userId) continue;
+      return (
+        this.series !== null &&
+        this.botSeats.has(seat) &&
+        (this.reconnectCount.get(seat) ?? 0) < this.maxReconnects()
+      );
+    }
+    return this.series === null;
   }
 
   override onCreate(options: unknown): void {
@@ -312,16 +346,44 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   /**
-   * TODO(2G): trocar por validação de JWT (o `userId` virá do token, nunca do payload). Ver `devAuth`.
-   *
    * Autenticação ESTÁTICA, não de instância: no `@colyseus/core` 0.18 o `onAuth` de instância só roda
    * DEPOIS de `onCreate`, então `create`/`joinOrCreate` criariam a sala sem credencial. O `static
    * onAuth(token, options, context)` roda no matchmaker ANTES de criar a sala ou reservar assento
    * (`create`, `join`, `joinById`, `joinOrCreate`). O que ele devolve vira `client.auth` e chega ao
    * `onJoin(client, options, auth)`. Lançar `ServerError` aborta a requisição sem criar sala.
+   *
+   * A credencial é SÓ o cabeçalho `Authorization: Bearer <JWT de acesso>` do POST de matchmaking (lido
+   * de `context.headers`; o `token` do core pode vir da query do WebSocket e é ignorado). Usuário,
+   * apelido e avatar vêm do banco. O `onAuth` do core NÃO é chamado sem contexto de requisição
+   * (reserva criada por fora do matchmaker HTTP): `onJoin` recusa `auth` ausente.
    */
-  static override async onAuth(_token: string, options: unknown): Promise<JoinAuth> {
-    return devAuth(options, process.env.NODE_ENV);
+  static override async onAuth(
+    _token: string | undefined,
+    options: unknown,
+    context?: AuthContext,
+  ): Promise<JoinAuth> {
+    const deps = getRoomAuth();
+    if (deps === null) throw new ServerError(401, 'UNAUTHORIZED');
+    const bearer = bearerFromHeader(context?.headers?.get('authorization'));
+    if (bearer === undefined) {
+      if (deps.allowDevAuth) return devAuth(options, process.env.NODE_ENV);
+      throw new ServerError(401, 'UNAUTHORIZED');
+    }
+    if (deps.auth === null || deps.users === null) throw new ServerError(401, 'UNAUTHORIZED');
+    let userId: string;
+    try {
+      userId = (await deps.auth.authenticateAccess(bearer)).userId;
+    } catch {
+      throw new ServerError(401, 'UNAUTHORIZED');
+    }
+    const user = await deps.users.findById(userId);
+    if (user === null) throw new ServerError(401, 'UNAUTHORIZED');
+    const avatar = await deps.users.getAvatar(user.id);
+    return {
+      userId: user.id,
+      nickname: user.nickname,
+      avatar: avatar === null ? '{}' : JSON.stringify(avatar),
+    };
   }
 
   override onJoin(client: Client, _options: unknown, auth: JoinAuth | undefined): void {
@@ -346,7 +408,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.seatPresence.set(seat, 'online');
     setPlayer(this.state, seat, {
       nickname: auth.nickname,
-      avatar: '{}',
+      avatar: auth.avatar ?? '{}',
       status: 'connected',
       isBot: false,
     });
@@ -403,7 +465,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const seat = this.seatBySession.get(client.sessionId);
     const auth = client.auth as JoinAuth | undefined;
     if (seat === undefined || auth === undefined || this.userBySeat.get(seat) !== auth.userId) {
+      // Não deveria ocorrer (o guard do upgrade confere o dono): trata como violação. Marca o assento
+      // como expulso (sem nova janela; o bot assume) e bane do recinto quem se apresentou como outro.
       log.error('truco: reconexão com assento inconsistente', { room: this.roomId });
+      if (seat !== undefined) this.expelledSeats.add(seat);
+      const owner = seat === undefined ? undefined : this.userBySeat.get(seat);
+      if (typeof auth?.userId === 'string' && auth.userId !== owner) {
+        this.bannedUsers.add(auth.userId);
+      }
       client.leave(POLICY_CLOSE_CODE);
       return;
     }
@@ -477,6 +546,19 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const seat = this.seatBySession.get(sessionId);
     if (seat === undefined || userId === undefined) return false;
     return this.userBySeat.get(seat) === userId;
+  }
+
+  /**
+   * Dono do token de reconexão: a identidade do `POST /matchmake/reconnect` (JWT já validado pelo
+   * wrapper em `server.ts`, que o core não repassa à sala) tem de ser a do assento da sessão a que o
+   * token pertence. Token desconhecido/de cliente conectado: `false`.
+   */
+  authorizeReconnectionToken(reconnectionToken: string, userId: string): boolean {
+    const reconnections = (
+      this as unknown as { _reconnections?: Record<string, [string, unknown] | undefined> }
+    )._reconnections;
+    const sessionId = reconnections?.[reconnectionToken]?.[0];
+    return sessionId !== undefined && this.authorizeReconnect(sessionId, userId);
   }
 
   /**

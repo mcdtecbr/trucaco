@@ -139,7 +139,7 @@ beforeAll(async () => {
   restoreLog = setLogSink((level, msg, fields) => {
     logLines.push(JSON.stringify({ level, msg, ...fields }));
   });
-  const server = buildColyseusServer({ ...FAST, rngSeed: 1 });
+  const server = buildColyseusServer({ ...FAST, rngSeed: 1 }, { allowDevAuth: true });
   for (const [name, cfg] of Object.entries(VARIANTS)) defineTrucoRoom(server, cfg, name);
   t = await boot(server);
 });

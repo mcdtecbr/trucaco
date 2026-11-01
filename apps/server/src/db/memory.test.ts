@@ -57,6 +57,18 @@ const finished = (a: string, b: string, c: string | null, d: string | null): Fin
   });
 
 describe('repositórios em memória (espelham as regras do SQL)', () => {
+  it('updateNickname: troca, repete só o próprio, 409 sem diferenciar caixa e usuário inexistente', async () => {
+    const { users } = createMemoryRepositories();
+    const a = await users.createGuest({ providerSubject: 's1', nickname: 'Gil' });
+    const b = await users.createGuest({ providerSubject: 's2', nickname: 'Hugo' });
+    await users.updateNickname(a.id, 'Gilberto');
+    expect((await users.findById(a.id))?.nickname).toBe('Gilberto');
+    await users.updateNickname(a.id, 'gilberto');
+    await expect(users.updateNickname(b.id, 'GILBERTO')).rejects.toBeInstanceOf(NicknameTakenError);
+    await expect(users.updateNickname(b.id, 'a b')).rejects.toBeInstanceOf(InvalidInputError);
+    await expect(users.updateNickname(GHOST, 'Fantasma')).rejects.toBeInstanceOf(InvalidInputError);
+  });
+
   it('apelido único sem diferenciar caixa, tamanho e provider', async () => {
     const { users } = createMemoryRepositories();
     const ana = await users.createGuest({ providerSubject: 's1', nickname: 'Ana' });

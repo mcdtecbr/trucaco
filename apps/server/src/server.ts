@@ -1,12 +1,35 @@
 import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Server } from '@colyseus/core';
+import { Server, ServerError, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { MAX_MESSAGE_BYTES } from '@trucaco/protocol';
+import type { AuthService } from './auth/authService';
+import { DEFAULT_LIMITS, type RestLimits } from './auth/config';
+import type { UserRepository } from './db/types';
+import { installBaseMiddleware, mountFallbacks, mountRest } from './http/rest';
 import { buildHealth } from './index';
+import { SlidingWindowLimiter, clientKey } from './rateLimit';
 import { reconnectUpgradeGuard } from './rooms/reconnectGuard';
-import { defineTrucoRoom } from './rooms/TrucoRoom';
+import { configureRoomAuth, identityFromToken, tokenFromHeaders } from './rooms/roomAuth';
+import { TrucoRoom, defineTrucoRoom } from './rooms/TrucoRoom';
 import type { TrucoRoomConfig } from './rooms/TrucoRoom';
+
+export { SlidingWindowLimiter };
+
+/** Dependências de auth/REST. Sem `auth`+`users` não há rotas `/auth` nem `/me` e nenhuma entrada em sala. */
+export interface ServerDeps {
+  readonly auth?: AuthService;
+  readonly users?: UserRepository;
+  /** Origens CORS permitidas (lista exata). Vazio = nenhuma. */
+  readonly corsOrigins?: readonly string[];
+  readonly limits?: Partial<RestLimits>;
+  readonly trustProxy?: boolean;
+  /**
+   * Aceita `devAuth` (userId/apelido do payload e token `dev:<id>`). SÓ com `NODE_ENV`
+   * development/test, senão lança. Nunca ligado por padrão.
+   */
+  readonly allowDevAuth?: boolean;
+}
 
 export interface CreateServerOptions {
   /** Porta TCP. 0 pede uma porta efêmera ao sistema (útil em testes). */
@@ -15,6 +38,8 @@ export interface CreateServerOptions {
   room?: TrucoRoomConfig;
   /** Limite por IP em `POST /matchmake/*` (criar/entrar). Só o servidor configura. */
   matchmakeLimit?: Partial<MatchmakeLimitConfig>;
+  /** Auth e REST (JWT, refresh, `/me`). */
+  deps?: ServerDeps;
 }
 
 export interface MatchmakeLimitConfig {
@@ -36,47 +61,8 @@ export const DEFAULT_MATCHMAKE_LIMIT: MatchmakeLimitConfig = {
   trustProxy: false,
 };
 
-/** Janela deslizante em memória: IP -> instantes das requisições recentes. */
-export class SlidingWindowLimiter {
-  private readonly hits = new Map<string, number[]>();
-
-  constructor(
-    private readonly max: number,
-    private readonly windowMs: number,
-  ) {}
-
-  /** Registra uma requisição; `false` se estourou o limite (a requisição NÃO é contada). */
-  allow(key: string, now: number = Date.now()): boolean {
-    const recent = (this.hits.get(key) ?? []).filter((t) => now - t < this.windowMs);
-    if (recent.length >= this.max) {
-      this.hits.set(key, recent);
-      return false;
-    }
-    recent.push(now);
-    this.hits.set(key, recent);
-    if (this.hits.size > 10_000) this.sweep(now);
-    return true;
-  }
-
-  private sweep(now: number): void {
-    for (const [key, times] of this.hits) {
-      if (times.every((t) => now - t >= this.windowMs)) this.hits.delete(key);
-    }
-  }
-}
-
 const LIMITED_PATH = '/__matchmake_rate_limited';
 const limited = new WeakSet<IncomingMessage>();
-
-function clientKey(req: IncomingMessage, trustProxy: boolean): string {
-  if (trustProxy) {
-    const xff = req.headers['x-forwarded-for'];
-    const raw = Array.isArray(xff) ? xff.join(',') : xff;
-    const last = raw?.split(',').at(-1)?.trim();
-    if (last !== undefined && last !== '') return last;
-  }
-  return req.socket.remoteAddress ?? 'unknown';
-}
 
 /**
  * Limite por IP no matchmaking. O `POST /matchmake/*` é atendido pelo roteador do Colyseus, ANTES do
@@ -109,15 +95,28 @@ export interface RunningServer {
  * Monta (sem escutar) o Colyseus com `GET /health` e a sala `truco`. Separado de `createServer`
  * para os testes de sala (`@colyseus/testing` faz o `listen`).
  */
-export function buildColyseusServer(room: TrucoRoomConfig = {}): Server {
+export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps = {}): Server {
+  // Auth das salas: registrada ANTES de qualquer entrada. Sem `auth`+`users` nada entra (fail-closed).
+  configureRoomAuth({
+    auth: deps.auth ?? null,
+    users: deps.users ?? null,
+    allowDevAuth: deps.allowDevAuth === true,
+  });
+  restrictMatchmakeCors(deps.corsOrigins ?? []);
+  guardMatchmakeReconnect();
   const colyseus = new Server({
     // Teto de tamanho por mensagem do cliente (o `ws` fecha a conexão acima disso).
-    // `beforeUpgrade`: o core 0.18 não reautentica na reconexão; o guard exige o `userId` do assento.
+    // `beforeUpgrade`: o core 0.18 não reautentica na reconexão; o guard valida o JWT e exige que o
+    // `userId` seja o dono do assento. Subprotocolo `trucaco.bearer` (browsers não põem cabeçalhos).
     transport: new WebSocketTransport({
       maxPayload: MAX_MESSAGE_BYTES,
       beforeUpgrade: reconnectUpgradeGuard,
     }),
     express: (app) => {
+      installBaseMiddleware(app, {
+        corsOrigins: deps.corsOrigins ?? [],
+        hsts: process.env.NODE_ENV === 'production',
+      });
       app.get('/health', (_req, res) => {
         res.json(buildHealth());
       });
@@ -127,8 +126,19 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}): Server {
           return;
         }
         res.setHeader('Retry-After', '60');
-        res.status(429).json({ error: 'RATE_LIMITED' });
+        res.status(429).json({ error: { code: 'RATE_LIMITED' } });
       });
+      if (deps.auth !== undefined && deps.users !== undefined) {
+        mountRest(app, {
+          auth: deps.auth,
+          users: deps.users,
+          limits: { ...DEFAULT_LIMITS, ...deps.limits },
+          corsOrigins: deps.corsOrigins ?? [],
+          trustProxy: deps.trustProxy === true,
+          hsts: false,
+        });
+      }
+      mountFallbacks(app);
     },
     // Os sinais são tratados por quem chama (main.ts), não pelo Colyseus.
     gracefullyShutdown: false,
@@ -138,13 +148,83 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}): Server {
   return colyseus;
 }
 
+/**
+ * CORS do `/matchmake/*` (o core usa `*` com credenciais por padrão): só as origens da lista. A API usa
+ * `Authorization: Bearer`, sem cookies. Estado do core, global ao processo (um servidor por processo).
+ */
+function restrictMatchmakeCors(origins: readonly string[]): void {
+  const allowed = new Set(origins);
+  const controller = matchMaker.controller as unknown as {
+    DEFAULT_CORS_HEADERS: Record<string, string>;
+    getCorsHeaders: (headers: Headers) => Record<string, string>;
+  };
+  controller.DEFAULT_CORS_HEADERS = {
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Max-Age': '600',
+  };
+  controller.getCorsHeaders = (headers) => {
+    const origin = headers.get('origin');
+    const out: Record<string, string> = {};
+    if (origin !== null && allowed.has(origin)) {
+      out['Access-Control-Allow-Origin'] = origin;
+      out['Vary'] = 'Origin';
+    }
+    return out;
+  };
+}
+
+/**
+ * `POST /matchmake/reconnect/<roomId>` não passa identidade ao `checkReconnectionToken` da sala (só o
+ * token). Aqui, antes do core, o JWT de acesso é validado (401 se ausente/expirado/inválido: o cliente
+ * renova e tenta de novo) e, se a sala for local, o token de reconexão tem de ser de um assento do
+ * mesmo `userId` (403). O upgrade do WebSocket repete a checagem (`reconnectUpgradeGuard`).
+ */
+function guardMatchmakeReconnect(): void {
+  const controller = matchMaker.controller as unknown as {
+    invokeMethod: (
+      method: string,
+      roomName: string,
+      clientOptions: Record<string, unknown> | undefined,
+      authOptions: { headers?: Headers } | undefined,
+    ) => Promise<unknown>;
+    [WRAPPED]?: boolean;
+  };
+  if (controller[WRAPPED] === true) return;
+  controller[WRAPPED] = true;
+  const original = controller.invokeMethod.bind(controller);
+  controller.invokeMethod = async (method, roomName, clientOptions, authOptions) => {
+    if (method === 'reconnect') {
+      const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
+      if (!identity.ok) throw new ServerError(401, 'UNAUTHORIZED');
+      let target: unknown;
+      try {
+        target = matchMaker.getLocalRoomById(roomName);
+      } catch {
+        target = undefined;
+      }
+      const token = clientOptions?.['reconnectionToken'];
+      if (
+        target instanceof TrucoRoom &&
+        (typeof token !== 'string' || !target.authorizeReconnectionToken(token, identity.userId))
+      ) {
+        throw new ServerError(403, 'FORBIDDEN');
+      }
+    }
+    return original(method, roomName, clientOptions, authOptions);
+  };
+}
+
+const WRAPPED = Symbol.for('trucaco.matchmakeReconnectGuard');
+
 /** Sobe Colyseus (WebSocketTransport + express) com `GET /health` e a sala `truco`. */
 export async function createServer({
   port,
   room,
   matchmakeLimit,
+  deps,
 }: CreateServerOptions): Promise<RunningServer> {
-  const colyseus = buildColyseusServer(room);
+  const colyseus = buildColyseusServer(room, deps);
   const limit = { ...DEFAULT_MATCHMAKE_LIMIT, ...matchmakeLimit };
   // O callback roda logo após o Colyseus registrar o listener dele; o nosso entra à frente.
   await colyseus.listen(port, undefined, undefined, () => attachMatchmakeLimit(colyseus, limit));

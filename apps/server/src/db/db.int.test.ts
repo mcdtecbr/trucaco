@@ -190,6 +190,21 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       expect(await users.findByProvider('apple', 'abc')).toBeNull();
     });
 
+    it('updateNickname: troca, repete só o próprio, 409 sem diferenciar caixa e usuário inexistente', async () => {
+      const a = await guest('Gil');
+      const b = await guest('Hugo');
+      await users.updateNickname(a.id, 'Gilberto');
+      expect((await users.findById(a.id))?.nickname).toBe('Gilberto');
+      await users.updateNickname(a.id, 'gilberto');
+      await expect(users.updateNickname(b.id, 'GILBERTO')).rejects.toBeInstanceOf(
+        NicknameTakenError,
+      );
+      await expect(users.updateNickname(b.id, 'a b')).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(
+        users.updateNickname('00000000-0000-4000-8000-000000000000', 'Fantasma'),
+      ).rejects.toBeInstanceOf(InvalidInputError);
+    });
+
     it('id é UUID aleatório e não guarda e-mail nem nome real', async () => {
       const a = await guest('Eva');
       const b = await guest('Fabi');

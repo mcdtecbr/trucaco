@@ -25,9 +25,33 @@ export function setLogSink(next: LogSink): () => void {
   };
 }
 
+/** Nomes de campo que nunca saem em log (token, hash, cabeçalho de auth, cookie, segredo, corpo de /auth). */
+const SENSITIVE_KEY =
+  /token|authorization|cookie|secret|password|passwd|hash|jwt|bearer|credential|body/i;
+/** Valor com cara de JWT (`eyJ...`.`...`.`...`) ou de Bearer: redigido mesmo em campo de nome inocente. */
+const SENSITIVE_VALUE = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*|Bearer\s+\S+/;
+export const REDACTED = '[REDACTED]';
+
+/** Defesa em profundidade: o logger redige campos sensíveis mesmo que um chamador os passe por engano. */
+export function redact(fields: LogFields): LogFields {
+  const out: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] =
+      SENSITIVE_KEY.test(key) || (typeof value === 'string' && SENSITIVE_VALUE.test(value))
+        ? REDACTED
+        : value;
+  }
+  return out;
+}
+
+const emit =
+  (level: LogLevel) =>
+  (msg: string, fields: LogFields = {}): void =>
+    sink(level, msg, redact(fields));
+
 export const log = {
-  debug: (msg: string, fields: LogFields = {}): void => sink('debug', msg, fields),
-  info: (msg: string, fields: LogFields = {}): void => sink('info', msg, fields),
-  warn: (msg: string, fields: LogFields = {}): void => sink('warn', msg, fields),
-  error: (msg: string, fields: LogFields = {}): void => sink('error', msg, fields),
+  debug: emit('debug'),
+  info: emit('info'),
+  warn: emit('warn'),
+  error: emit('error'),
 };

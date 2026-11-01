@@ -127,6 +127,8 @@ export interface UserRepository {
   findById(id: string): Promise<UserRecord | null>;
   findByProvider(provider: AuthProviderId, providerSubject: string): Promise<UserRecord | null>;
   touchLastSeen(id: string, at: Date): Promise<void>;
+  /** Troca o apelido (`validateNickname`). `NicknameTakenError` se já existe (sem diferenciar caixa); `InvalidInputError` se inválido ou usuário inexistente. */
+  updateNickname(id: string, nickname: string): Promise<void>;
 
   /** `AvatarParts` como JSON (objeto plano, até 32 chaves, valores escalares curtos); o significado das partes é do servidor (2G). */
   getAvatar(userId: string): Promise<JsonObject | null>;
