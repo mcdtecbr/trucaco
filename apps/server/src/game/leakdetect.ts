@@ -5,24 +5,84 @@
  * A "verdade" vem do `SeriesState` (com as mãos reais); o JSON é o estado como UM cliente o decodificou.
  * Nada aqui usa `expect`: devolve a lista de violações para o chamador afirmar `toEqual([])`.
  */
-import { teamOf } from '@trucaco/rules';
+import { RANKS, SUITS, teamOf } from '@trucaco/rules';
 import type { Card, PublicGameEvent, SeriesState, Seat } from '@trucaco/rules';
-import { legalActionIds } from './projection';
+import { legalActionIds, projectState } from './projection';
+import { createTableState } from './schema';
 
 export const key = (c: Card): string => `${c.rank}${c.suit}`;
 
-/** Varre o JSON decodificado e junta todo objeto com cara de carta (rank e suit preenchidos). */
+/** O que o detector precisa de um `Decoder`: o mapa de refs que ele guarda. */
+export interface RefHolder {
+  readonly root: { readonly refs: ReadonlyMap<number, unknown> };
+}
+
+const RANK_SET: ReadonlySet<string> = new Set<string>(RANKS);
+const SUIT_SET: ReadonlySet<string> = new Set<string>(SUITS);
+const SYMBOL_SUIT: Record<string, Card['suit']> = {
+  '♣': 'paus',
+  '♥': 'copas',
+  '♠': 'espadas',
+  '♦': 'ouros',
+};
+/**
+ * Carta embutida em texto: `3paus`, `Kouros`, `play:3paus`, `3 de paus`, `3-paus`, `A_espadas`, `7♦`.
+ * O rank não pode colar em letra/dígito antes (evita `13paus`, `Rocouros`).
+ */
+const CARD_IN_TEXT = new RegExp(
+  `(?<![A-Za-z0-9])(${RANKS.join('|')})(?:[\\s_-]*(?:de[\\s_-]+)?(${SUITS.join('|')})(?![a-z])|([♣♥♠♦]))`,
+  'g',
+);
+
+/** Cartas citadas dentro de um texto qualquer. */
+export function cardsInText(text: string): Card[] {
+  const out: Card[] = [];
+  for (const m of text.matchAll(CARD_IN_TEXT)) {
+    const suit = (m[2] ?? SYMBOL_SUIT[m[3] ?? '']) as Card['suit'] | undefined;
+    if (suit !== undefined) out.push({ rank: m[1] as Card['rank'], suit });
+  }
+  return out;
+}
+
+/**
+ * Varre o JSON decodificado e junta toda carta que o cliente consegue ler:
+ * - objeto com campos `rank`/`suit` (ou qualquer par de campos irmãos cujo valor é um rank e um
+ *   naipe, como `viraRank`/`viraSuit` ou nomes inventados);
+ * - carta embutida em QUALQUER string (valores, itens de array de string, chaves de mapa).
+ */
 export function sightings(node: unknown, path: string, out: { path: string; card: Card }[]): void {
+  if (typeof node === 'string') {
+    for (const card of cardsInText(node)) out.push({ path, card });
+    return;
+  }
   if (Array.isArray(node)) {
     node.forEach((n, i) => sightings(n, `${path}[${i}]`, out));
     return;
   }
   if (node === null || typeof node !== 'object') return;
-  const o = node as Record<string, unknown>;
-  if (typeof o.rank === 'string' && typeof o.suit === 'string' && o.rank !== '' && o.suit !== '') {
-    out.push({ path, card: { rank: o.rank as Card['rank'], suit: o.suit as Card['suit'] } });
+  const entries = Object.entries(node as Record<string, unknown>);
+  const ranks = entries.filter(([, v]) => typeof v === 'string' && RANK_SET.has(v));
+  const suits = entries.filter(([, v]) => typeof v === 'string' && SUIT_SET.has(v));
+  for (const [rk, rv] of ranks) {
+    for (const [sk, sv] of suits) {
+      const card = { rank: rv as Card['rank'], suit: sv as Card['suit'] };
+      out.push({ path: `${path}.{${rk},${sk}}`, card });
+    }
   }
-  for (const [k, v] of Object.entries(o)) sightings(v, `${path}.${k}`, out);
+  for (const [k, v] of entries) {
+    sightings(k, `${path}.<chave ${k}>`, out);
+    sightings(v, `${path}.${k}`, out);
+  }
+}
+
+/** Mesma varredura sobre TODOS os refs que o decoder guarda (inclusive os soltos, fora da árvore). */
+export function refSightings(decoder: RefHolder): { path: string; card: Card }[] {
+  const out: { path: string; card: Card }[] = [];
+  for (const [id, ref] of decoder.root.refs) {
+    const r = ref as { toJSON?: () => unknown };
+    sightings(typeof r.toJSON === 'function' ? r.toJSON() : ref, `ref#${id}`, out);
+  }
+  return out;
 }
 
 /** Cartas citadas em ids de ação (`play:3paus`, `playCovered:Kouros`). */
@@ -83,6 +143,8 @@ export interface LeakOptions {
    * verificar patches intermediários (só a ausência de carta proibida e a forma de `privates`).
    */
   readonly exact?: boolean;
+  /** Se informado, varre também todos os refs do decoder (não só a árvore do `toJSON`). */
+  readonly decoder?: RefHolder;
 }
 
 /** Violações encontradas no JSON que o cliente do `seat` decodificou. Vazio = sem vazamento. */
@@ -98,6 +160,7 @@ export function leakViolations(
   const truth = truthFor(series, seat);
   const found: { path: string; card: Card }[] = [];
   sightings(json, 'state', found);
+  if (opts.decoder !== undefined) found.push(...refSightings(opts.decoder));
   for (const f of found) {
     if (truth.forbidden.has(key(f.card))) {
       bad.push(`${label}: carta proibida ${key(f.card)} em ${f.path}`);
@@ -154,4 +217,64 @@ export function eventViolations(event: unknown, viewer: Seat, label: string): st
   if (e.covered && e.seat !== viewer)
     return [`${label}: coberta alheia (assento ${e.seat}) revelada`];
   return [];
+}
+
+/** Parte do estado derivada da série (o que `projectState` recalcula a cada ação). */
+export function publicSig(json: unknown): string {
+  const j = json as { game?: unknown; hand?: unknown; series?: unknown };
+  return JSON.stringify([j.game, j.hand, j.series]);
+}
+
+/**
+ * Histórico da verdade do servidor, uma entrada por versão da série. Cada patch é conferido contra
+ * a versão que o gerou (achada pela parte pública do estado), e não contra a série atual: uma carta
+ * alheia que vazou num patch e foi aberta logo depois continua sendo vazamento.
+ */
+export class TruthLog {
+  private readonly versions: { series: SeriesState; pub: string }[] = [];
+  private readonly cursor = new Map<number, number>();
+
+  get size(): number {
+    return this.versions.length;
+  }
+
+  /**
+   * Registra uma versão. `serverJson` = `state.toJSON()` do servidor já projetado; sem ele, a parte
+   * pública esperada é recalculada com `projectState` num estado descartável.
+   */
+  record(series: SeriesState, serverJson?: unknown): void {
+    let pub: string;
+    if (serverJson !== undefined) pub = publicSig(serverJson);
+    else {
+      const scratch = createTableState('SCRATCH0', {
+        variant: 'paulista',
+        format: 'single',
+        ironHand: true,
+        visibility: 'private',
+      });
+      projectState(series, scratch);
+      pub = publicSig(scratch.toJSON());
+    }
+    this.versions.push({ series, pub });
+  }
+
+  /** Violações de um patch do `seat`, contra a verdade do instante em que ele foi emitido. */
+  violations(json: unknown, seat: Seat, label: string, opts: LeakOptions = {}): string[] {
+    const sig = publicSig(json);
+    const from = this.cursor.get(seat) ?? 0;
+    const idx = this.versions.findIndex((v, i) => i >= from && v.pub === sig);
+    if (idx < 0) {
+      return [
+        `${label}: estado do cliente não corresponde a nenhuma versão do servidor (desde ${from})`,
+      ];
+    }
+    this.cursor.set(seat, idx);
+    return leakViolations(
+      json,
+      (this.versions[idx] as { series: SeriesState }).series,
+      seat,
+      label,
+      opts,
+    );
+  }
 }

@@ -10,7 +10,8 @@ import type { ErrorCode, RoomOptions } from '@trucaco/protocol';
 import { mulberry32 } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eventViolations, leakViolations } from '../game/leakdetect';
+import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
+import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
 import { buildColyseusServer } from '../server';
 import { defineTrucoRoom, devAuth } from './TrucoRoom';
@@ -94,6 +95,8 @@ interface Game {
   /** Violações de vazamento vistas em QUALQUER patch ou evento recebido por qualquer cliente. */
   leaks: string[];
   patches: number;
+  /** Uma entrada por versão da série do servidor: cada patch é conferido contra a da sua época. */
+  log: TruthLog;
 }
 
 /** Converte ArraySchema do cliente em array simples. */
@@ -101,9 +104,28 @@ const plain = <T>(a: unknown): T[] => (a as { toJSON(): T[] }).toJSON();
 
 const json = (p: Player): unknown => (p.room.state as { toJSON(): unknown }).toJSON();
 
+/** Decoder real do cliente: permite varrer todos os refs, não só a árvore do `toJSON`. */
+const decoderOf = (p: Player): RefHolder =>
+  (p.room as unknown as { serializer: { decoder: RefHolder } }).serializer.decoder;
+
+/** Registra no `log` toda série atribuída à sala (a sala nunca é alterada: só observada). */
+function recordSeries(server: TrucoRoom, log: TruthLog): void {
+  let current = server.series;
+  Object.defineProperty(server, 'series', {
+    configurable: true,
+    enumerable: true,
+    get: () => current,
+    set: (v: typeof current) => {
+      current = v;
+      if (v !== null) log.record(v);
+    },
+  });
+}
+
 async function createGame(name: string, options: RoomOptions): Promise<Game> {
   const server = await t.createRoom<TrucoRoom>(name, options);
-  const game: Game = { server, players: [], leaks: [], patches: 0 };
+  const game: Game = { server, players: [], leaks: [], patches: 0, log: new TruthLog() };
+  recordSeries(server, game.log);
   for (let seat = 0; seat < 4; seat++) {
     const room = await t.connectTo<Room>(server as unknown as Room, {
       userId: `user-${seat}`,
@@ -118,12 +140,12 @@ async function createGame(name: string, options: RoomOptions): Promise<Game> {
     room.onMessage('turnTimer', (m: { seat: number; deadlineAt: number }) => p.turnTimers.push(m));
     room.onStateChange(() => {
       game.patches++;
-      const series = server.series;
-      if (series === null) return;
-      // A CADA patch recebido por ESTE cliente: nada proibido, só o bloco privado dele.
+      if (game.log.size === 0) return;
+      // A CADA patch recebido por ESTE cliente: nada proibido (árvore, strings e todos os refs do
+      // decoder), só o bloco privado dele, tudo contra a verdade da ÉPOCA do patch.
       game.leaks.push(
-        ...leakViolations(json(p), series, seat, `patch ${game.patches} assento ${seat}`, {
-          exact: false,
+        ...game.log.violations(json(p), seat, `patch ${game.patches} assento ${seat}`, {
+          decoder: decoderOf(p),
         }),
       );
     });
@@ -138,7 +160,9 @@ async function settle(game: Game, label: string): Promise<void> {
   let bad: string[] = [];
   while (Date.now() < end) {
     const series = game.server.series as SeriesState;
-    bad = game.players.flatMap((p) => leakViolations(json(p), series, p.seat, label));
+    bad = game.players.flatMap((p) =>
+      leakViolations(json(p), series, p.seat, label, { decoder: decoderOf(p) }),
+    );
     if (bad.length === 0) return;
     await sleep(2);
   }
@@ -692,8 +716,11 @@ describe('TrucoRoom: mensagens inválidas e erros', () => {
     const p = game.players[0] as Player;
     p.room.send('ready');
     p.room.send('chat', { scope: 'table', text: 'oi' });
+    // Sentinela: as mensagens são processadas em ordem, então qualquer erro das anteriores viria antes.
+    p.room.send('play', { card: 1 });
+    await until(() => p.errors.length > 0, 'erro da sentinela');
     await sleep(60);
-    expect(p.errors).toEqual([]);
+    expect(p.errors).toEqual(['INVALID_PAYLOAD']);
     expect(game.server.series).toBe(series);
   });
 

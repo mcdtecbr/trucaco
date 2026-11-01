@@ -8,7 +8,7 @@ import {
 } from '@trucaco/rules';
 import type { Card, HandAction, SeriesState, Seat, VariantId } from '@trucaco/rules';
 import { describe, expect, it } from 'vitest';
-import { key, leakViolations } from './leakdetect';
+import { TruthLog, key, leakViolations } from './leakdetect';
 import { projectState } from './projection';
 import { PlayedCardSchema, createTableState } from './schema';
 import type { SeatPrivateNode } from './schema';
@@ -71,6 +71,9 @@ function simulate(sc: Scenario): { steps: number; saw: Set<string> } {
   });
   const sim = new WireSim(state);
   projectState(series, state);
+  // Cada patch é conferido contra a versão da verdade que o gerou, e varre os refs do decoder.
+  const log = new TruthLog();
+  log.record(series, state.toJSON());
   const clients = SEATS.map((s) => sim.connect(s));
   const saw = new Set<string>();
   let steps = 0;
@@ -81,11 +84,19 @@ function simulate(sc: Scenario): { steps: number; saw: Set<string> } {
     if (h.current.some((p) => p.covered) || h.tricks.some((t) => t.plays.some((p) => p.covered)))
       saw.add('covered');
     for (const c of clients) {
+      expect(
+        log.violations(
+          sim.json(c),
+          c.seat,
+          `seed ${sc.seed} passo ${steps} assento ${c.seat} (long)`,
+          { decoder: c.decoder },
+        ),
+      ).toEqual([]);
       checkClientView(
         sim.json(c),
         series,
         c.seat,
-        `seed ${sc.seed} passo ${steps} assento ${c.seat} (long)`,
+        `seed ${sc.seed} passo ${steps} assento ${c.seat} (long, série atual)`,
       );
       // Reconexão: view nova + estado completo a cada passo.
       checkClientView(
@@ -106,6 +117,7 @@ function simulate(sc: Scenario): { steps: number; saw: Set<string> } {
     series = r.state;
     steps++;
     projectState(series, state, { turnDeadlineAt: 1000 + steps });
+    log.record(series, state.toJSON());
     sim.flush();
     verify();
   }
