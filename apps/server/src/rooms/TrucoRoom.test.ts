@@ -3,6 +3,8 @@
  * UM `Server` por arquivo (o matchmaker é global). Variações de configuração do SERVIDOR (semente,
  * prazo, placar inicial) entram como nomes de sala extras; o cliente nunca as controla.
  */
+import { request } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
 import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
@@ -47,8 +49,16 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     ...FAST,
     rngSeed: 33,
     reconnectSeconds: 5,
-    botThinkMs: 900,
+    botThinkMs: 3000,
     turnTimeoutMs: 60_000,
+  },
+  'truco-rec-log': {
+    ...FAST,
+    rngSeed: 37,
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    eventLogMax: 2,
   },
   'truco-rec-abandon': {
     ...FAST,
@@ -1150,6 +1160,71 @@ describe('TrucoRoom: reconexão e bot de ausência (2E)', () => {
       assertNoLeaks(game);
     });
 
+    it('Host forjado com # ou ? não esconde a reconexão do guard (upgrade real)', async () => {
+      const game = await startedRec('truco-rec');
+      const victim = game.players[0] as Player;
+      await dropSeat(game, 0);
+      const port = ((t.server.transport.server as { address(): unknown }).address() as AddressInfo)
+        .port;
+      const tokenOfVictim = victim.room.reconnectionToken.split(':')[1] as string;
+      const path =
+        `/${matchMaker.processId}/${game.server.roomId}?sessionId=${victim.room.sessionId}` +
+        `&reconnectionToken=${tokenOfVictim}&_authToken=${encodeURIComponent(devToken(1))}`;
+      const upgrade = (host: string): Promise<number | 'upgrade'> =>
+        new Promise((resolve, reject) => {
+          const req = request({
+            host: '127.0.0.1',
+            port,
+            path,
+            headers: {
+              Host: host,
+              Connection: 'Upgrade',
+              Upgrade: 'websocket',
+              'Sec-WebSocket-Key': Buffer.from('0123456789abcdef').toString('base64'),
+              'Sec-WebSocket-Version': '13',
+            },
+          });
+          req.on('response', (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          });
+          req.on('upgrade', (_res, socket) => {
+            socket.destroy();
+            resolve('upgrade');
+          });
+          req.on('error', reject);
+          req.end();
+        });
+      // Controle: Host honesto + identidade errada -> 403 (guard vê a reconexão)
+      expect(await upgrade('localhost')).toBe(403);
+      // Hosts forjados: o guard antigo não via o token e deixava o upgrade passar
+      for (const host of ['x#', 'x?a=', 'x/y', 'x@y', 'a b', 'x#frag?reconnectionToken=1']) {
+        expect(await upgrade(host)).toBe(400);
+      }
+      expect(game.server.clients.length).toBe(3);
+      expect(statusOf(game, 0)).toBe('away');
+      const p = await rejoin(game, 0);
+      await until(() => statusOf(game, 0) === 'connected', 'dono reconectou');
+      expect(p.errors).toEqual([]);
+    });
+
+    it('POST /matchmake/reconnect com token de sessão CONECTADA não derruba a vítima', async () => {
+      const game = await startedRec('truco-rec');
+      const victim = game.players[1] as Player;
+      const tokenLive = victim.room.reconnectionToken;
+      for (const auth of [devToken(2), undefined]) {
+        await expect(reconnectWith(victim, auth)).rejects.toBeDefined();
+      }
+      // a própria identidade dela também não pode ser usada para derrubar o socket vivo
+      await expect(t.sdk.reconnect(tokenLive)).rejects.toBeDefined();
+      await sleep(150);
+      expect(game.server.clients.length).toBe(4);
+      expect(statusOf(game, 1)).toBe('connected');
+      expect(victim.room.connection.isOpen).toBe(true);
+      expect(game.server.authorizeReconnect(victim.room.sessionId, 'user-1')).toBe(true);
+      await settle(game, 'vítima intacta');
+    });
+
     it('devReconnectUserId só aceita dev:<userId> em development/test', () => {
       expect(devReconnectUserId('dev:ana', 'test')).toBe('ana');
       expect(devReconnectUserId('dev:ana', 'development')).toBe('ana');
@@ -1183,8 +1258,13 @@ describe('TrucoRoom: reconexão e bot de ausência (2E)', () => {
 
   it('(f3) reconectar antes de abandonMs desarma o cancelamento', async () => {
     const game = await startedRec('truco-rec-abandon');
+    const abandonTimer = (): unknown =>
+      (game.server as unknown as { abandonTimer: unknown }).abandonTimer;
     for (let s = 0; s < 4; s++) await dropSeat(game, s);
+    expect(abandonTimer()).not.toBeNull();
     await rejoin(game, 2);
+    await until(() => statusOf(game, 2) === 'connected', 'assento 2 de volta');
+    expect(abandonTimer()).toBeNull(); // falha se `clearAbandon` for removido
     await sleep(700);
     expect(game.server.series?.cancelled).toBe(false);
   });
@@ -1270,12 +1350,104 @@ describe('TrucoRoom: reconexão e bot de ausência (2E)', () => {
     });
   });
 
+  it('expulso por strikes não ganha janela de 60 s: o bot assume e ele não reentra', async () => {
+    const game = await startedRec('truco-rec');
+    const v = game.players[1] as Player;
+    const token = v.room.reconnectionToken;
+    v.room.reconnection.enabled = false;
+    for (let i = 0; i < 5; i++) v.room.send('play', { card: 1 });
+    v.gone = true;
+    // janela configurada: 5 s; bot em bem menos que isso
+    await until(() => statusOf(game, 1) === 'bot', 'bot assumiu o expulso', 1500);
+    await until(() => !game.server.locked, 'sala destrancada');
+    await sleep(30);
+    // não volta pelo token, nem por novo join com o mesmo userId
+    t.sdk.http.authToken = devToken(1);
+    try {
+      await expect(t.sdk.reconnect(token)).rejects.toBeDefined();
+    } finally {
+      t.sdk.http.authToken = undefined;
+    }
+    await expect(joinAgain(game, 1)).rejects.toThrow();
+    expect(statusOf(game, 1)).toBe('bot');
+    // os outros seguem o jogo normalmente
+    await drive(game, () => logCount(game, 'handDecided') > 0, 'mão decidida com o bot');
+  });
+
+  it('sala em série com bot não volta à lista pública: joinOrCreate de estranho não dá ROOM_FULL', async () => {
+    const game = await startedRec('truco-rec');
+    const d = ((pending(game) as number) + 1) % 4;
+    const p = game.players[d] as Player;
+    p.gone = true;
+    await p.room.leave();
+    await until(() => statusOf(game, d) === 'bot', 'bot assumiu');
+    await until(() => !game.server.locked, 'sala destrancada');
+    // fora da lista pública: o matchmaker não a oferece a `joinOrCreate`
+    const open = await matchMaker.query({ name: 'truco-rec', private: false, locked: false });
+    expect(open.map((r) => r.roomId)).not.toContain(game.server.roomId);
+    // e o estranho não toma ROOM_FULL da sala em série (aqui falha ao CRIAR outra: opções de join
+    // não são opções de sala; o ponto é não casar com a sala em andamento)
+    await expect(
+      t.sdk.joinOrCreate('truco-rec', { ...OPTS, userId: 'estranho', nickname: 'Estranho' }),
+    ).rejects.toThrow(/INVALID_OPTIONS/);
+    expect(game.server.clients.length).toBe(3);
+    // o dono ainda reentra por joinById
+    await joinAgain(game, d);
+    await until(() => statusOf(game, d) === 'connected', 'dono de volta');
+  });
+
+  it('reconectar não estende o prazo do turno', async () => {
+    const game = await startedRec('truco-rec');
+    const d = pending(game) as number;
+    const turn = (): { seat: number; deadlineAt: number } =>
+      (game.server as unknown as { currentTurn: { seat: number; deadlineAt: number } }).currentTurn;
+    const original = turn().deadlineAt;
+    await dropSeat(game, d);
+    await sleep(120);
+    const p = await rejoin(game, d);
+    await until(() => p.turnTimers.length > 0, 'turnTimer ao reconectar');
+    expect(turn()).toEqual({ seat: d, deadlineAt: original });
+    expect(p.turnTimers.at(-1)).toEqual({ seat: d, deadlineAt: original });
+    expect((game.server.state as unknown as { turnDeadlineAt: number }).turnDeadlineAt).toBe(
+      original,
+    );
+  });
+
+  it('eventLog com teto: descartados contam em eventsEvicted e lacuna não gera replay parcial', async () => {
+    const game = await startedRec('truco-rec-log');
+    const total = (): number => game.server.eventsEvicted + game.server.eventLog.length;
+    const q = ((pending(game) as number) + 3) % 4;
+    await dropSeat(game, q);
+    const before = total();
+    while (pending(game) !== q) {
+      const actor = actorOf(game);
+      if (actor === null) throw new Error('sem ator');
+      const n = total();
+      const msg = toMessage(quietPolicy(actor.ids, mulberry32(1)));
+      if (msg.payload === undefined) actor.player.room.send(msg.type);
+      else actor.player.room.send(msg.type, msg.payload);
+      await until(() => total() > n, 'jogada processada');
+      await settle(game, 'após jogada');
+    }
+    expect(total() - before).toBeGreaterThanOrEqual(3);
+    expect(game.server.eventLog.length).toBeLessThanOrEqual(2);
+    expect(game.server.eventsEvicted).toBeGreaterThan(0);
+    const p = await rejoin(game, q);
+    await until(() => (p.room.state as { phase: string }).phase === 'playing', 'estado completo');
+    await settle(game, 'após lacuna');
+    await sleep(50);
+    expect(p.events).toEqual([]); // sem replay parcial; vale o estado completo
+    const mine = Object.values((json(p) as Privates).privates)[0];
+    expect(mine?.legalActions.length).toBeGreaterThan(0);
+    assertNoLeaks(game);
+  });
+
   it('(i) o dono volta com o bot agendado: sem ação dupla no turno', async () => {
     const game = await startedRec('truco-rec-slow');
     const d = pending(game) as number;
     const p0 = game.players[d] as Player;
     p0.gone = true;
-    await p0.room.leave(); // bot agendado para daqui a 900 ms
+    await p0.room.leave(); // bot agendado para daqui a 3 s
     await until(() => statusOf(game, d) === 'bot', 'bot agendado');
     await until(() => !game.server.locked, 'sala destrancada');
     await sleep(30);
@@ -1285,10 +1457,12 @@ describe('TrucoRoom: reconexão e bot de ausência (2E)', () => {
     const p = await joinAgain(game, d);
     await until(() => statusOf(game, d) === 'connected', 'dono de volta');
     expect(pending(game)).toBe(d);
+    // o bot agendado (3 s) foi cancelado na retomada, sem depender de corrida de relógio
+    expect((game.server as unknown as { botTimer: unknown }).botTimer).toBeNull();
     // o dono joga a vez dele antes de o bot disparar
     await settle(game, 'dono de volta');
     expect(await step(game, quietPolicy, mulberry32(1), 'dono joga')).toBe(true);
-    await sleep(1300); // bem além do atraso do bot
+    await sleep(300);
     const after = game.server.eventLog.filter(
       (e) => e.event.type === 'cardPlayed' && e.event.seat === d,
     ).length;

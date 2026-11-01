@@ -86,6 +86,15 @@ export const MAX_MESSAGES_PER_SECOND = 30;
 export const DEFAULT_BOT_THINK_MS = 600;
 /** Reconexões (e retomadas por novo join) por assento na partida; acima disso o bot fica com a cadeira. */
 export const DEFAULT_MAX_RECONNECTS = 20;
+/**
+ * Teto do `eventLog` (replay de reconexão). DECISÃO: o log é descartável, só serve a reenviar eventos
+ * perdidos; acima do teto descartam-se os mais antigos e `eventsEvicted` conta quantos. Se o replay
+ * pedido já foi descartado (lacuna), nada é reenviado: o cliente já recebeu o estado completo e trata
+ * o salto de `seq` como resincronização. A gravação em `matches` (2H) NÃO deve ler este log no fim:
+ * deve persistir de forma incremental a cada evento (ponto único: `emitEvents`) ou usar `eventsEvicted`
+ * para saber que houve perda. Um jogo real fica ordens de grandeza abaixo do teto.
+ */
+export const DEFAULT_EVENT_LOG_MAX = 5000;
 /** Expirações de turno seguidas que marcam o assento como ausente (`away`). */
 export const IDLE_TIMEOUTS = 2;
 
@@ -118,6 +127,8 @@ export interface TrucoRoomConfig {
   readonly abandonMs?: number;
   /** Teto de reconexões/retomadas por assento. Padrão `DEFAULT_MAX_RECONNECTS`. */
   readonly maxReconnects?: number;
+  /** Teto do `eventLog`. Padrão `DEFAULT_EVENT_LOG_MAX`. */
+  readonly eventLogMax?: number;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`; futuramente do JWT, bloco 2G). */
@@ -211,6 +222,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   series: SeriesState | null = null;
   /** Log de eventos em visão pública, para o bloco 2H gravar em `matches`. */
   readonly eventLog: LoggedEvent[] = [];
+  /** Quantos eventos antigos saíram do `eventLog` pelo teto (ver `DEFAULT_EVENT_LOG_MAX`). */
+  eventsEvicted = 0;
   /** Semente do RNG desta sala (gravada em `matches` pelo 2H para reprodução). */
   seed = 0;
 
@@ -240,6 +253,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly botSeats = new Set<Seat>();
   /** Assentos com socket caído e janela de reconexão aberta (`allowReconnection`). */
   private readonly droppedSeats = new Set<Seat>();
+  /** Assentos expulsos por abuso (strikes): a queda seguinte NÃO abre janela de reconexão. */
+  private readonly expelledSeats = new Set<Seat>();
+  /** `userId`s expulsos desta sala: não reentram (ban por sala, só em memória). */
+  private readonly bannedUsers = new Set<string>();
   /** Último `seq` de evento enviado ao socket do assento (base do replay na reconexão). */
   private readonly lastSeq = new Map<Seat, number>();
   /** Reconexões e retomadas por assento (teto `maxReconnects`). */
@@ -288,6 +305,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (auth === undefined || typeof auth.userId !== 'string') {
       throw new ServerError(401, 'UNAUTHORIZED');
     }
+    if (this.bannedUsers.has(auth.userId)) throw new ServerError(403, 'BANNED');
     // Quem já tem assento só volta ao PRÓPRIO assento, e só se o bot o ocupa (saída definitiva).
     for (const [owned, userId] of this.userBySeat) {
       if (userId === auth.userId) {
@@ -330,6 +348,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const seat = this.seatBySession.get(client.sessionId);
     if (seat === undefined) return;
     if (this.state.phase === 'waiting' || this.closing) return;
+    if (this.expelledSeats.has(seat)) {
+      // Expulso por abuso: sem janela (o core segue para `onLeave` e o bot assume).
+      log.info('truco: expulso, sem janela de reconexão', { room: this.roomId, seat });
+      return;
+    }
     if ((this.reconnectCount.get(seat) ?? 0) >= this.maxReconnects()) {
       // Sem direito a janela: o core segue direto para `onLeave` (bot imediato).
       log.warn('truco: teto de reconexões, sem janela', { room: this.roomId, seat });
@@ -430,6 +453,23 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return this.userBySeat.get(seat) === userId;
   }
 
+  /**
+   * `POST /matchmake/reconnect` chega aqui SEM identidade e, no core, token de um cliente CONECTADO
+   * faz `forciblyClose` dele (derrubar a vítima com um token vazado). Aqui só vale token de janela
+   * aberta (`allowReconnection`); cliente conectado nunca é derrubado por esta via. Escolhido em vez de
+   * interceptar a rota HTTP porque vale por qualquer caminho que chegue à sala e não depende do
+   * formato do request nem de reescrever o roteador do core. Custo: socket zumbi (queda ainda não
+   * detectada pelo ping) só reconecta depois que o servidor notar a queda. A reserva gerada aqui ainda
+   * passa pelo `reconnectUpgradeGuard` no upgrade do WebSocket.
+   */
+  override checkReconnectionToken(reconnectionToken: string): string {
+    // O tipo do core é `string`, mas o valor "sem direito" é `undefined` (ver `matchMaker.reconnect`).
+    if (this.clients.some((c) => c.reconnectionToken === reconnectionToken)) {
+      return undefined as unknown as string;
+    }
+    return super.checkReconnectionToken(reconnectionToken);
+  }
+
   // ---------------------------------------------------------------- presença e bot
 
   private maxReconnects(): number {
@@ -490,7 +530,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     this.afterRosterChange();
     const now = this.series;
-    if (now !== null && !isSeriesOver(now) && pendingSeat(now) === seat) this.sync();
+    // Só agenda o bot: o prazo do turno em andamento NÃO é reiniciado.
+    if (now !== null && !isSeriesOver(now) && pendingSeat(now) === seat) this.armBot(seat, now);
   }
 
   /** Dono do assento que o bot ocupa voltando por um novo join (mesmo `userId`). */
@@ -528,13 +569,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       };
       client.send('presence', msg);
     }
+    // Cancela o bot agendado SEM reiniciar o prazo: o `turnTimer` e o `deadlineAt` originais seguem
+    // valendo (reconectar não estende o turno). Ele já está armado para qualquer dono do turno.
     const series = this.series;
     if (series !== null && !isSeriesOver(series) && pendingSeat(series) === seat) {
-      // Cancela o bot agendado e dá ao jogador o relógio do turno.
-      this.sync();
-    } else if (this.currentTurn !== null) {
-      client.send('turnTimer', this.currentTurn);
+      this.botTimer?.clear();
+      this.botTimer = null;
     }
+    if (this.currentTurn !== null) client.send('turnTimer', this.currentTurn);
     this.afterRosterChange();
   }
 
@@ -547,6 +589,12 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    */
   private sendCatchUp(client: Client, seat: Seat): void {
     const from = this.lastSeq.get(seat) ?? this.seq;
+    const oldest = this.eventLog[0];
+    // Lacuna (eventos já descartados pelo teto): sem replay parcial; vale o estado completo.
+    if (oldest !== undefined && oldest.seq > from + 1) {
+      this.lastSeq.set(seat, this.seq);
+      return;
+    }
     for (const e of this.eventLog) {
       if (e.seq <= from) continue;
       const payload: EventPayload = { seq: e.seq, at: e.at, event: e.event };
@@ -630,6 +678,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       );
     }
     this.series = series;
+    // Em série a sala não pode voltar à lista pública (o `unlock` do bot a reexporia a estranhos para
+    // `joinOrCreate`, que daria ROOM_FULL). `joinById` ignora `private`: o dono ainda reentra.
+    this.setPrivate(true).catch((err: unknown) =>
+      log.error('truco: setPrivate falhou', { err: String(err) }),
+    );
     this.emitEvents(events);
     this.sync();
     log.info('truco: partida iniciada', { room: this.roomId, format: options.format });
@@ -743,6 +796,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.invalidAt.set(seat, recent);
     if (recent.length >= INVALID_PAYLOAD_LIMIT) {
       log.warn('truco: expulso por payload inválido repetido', { room: this.roomId, seat });
+      // Marca ANTES do `leave`: a queda cai em `onDrop`, que não pode abrir janela para o expulso.
+      this.expelledSeats.add(seat);
+      const userId = this.userBySeat.get(seat);
+      if (userId !== undefined) this.bannedUsers.add(userId);
       client.leave(POLICY_CLOSE_CODE);
     }
   }
@@ -850,6 +907,12 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       const seq = ++this.seq;
       const at = Date.now();
       this.eventLog.push({ seq, at, event: publicEvent(ev) });
+      const max = this.config.eventLogMax ?? DEFAULT_EVENT_LOG_MAX;
+      if (this.eventLog.length > max) {
+        const drop = this.eventLog.length - max;
+        this.eventLog.splice(0, drop);
+        this.eventsEvicted += drop;
+      }
       for (const client of this.clients) {
         const seat = this.seatBySession.get(client.sessionId);
         if (seat === undefined) continue;
@@ -886,16 +949,19 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const timeoutMs = this.config.turnTimeoutMs ?? TURN_TIMEOUT_MS;
     const deadlineAt = Date.now() + timeoutMs;
     this.turnTimer = this.clock.setTimeout(() => this.onTurnTimeout(seat), timeoutMs);
-    if (this.botSeats.has(seat)) {
-      // Bot de ausência: age logo (com um pequeno "pensar"); o timer acima é só a rede de segurança.
-      const scheduled = series;
-      const thinkMs = this.config.botThinkMs ?? DEFAULT_BOT_THINK_MS;
-      this.botTimer = this.clock.setTimeout(() => this.onBotTurn(seat, scheduled), thinkMs);
-    }
+    this.armBot(seat, series);
     projectState(series, this.state, { turnDeadlineAt: deadlineAt });
     this.currentTurn = { seat, deadlineAt };
     const msg: Omit<Extract<ServerMessage, { type: 'turnTimer' }>, 'type'> = { seat, deadlineAt };
     this.broadcast('turnTimer', msg);
+  }
+
+  /** Bot de ausência: age logo (com um pequeno "pensar"); o `turnTimer` é só a rede de segurança. */
+  private armBot(seat: Seat, scheduled: SeriesState): void {
+    if (!this.botSeats.has(seat)) return;
+    this.botTimer?.clear();
+    const thinkMs = this.config.botThinkMs ?? DEFAULT_BOT_THINK_MS;
+    this.botTimer = this.clock.setTimeout(() => this.onBotTurn(seat, scheduled), thinkMs);
   }
 
   /**
