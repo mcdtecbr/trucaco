@@ -187,6 +187,12 @@ Erros do banco: os repositórios relançam SÓ erros de domínio (`InvalidInputE
 
 Acesso: `src/db/` tem as interfaces `UserRepository` e `MatchRepository` (`types.ts`), a implementação Prisma (`prismaRepositories.ts`) e a implementação em memória para testes de sala (`memoryRepositories.ts`, `createMemoryRepositories()`).
 
+## CI
+
+`.github/workflows/ci.yml` tem dois jobs em paralelo. `verify`: format, lint, typecheck, test, build. `integration`: sobe `postgres:16.6-alpine` e `redis:7.4-alpine` como services (mesmas tags do `infra/docker-compose.yml`, com healthcheck), com credenciais descartáveis só do job e sem secrets; builda `protocol` e `rules`, roda `db:generate`, aplica as migrações no banco `trucaco_test` (`db:deploy`) e executa `test:int` com `TEST_DATABASE_URL` e `TEST_REDIS_URL` (DB lógico 15). O Redis já usa `noeviction` por padrão. O banco precisa ser UTF8 (a imagem oficial é; a migração usa normalização Unicode).
+
+Status: o workflow **não foi executado no GitHub**. A mesma sequência de comandos foi reproduzida localmente contra Postgres 16 e Redis 7 temporários (migrate deploy e 43 testes de integração verdes), mas sem Docker nem `act`.
+
 ## Comandos
 
 ```bash

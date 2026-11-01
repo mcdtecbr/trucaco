@@ -34,3 +34,64 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  # Integração do servidor com Postgres e Redis reais. Job separado: o `verify` continua rápido e os
+  # dois rodam em paralelo, em runners distintos (a porta fixa 2568 dos testes de sala não conflita).
+  # Credenciais abaixo são descartáveis, existem só dentro do job; nenhum secret é usado.
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: trucaco
+          POSTGRES_PASSWORD: ci_throwaway_only
+          POSTGRES_DB: trucaco_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trucaco -d trucaco_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      # O Redis 7.4 sobe com `maxmemory-policy noeviction` por padrão (sem maxmemory, nada é
+      # removido), então não precisa de command/config extra. O DB lógico 15 vem da URL de teste.
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://trucaco:ci_throwaway_only@localhost:5432/trucaco_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Os int importam @trucaco/protocol e @trucaco/rules via dist e o Prisma Client gerado.
+      - name: Build dos pacotes do workspace e Prisma Client
+        run: |
+          pnpm --filter @trucaco/protocol build
+          pnpm --filter @trucaco/rules build
+          pnpm --filter @trucaco/server db:generate
+
+      - name: Migrar o banco de teste
+        run: pnpm --filter @trucaco/server db:deploy
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+
+      - name: Testes de integração do servidor
+        run: pnpm --filter @trucaco/server test:int
