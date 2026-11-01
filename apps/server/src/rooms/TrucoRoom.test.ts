@@ -275,13 +275,18 @@ function wirePlayer(game: Game, p: Player): void {
   });
 }
 
-async function createGame(name: string, options: RoomOptions, count = 4): Promise<Game> {
+async function createGame(
+  name: string,
+  options: RoomOptions,
+  count = 4,
+  prefix = 'user',
+): Promise<Game> {
   const server = await t.createRoom<TrucoRoom>(name, options);
   const game: Game = { server, players: [], leaks: [], patches: 0, log: new TruthLog() };
   recordSeries(server, game.log);
   for (let seat = 0; seat < count; seat++) {
     const room = await t.connectTo<Room>(server as unknown as Room, {
-      userId: `user-${seat}`,
+      userId: `${prefix}-${seat}`,
       nickname: `Jogador ${seat}`,
     });
     const p: Player = {
@@ -933,7 +938,8 @@ describe('TrucoRoom: semente do RNG', () => {
   it('a semente fixa do servidor (nunca do cliente) reproduz as mesmas mãos', async () => {
     const a = await createGame('truco', OPTS);
     await until(() => a.server.series !== null, 'a');
-    const b = await createGame('truco', OPTS);
+    // Outros usuários: um userId só pode estar em uma mesa por vez (vínculo do lobby).
+    const b = await createGame('truco', OPTS, 4, 'outro');
     await until(() => b.server.series !== null, 'b');
     expect(a.server.seed).toBe(1);
     expect(JSON.stringify(a.server.series?.match.hand.hands)).toBe(

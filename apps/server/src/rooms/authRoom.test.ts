@@ -59,7 +59,10 @@ beforeAll(async () => {
     logLines.push(JSON.stringify({ level, msg, ...fields }));
   });
   // Porta própria: o `TrucoRoom.test.ts` usa a padrão (2568) e os arquivos rodam em paralelo.
-  t = await boot(buildColyseusServer(ROOM, { auth, users: repos.users }), 2579);
+  t = await boot(
+    buildColyseusServer(ROOM, { auth, users: repos.users, directMatchmake: true }),
+    2579,
+  );
 });
 afterEach(async () => {
   await t.cleanup();

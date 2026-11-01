@@ -36,6 +36,30 @@ export class SlidingWindowLimiter {
     return allowed;
   }
 
+  /** Registra um evento SEM checar o limite (contagem de falhas). Mesmo teto de chaves. */
+  record(key: string, now: number = Date.now()): void {
+    let recent = this.hits.get(key) ?? [];
+    this.hits.delete(key);
+    let expired = 0;
+    while (expired < recent.length && now - (recent[expired] as number) >= this.windowMs) expired++;
+    if (expired > 0) recent = recent.slice(expired);
+    recent.push(now);
+    this.hits.set(key, recent);
+    if (this.hits.size > this.maxKeys) {
+      const oldest = this.hits.keys().next();
+      if (oldest.done !== true) this.hits.delete(oldest.value);
+    }
+  }
+
+  /** Eventos dentro da janela, sem registrar nem reordenar a chave. */
+  count(key: string, now: number = Date.now()): number {
+    const recent = this.hits.get(key);
+    if (recent === undefined) return 0;
+    let n = 0;
+    for (const t of recent) if (now - t < this.windowMs) n++;
+    return n;
+  }
+
   /** Quantidade de chaves rastreadas (testes). */
   get size(): number {
     return this.hits.size;

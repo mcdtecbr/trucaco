@@ -23,8 +23,6 @@ import type { AuthContext, Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
   CHAT_COOLDOWN_MS,
-  ROOM_CODE_ALPHABET,
-  ROOM_CODE_LENGTH,
   RECONNECT_SECONDS,
   SFX_COOLDOWN_MS,
   SIGNAL_COOLDOWN_MS,
@@ -73,6 +71,12 @@ import type { TableState } from '../game/schema';
 import { log } from '../logger';
 import { AuthError, bearerFromHeader } from '../auth/authService';
 import { InvalidInputError } from '../db/types';
+import type { JsonValue, MatchRepository } from '../db/types';
+import { GRANT_KEY, getLobby } from '../lobby/lobby';
+import type { Grant } from '../lobby/lobby';
+import { randomRoomCode } from '../lobby/roomCode';
+import { DISPOSE_FLUSH_MS, MatchRecorder, flushWithin } from './matchRecorder';
+import type { EndReason } from './matchRecorder';
 import { devReconnectUserId, getRoomAuth, USER_ID_MAX } from './roomAuth';
 
 export { devReconnectUserId };
@@ -105,9 +109,10 @@ export const DEFAULT_MAX_RECONNECTS = 20;
  * Teto do `eventLog` (replay de reconexão). DECISÃO: o log é descartável, só serve a reenviar eventos
  * perdidos; acima do teto descartam-se os mais antigos e `eventsEvicted` conta quantos. Se o replay
  * pedido já foi descartado (lacuna), nada é reenviado: o cliente já recebeu o estado completo e trata
- * o salto de `seq` como resincronização. A gravação em `matches` (2H) NÃO deve ler este log no fim:
- * deve persistir de forma incremental a cada evento (ponto único: `emitEvents`) ou usar `eventsEvicted`
- * para saber que houve perda. Um jogo real fica ordens de grandeza abaixo do teto.
+ * o salto de `seq` como resincronização. A gravação em `matches` (2H) NÃO usa este log: o `MatchRecorder`
+ * tem buffer próprio (`recordEvent`, ponto único em `emitEvents`) com teto e marca de "log truncado". Uma
+ * bo3 medida (300 sementes, bots) fica em <= 883 eventos / 112 KB; o pior caso teórico (com apostas) é
+ * ~1800 eventos / ~270 KB, então 5000 aqui também cobre uma bo3 com folga.
  */
 export const DEFAULT_EVENT_LOG_MAX = 5000;
 /** Expirações de turno seguidas que marcam o assento como ausente (`away`). */
@@ -150,6 +155,8 @@ export interface TrucoRoomConfig {
   readonly sfxCooldownMs?: number;
   /** Intervalo mínimo entre mensagens de chat do mesmo assento. Padrão `CHAT_COOLDOWN_MS`. */
   readonly chatCooldownMs?: number;
+  /** Onde gravar a partida ao terminar (2H). Ausente: nada é gravado. Nunca vem do cliente. */
+  readonly matches?: MatchRepository;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`: JWT + banco; nunca do payload do cliente). */
@@ -201,14 +208,6 @@ function unavailable(err: unknown): ServerError {
     name: err instanceof Error ? err.name : 'unknown',
   });
   return new ServerError(503, 'SERVICE_UNAVAILABLE');
-}
-
-function generateRoomCode(): string {
-  let code = '';
-  for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
-    code += ROOM_CODE_ALPHABET.charAt(randomInt(0, ROOM_CODE_ALPHABET.length));
-  }
-  return code;
 }
 
 /**
@@ -285,6 +284,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private botTimer: Timer | null = null;
   private abandonTimer: Timer | null = null;
   private closing = false;
+  /** Concessão do lobby (mesa privada/fila). `null` = sala fora do lobby (testes, uso interno). */
+  private grant: Grant | null = null;
+  private waitTimer: Timer | null = null;
+  private creatorTimer: Timer | null = null;
+  /** userId -> fim da reserva de assento ainda não consumida (um humano não segura mais de um assento). */
+  private readonly pendingReservations = new Map<string, number>();
+  private recorder: MatchRecorder | null = null;
+  private endReason: EndReason | null = null;
 
   constructor(private readonly config: TrucoRoomConfig = {}) {
     super();
@@ -310,7 +317,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     ) => Promise<boolean>;
     const host = this as unknown as { _reserveSeat: Reserve };
     const original = host._reserveSeat.bind(this);
-    host._reserveSeat = (
+    host._reserveSeat = async (
       sessionId,
       joinOptions,
       authData,
@@ -318,15 +325,37 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       allowReconnection,
       devToken,
     ) => {
-      if (allowReconnection !== true && !this.mayReserve(authData)) return Promise.resolve(false);
-      return original(sessionId, joinOptions, authData, seconds, allowReconnection, devToken);
+      if (allowReconnection === true) {
+        return original(sessionId, joinOptions, authData, seconds, allowReconnection, devToken);
+      }
+      if (!this.mayReserve(authData, joinOptions)) return false;
+      // Marca ANTES do await: duas reservas simultâneas do mesmo usuário não passam as duas.
+      const userId = (authData as JoinAuth).userId;
+      const until = Date.now() + (seconds ?? this.seatReservationTimeout) * 1000;
+      this.pendingReservations.set(userId, until);
+      let ok = false;
+      try {
+        ok = await original(sessionId, joinOptions, authData, seconds, allowReconnection, devToken);
+      } finally {
+        if (!ok && this.pendingReservations.get(userId) === until) {
+          this.pendingReservations.delete(userId);
+        }
+      }
+      return ok;
     };
   }
 
-  private mayReserve(authData: unknown): boolean {
+  private mayReserve(authData: unknown, joinOptions: unknown): boolean {
     const auth = authData as Partial<JoinAuth> | undefined;
     if (auth === undefined || auth === null || typeof auth.userId !== 'string') return false;
     if (this.bannedUsers.has(auth.userId)) return false;
+    // Lobby: um `userId`, uma mesa; fila só para os sorteados; privada com criador primeiro e código.
+    if (getLobby()?.admit(auth.userId, this.roomId, joinOptions) === false) return false;
+    const pending = this.pendingReservations.get(auth.userId);
+    if (pending !== undefined) {
+      if (pending > Date.now()) return false;
+      this.pendingReservations.delete(auth.userId);
+    }
     for (const [seat, userId] of this.userBySeat) {
       if (userId !== auth.userId) continue;
       return (
@@ -338,7 +367,21 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return this.series === null;
   }
 
-  override onCreate(options: unknown): void {
+  override onCreate(rawOptions: unknown): void {
+    let options = rawOptions;
+    let grant: Grant | null = null;
+    const lobby = getLobby();
+    if (typeof rawOptions === 'object' && rawOptions !== null && GRANT_KEY in rawOptions) {
+      // Concessão do lobby: token aleatório que só o servidor conhece. Token desconhecido = forjado.
+      const { [GRANT_KEY]: token, ...rest } = rawOptions as Record<string, unknown>;
+      const found = typeof token === 'string' ? lobby?.consumeGrant(token) : undefined;
+      if (found === undefined) {
+        log.warn('truco: concessão de lobby inválida');
+        throw new ServerError(403, 'FORBIDDEN');
+      }
+      grant = found;
+      options = rest;
+    }
     const valid = validateRoomOptions(options);
     if (!valid.ok) {
       log.warn('truco: opções de sala inválidas', { error: valid.error });
@@ -348,7 +391,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.maxMessagesPerSecond = this.config.maxMessagesPerSecond ?? MAX_MESSAGES_PER_SECOND;
     this.seed = this.config.rngSeed ?? randomInt(0, 2 ** 32);
     this.rng = mulberry32(this.seed);
-    this.setState(createTableState(generateRoomCode(), valid.options));
+    const code = grant?.code ?? lobby?.newCode() ?? randomRoomCode();
+    this.setState(createTableState(code, valid.options));
+    this.grant = grant;
+    lobby?.registerRoom(this.roomId, code, valid.options.visibility, grant);
+    if (grant !== null) this.armGrantTimers(grant);
     if (this.config.patchRateMs !== undefined) this.setPatchRate(this.config.patchRateMs);
     // Única rota de entrada de mensagens do cliente.
     this.onMessage('*', (client, type, message) => this.handleMessage(client, type, message));
@@ -418,6 +465,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (this.series !== null) throw new ServerError(409, 'ROOM_FULL');
     const seat = this.firstFreeSeat();
     if (seat === null) throw new ServerError(409, 'ROOM_FULL');
+    this.bindToTable(auth.userId);
     this.seatBySession.set(client.sessionId, seat);
     this.userBySeat.set(seat, auth.userId);
     this.lastSeq.set(seat, this.seq);
@@ -504,6 +552,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (this.state.phase === 'waiting') {
       // Antes da partida o assento volta a ficar livre.
       this.seatBySession.delete(client.sessionId);
+      const leaver = this.userBySeat.get(seat);
+      if (leaver !== undefined) getLobby()?.unseat(leaver, this.roomId);
       this.userBySeat.delete(seat);
       // Nada do ocupante anterior pode ser herdado pelo próximo (strikes, contadores). EXCEÇÃO de
       // propósito: cooldowns de sinal/sfx/chat (`lastSignalAt`, `lastSfxAt`, `lastChatAt`) ficam por
@@ -544,13 +594,54 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     await super.disconnect(closeCode);
   }
 
-  override onDispose(): void {
+  override onDispose(): Promise<void> | void {
     this.closing = true;
     this.startTimer?.clear();
     this.turnTimer?.clear();
     this.closeTimer?.clear();
     this.botTimer?.clear();
     this.abandonTimer?.clear();
+    this.waitTimer?.clear();
+    this.creatorTimer?.clear();
+    getLobby()?.releaseRoom(this.roomId);
+    // Sala fechada com a série em andamento (desligamento do servidor): grava como abandonada.
+    const series = this.series;
+    if (series !== null && !isSeriesOver(series)) this.persistMatch(series, 'abandoned');
+    const pending = this.recorder?.pending ?? null;
+    if (pending !== null) return flushWithin(pending, DISPOSE_FLUSH_MS);
+    return undefined;
+  }
+
+  /**
+   * Prazos da mesa criada pelo lobby: o criador da privada tem `creatorMs` para sentar; a mesa tem um
+   * prazo para a partida começar (fila: `fillMs`, e quem sentou volta à fila na posição original;
+   * privada: `waitMs`). Sala vazia fecha pelo `autoDispose` do core.
+   */
+  private armGrantTimers(grant: Grant): void {
+    this.setPrivate(true).catch((err: unknown) =>
+      log.error('truco: setPrivate falhou', { err: String(err) }),
+    );
+    if (grant.kind === 'private') {
+      this.creatorTimer = this.clock.setTimeout(() => {
+        const creator = grant.creator;
+        const seated = creator !== null && [...this.userBySeat.values()].includes(creator);
+        if (seated || this.closing) return;
+        log.info('truco: criador não sentou, mesa fechada', { room: this.roomId });
+        this.disconnect().catch((err: unknown) =>
+          log.error('truco: disconnect falhou', { err: String(err) }),
+        );
+      }, grant.creatorMs);
+    }
+    const waitMs = grant.kind === 'queue' ? grant.fillMs : grant.waitMs;
+    this.waitTimer = this.clock.setTimeout(() => {
+      this.waitTimer = null;
+      if (this.series !== null || this.closing) return;
+      log.info('truco: mesa não encheu no prazo', { room: this.roomId, kind: grant.kind });
+      if (grant.kind === 'queue') getLobby()?.failFill(this.roomId);
+      this.disconnect().catch((err: unknown) =>
+        log.error('truco: disconnect falhou', { err: String(err) }),
+      );
+    }, waitMs);
   }
 
   /**
@@ -642,6 +733,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
 
   private becomeBot(seat: Seat): void {
     this.botSeats.add(seat);
+    // O humano saiu de vez: o vínculo global é liberado (pode jogar em outra mesa); o assento dele
+    // segue reservado ao bot e ele só volta com o código (mesa privada) ou pelo próprio `userId`.
+    const owner = this.userBySeat.get(seat);
+    if (owner !== undefined) getLobby()?.unseat(owner, this.roomId);
+    this.recorder?.noteBot(seat, this.seq);
     this.refreshPresence(seat);
     const series = this.series;
     if (series !== null && !isSeriesOver(series)) {
@@ -666,6 +762,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if ((this.reconnectCount.get(seat) ?? 0) >= this.maxReconnects()) {
       throw new ServerError(409, 'ROOM_FULL');
     }
+    const owner = this.userBySeat.get(seat);
+    if (owner !== undefined) this.bindToTable(owner);
     this.seatBySession.set(client.sessionId, seat);
     log.info('truco: dono retomou o assento do bot', { room: this.roomId, seat });
     this.resume(client, seat);
@@ -759,6 +857,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (series === null || isSeriesOver(series) || this.closing) return;
     if (this.connectedHumans().length > 0) return;
     log.info('truco: série cancelada por abandono', { room: this.roomId });
+    this.endReason = 'abandoned';
     this.cancelNow(series);
   }
 
@@ -772,6 +871,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   // ---------------------------------------------------------------- partida
+
+  /** Vínculo global "um usuário, uma mesa" (lobby). Lança se o usuário já está em outra mesa ou fila. */
+  private bindToTable(userId: string): void {
+    this.pendingReservations.delete(userId);
+    if (getLobby()?.seat(userId, this.roomId) === false) {
+      throw new ServerError(409, 'ALREADY_IN_TABLE');
+    }
+  }
 
   private firstFreeSeat(): Seat | null {
     for (let s = 0; s < TABLE_SEATS; s++) if (!this.userBySeat.has(s)) return s;
@@ -802,6 +909,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       );
     }
     this.series = series;
+    this.recorder = new MatchRecorder({
+      options,
+      roomCode: this.state.roomCode,
+      seed: this.seed,
+      startedAt: new Date(),
+    });
+    this.waitTimer?.clear();
+    this.waitTimer = null;
     // Em série a sala não pode voltar à lista pública (o `unlock` do bot a reexporia a estranhos para
     // `joinOrCreate`, que daria ROOM_FULL). `joinById` ignora `private`: o dono ainda reentra.
     this.setPrivate(true).catch((err: unknown) =>
@@ -1150,7 +1265,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     for (const ev of events) {
       const seq = ++this.seq;
       const at = Date.now();
-      this.eventLog.push({ seq, at, event: publicEvent(ev) });
+      const logged: LoggedEvent = { seq, at, event: publicEvent(ev) };
+      this.eventLog.push(logged);
+      this.recordEvent(logged, ev);
       const max = this.config.eventLogMax ?? DEFAULT_EVENT_LOG_MAX;
       if (this.eventLog.length > max) {
         const drop = this.eventLog.length - max;
@@ -1172,6 +1289,50 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
   }
 
+  // ---------------------------------------------------------------- registro da partida (2H)
+
+  /**
+   * Único ponto de entrada do registro: eventos do MOTOR em visão pública (nunca chat, sinal nem sfx) e,
+   * a cada mão, o sorteio de todos para auditoria (`deals`, jamais exposto). `this.series` já é o estado
+   * DEPOIS da transição que gerou os eventos.
+   */
+  private recordEvent(logged: LoggedEvent, ev: GameEvent): void {
+    const recorder = this.recorder;
+    if (recorder === null) return;
+    recorder.addEvent(logged);
+    const series = this.series;
+    if (ev.type === 'handStarted' && series !== null) {
+      const hand = series.match.hand;
+      recorder.addDeal({
+        seq: logged.seq,
+        game: series.gameNumber,
+        hand: ev.handNumber,
+        vira: hand.vira === null ? null : { rank: hand.vira.rank, suit: hand.vira.suit },
+        hands: hand.hands.map((h) => h.map((c) => ({ rank: c.rank, suit: c.suit }))),
+      } satisfies JsonValue);
+    }
+  }
+
+  /**
+   * Fecha o registro e grava (uma vez só, também se `onDispose` chegar depois). Falha do banco NÃO pára
+   * a sala: a gravação roda em segundo plano, com tentativas limitadas, e só loga sem PII.
+   */
+  private persistMatch(series: SeriesState, reason?: EndReason): void {
+    const recorder = this.recorder;
+    if (recorder === null || recorder.isFinalized) return;
+    const finished = series.winner !== null && !series.cancelled;
+    const input = recorder.finalize({
+      status: finished ? 'finished' : 'cancelled',
+      winnerTeam: finished ? series.winner : null,
+      endReason: reason ?? this.endReason ?? (finished ? 'finished' : 'cancelled'),
+      endedAt: new Date(),
+      users: this.userBySeat,
+    });
+    const repo = this.config.matches;
+    if (input === null || repo === undefined) return;
+    void recorder.save(repo, input, this.roomId);
+  }
+
   // ---------------------------------------------------------------- timer e projeção
 
   /** Projeta o schema e (re)arma o timer do turno (e o do bot), ou encerra a sala se a série acabou. */
@@ -1186,8 +1347,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (seat === null) {
       this.currentTurn = null;
       projectState(series, this.state);
-      if (isSeriesOver(series)) this.scheduleClose();
-      else log.error('truco: série em andamento sem assento pendente', { room: this.roomId });
+      if (isSeriesOver(series)) {
+        this.persistMatch(series);
+        this.scheduleClose();
+      } else log.error('truco: série em andamento sem assento pendente', { room: this.roomId });
       return;
     }
     const timeoutMs = this.config.turnTimeoutMs ?? TURN_TIMEOUT_MS;

@@ -5,13 +5,24 @@ import { WebSocketTransport } from '@colyseus/ws-transport';
 import { MAX_MESSAGE_BYTES } from '@trucaco/protocol';
 import type { AuthService } from './auth/authService';
 import { DEFAULT_LIMITS, type RestLimits } from './auth/config';
-import type { UserRepository } from './db/types';
+import type { AuthContext } from '@colyseus/core';
+import type { MatchRepository, UserRepository } from './db/types';
 import { installBaseMiddleware, mountFallbacks, mountRest } from './http/rest';
+import { mountLobbyRoutes } from './http/lobbyRoutes';
+import {
+  DEFAULT_LOBBY_CONFIG,
+  GRANT_KEY,
+  GatewayAuthError,
+  Lobby,
+  configureLobby,
+  getLobby,
+} from './lobby/lobby';
+import type { LobbyConfig, TableGateway } from './lobby/lobby';
 import { buildHealth } from './index';
 import { SlidingWindowLimiter, clientKey } from './rateLimit';
 import { reconnectUpgradeGuard } from './rooms/reconnectGuard';
 import { configureRoomAuth, identityFromToken, tokenFromHeaders } from './rooms/roomAuth';
-import { TrucoRoom, defineTrucoRoom } from './rooms/TrucoRoom';
+import { TRUCO_ROOM_NAME, TrucoRoom, defineTrucoRoom } from './rooms/TrucoRoom';
 import type { TrucoRoomConfig } from './rooms/TrucoRoom';
 
 export { SlidingWindowLimiter };
@@ -29,6 +40,16 @@ export interface ServerDeps {
    * development/test, senão lança. Nunca ligado por padrão.
    */
   readonly allowDevAuth?: boolean;
+  /** Onde gravar partidas terminadas/canceladas (2H). Ausente: nada é gravado. */
+  readonly matches?: MatchRepository;
+  /** Ajustes do lobby (prazos da fila, limites). Só o servidor define. */
+  readonly lobby?: Partial<Omit<LobbyConfig, 'guard'>> & { guard?: Partial<LobbyConfig['guard']> };
+  /**
+   * Libera `create`/`join`/`joinOrCreate` da sala `truco` direto pelo matchmaking HTTP. Padrão `false`:
+   * mesas nascem só por `POST /tables` e pela fila (`/queue`), que aplicam código, limites e vínculo.
+   * Só para testes/ferramentas internas.
+   */
+  readonly directMatchmake?: boolean;
 }
 
 export interface CreateServerOptions {
@@ -102,6 +123,13 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
     users: deps.users ?? null,
     allowDevAuth: deps.allowDevAuth === true,
   });
+  directMatchmake = deps.directMatchmake === true;
+  const lobby = new Lobby(tableGateway(), {
+    ...DEFAULT_LOBBY_CONFIG,
+    ...deps.lobby,
+    guard: { ...DEFAULT_LOBBY_CONFIG.guard, ...deps.lobby?.guard },
+  });
+  configureLobby(lobby);
   restrictMatchmakeCors(deps.corsOrigins ?? []);
   guardMatchmakeReconnect();
   const colyseus = new Server({
@@ -137,13 +165,24 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
           trustProxy: deps.trustProxy === true,
         });
       }
+      if (deps.auth !== undefined && deps.users !== undefined) {
+        mountLobbyRoutes(app, {
+          auth: deps.auth,
+          users: deps.users,
+          lobby,
+          trustProxy: deps.trustProxy === true,
+        });
+      }
       mountFallbacks(app);
     },
     // Os sinais são tratados por quem chama (main.ts), não pelo Colyseus.
     gracefullyShutdown: false,
     greet: false,
   });
-  defineTrucoRoom(colyseus, room);
+  defineTrucoRoom(colyseus, {
+    ...room,
+    ...(deps.matches !== undefined ? { matches: deps.matches } : {}),
+  });
   // O roteador do core só é registrado em `listen`; o nosso listener entra à frente dele depois disso.
   const listen = colyseus.listen.bind(colyseus);
   colyseus.listen = (port, hostname, backlog, listeningListener) =>
@@ -227,6 +266,19 @@ function guardMatchmakeReconnect(): void {
   controller[WRAPPED] = true;
   const original = controller.invokeMethod.bind(controller);
   controller.invokeMethod = async (method, roomName, clientOptions, authOptions) => {
+    if (
+      !directMatchmake &&
+      roomName === TRUCO_ROOM_NAME &&
+      (method === 'create' || method === 'join' || method === 'joinOrCreate')
+    ) {
+      // Identidade primeiro (sem credencial continua 401/503, como antes); depois, mesa só pelo lobby.
+      const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
+      if (!identity.ok) {
+        if (identity.reason === 'unavailable') throw new ServerError(503, 'SERVICE_UNAVAILABLE');
+        throw new ServerError(401, 'UNAUTHORIZED');
+      }
+      throw new ServerError(403, 'USE_LOBBY');
+    }
     if (method === 'reconnect') {
       const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
       if (!identity.ok) {
@@ -253,6 +305,35 @@ function guardMatchmakeReconnect(): void {
 
 const WRAPPED = Symbol.for('trucaco.matchmakeReconnectGuard');
 
+/** Estado do processo (um servidor por processo): lido pelo wrapper, que é instalado uma única vez. */
+let directMatchmake = false;
+
+/** Costura do lobby com o matchmaker do Colyseus. */
+function tableGateway(): TableGateway {
+  return {
+    async createRoom(options, grantToken) {
+      const listing = await matchMaker.createRoom(TRUCO_ROOM_NAME, {
+        ...options,
+        [GRANT_KEY]: grantToken,
+      });
+      return listing.roomId;
+    },
+    async reserve(roomId, joinOptions, bearer) {
+      const context = {
+        headers: new Headers({ authorization: `Bearer ${bearer}` }),
+      } as unknown as AuthContext;
+      try {
+        return await matchMaker.joinById(roomId, joinOptions, context);
+      } catch (err) {
+        const code = err instanceof ServerError ? err.code : undefined;
+        if (code === 401) throw new GatewayAuthError(401);
+        if (code === 503) throw new GatewayAuthError(503);
+        throw err;
+      }
+    },
+  };
+}
+
 /** Sobe Colyseus (WebSocketTransport + express) com `GET /health` e a sala `truco`. */
 export async function createServer({
   port,
@@ -261,6 +342,7 @@ export async function createServer({
   deps,
 }: CreateServerOptions): Promise<RunningServer> {
   const colyseus = buildColyseusServer(room, deps);
+  getLobby()?.start();
   const limit = { ...DEFAULT_MATCHMAKE_LIMIT, ...matchmakeLimit };
   // O callback roda logo após o Colyseus registrar o listener dele; o nosso entra à frente.
   await colyseus.listen(port, undefined, undefined, () => attachMatchmakeLimit(colyseus, limit));
@@ -271,6 +353,7 @@ export async function createServer({
 
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
+    getLobby()?.stop();
     closing ??= colyseus.gracefullyShutdown(false);
     return closing;
   };

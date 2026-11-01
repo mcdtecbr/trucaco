@@ -2,10 +2,16 @@ import { AuthService } from './auth/authService';
 import { loadServerConfig } from './auth/config';
 import { RedisTokenStore } from './auth/redisTokenStore';
 import { MemoryTokenStore, type TokenStore } from './auth/tokenStore';
-import { createMemoryRepositories, createPrisma, PrismaUserRepository } from './db';
-import type { PrismaHandle, UserRepository } from './db';
+import {
+  createMemoryRepositories,
+  createPrisma,
+  PrismaMatchRepository,
+  PrismaUserRepository,
+} from './db';
+import type { MatchRepository, PrismaHandle, UserRepository } from './db';
 import { log } from './logger';
 import { createServer } from './server';
+import type { ServerDeps } from './server';
 
 const DEFAULT_PORT = 2567;
 
@@ -36,6 +42,39 @@ function positiveInt(raw: string | undefined, name: string): number | undefined 
   return n;
 }
 
+/** Ajustes do lobby por ambiente (segundos nas variáveis, ms no código). Ausente = padrão. */
+function lobbyConfig(): NonNullable<ServerDeps['lobby']> {
+  const sec = (name: string): number | undefined => {
+    const n = positiveInt(process.env[name], name);
+    return n === undefined ? undefined : n * 1000;
+  };
+  const queueTtlMs = sec('LOBBY_QUEUE_TTL_SECONDS');
+  const fillMs = sec('LOBBY_FILL_SECONDS');
+  const lockMs = sec('JOIN_LOCK_SECONDS');
+  const attemptsPerUserPerMin = positiveInt(
+    process.env.JOIN_ATTEMPTS_PER_USER_PER_MIN,
+    'JOIN_ATTEMPTS_PER_USER_PER_MIN',
+  );
+  const attemptsPerIpPerMin = positiveInt(
+    process.env.JOIN_ATTEMPTS_PER_IP_PER_MIN,
+    'JOIN_ATTEMPTS_PER_IP_PER_MIN',
+  );
+  const failLockThreshold = positiveInt(
+    process.env.JOIN_FAIL_LOCK_THRESHOLD,
+    'JOIN_FAIL_LOCK_THRESHOLD',
+  );
+  return {
+    ...(queueTtlMs !== undefined ? { queueTtlMs } : {}),
+    ...(fillMs !== undefined ? { fillMs } : {}),
+    guard: {
+      ...(lockMs !== undefined ? { lockMs } : {}),
+      ...(attemptsPerUserPerMin !== undefined ? { attemptsPerUserPerMin } : {}),
+      ...(attemptsPerIpPerMin !== undefined ? { attemptsPerIpPerMin } : {}),
+      ...(failLockThreshold !== undefined ? { failLockThreshold } : {}),
+    },
+  };
+}
+
 async function main(): Promise<void> {
   applyDevFlag();
   const devFlag = process.argv.includes('--dev');
@@ -57,13 +96,17 @@ async function main(): Promise<void> {
 
   let prismaHandle: PrismaHandle | null = null;
   let users: UserRepository;
+  let matches: MatchRepository;
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl !== undefined && databaseUrl !== '') {
     prismaHandle = createPrisma(databaseUrl);
     users = new PrismaUserRepository(prismaHandle.prisma);
+    matches = new PrismaMatchRepository(prismaHandle.prisma);
   } else if (config.devLike) {
-    log.warn('DATABASE_URL ausente: usuários em memória (só dev/test)');
-    users = createMemoryRepositories().users;
+    log.warn('DATABASE_URL ausente: usuários e partidas em memória (só dev/test)');
+    const memory = createMemoryRepositories();
+    users = memory.users;
+    matches = memory.matches;
   } else {
     throw new Error('DATABASE_URL é obrigatório fora de development/test.');
   }
@@ -79,6 +122,8 @@ async function main(): Promise<void> {
     deps: {
       auth,
       users,
+      matches,
+      lobby: lobbyConfig(),
       corsOrigins: config.corsOrigins,
       limits: config.limits,
       trustProxy: config.trustProxy,
