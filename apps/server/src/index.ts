@@ -5,7 +5,10 @@ export interface HealthStatus {
   protocol: number;
 }
 
-/** Corpo do endpoint /health. Colyseus, salas e REST entram na Fase 2. */
+/** Corpo do endpoint /health. */
 export function buildHealth(): HealthStatus {
   return { status: 'ok', protocol: PROTOCOL_VERSION };
 }
+
+export { createServer } from './server';
+export type { CreateServerOptions, RunningServer } from './server';

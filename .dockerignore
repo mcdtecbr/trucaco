@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+.turbo
+**/node_modules
+**/dist
+**/.expo
+**/coverage
+docs
+assets
+.env
+.env.*
+!.env.example
+*.md

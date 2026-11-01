@@ -1,0 +1,41 @@
+# Build a partir da raiz do repositório:
+#   docker build -f infra/Dockerfile.server -t trucaco-server .
+ARG NODE_IMAGE=node:22.12.0-alpine3.21
+
+# Os package.json dos demais workspaces entram só para o lockfile casar com --frozen-lockfile.
+# ---- build: instala tudo e gera apps/server/dist/main.js (bundle tsup) ----
+FROM ${NODE_IMAGE} AS build
+ENV CI=true
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY apps/server/package.json apps/server/
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/rules/package.json packages/rules/
+COPY apps/mobile/package.json apps/mobile/
+COPY packages/ui/package.json packages/ui/
+COPY packages/avatar/package.json packages/avatar/
+RUN pnpm install --frozen-lockfile --filter @trucaco/server...
+
+COPY apps/server apps/server
+COPY packages/protocol packages/protocol
+COPY packages/rules packages/rules
+RUN pnpm turbo run build --filter=@trucaco/server
+# `pnpm deploy` gera uma pasta autossuficiente (node_modules sem symlinks para a raiz do monorepo).
+# Copiar só apps/server/node_modules quebraria com ERR_MODULE_NOT_FOUND. Os pacotes @trucaco/*
+# ficam dentro do bundle tsup.
+RUN pnpm --filter @trucaco/server deploy --prod /out
+
+# ---- runtime ----
+FROM ${NODE_IMAGE} AS runtime
+ENV NODE_ENV=production \
+    PORT=2567
+WORKDIR /app
+COPY --from=build --chown=node:node /out/node_modules ./node_modules
+COPY --from=build --chown=node:node /repo/apps/server/dist ./dist
+USER node
+EXPOSE 2567
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||2567)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/main.js"]
