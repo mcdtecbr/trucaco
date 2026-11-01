@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_JOIN_GUARD, JoinGuard } from './joinGuard';
+import { DEFAULT_JOIN_GUARD, JoinGuard, prefix48 } from './joinGuard';
 import type { JoinGuardConfig } from './joinGuard';
 
 const CFG: JoinGuardConfig = {
@@ -9,6 +9,8 @@ const CFG: JoinGuardConfig = {
   failsPerIp: 6,
   failWindowMs: 60_000,
   lockMs: 120_000,
+  failsPerPrefix48: 1000,
+  failsGlobal: 100_000,
 };
 
 describe('JoinGuard', () => {
@@ -78,5 +80,51 @@ describe('JoinGuard', () => {
     expect(DEFAULT_JOIN_GUARD.failLockThreshold).toBeLessThan(
       DEFAULT_JOIN_GUARD.attemptsPerUserPerMin,
     );
+  });
+});
+
+describe('JoinGuard: força bruta distribuída', () => {
+  it('prefix48 só existe para chave IPv6 /64', () => {
+    expect(prefix48('2001:db8:abcd:1::/64')).toBe('2001:db8:abcd::/48');
+    expect(prefix48('2001:db8:abcd:ffff::/64')).toBe('2001:db8:abcd::/48');
+    expect(prefix48('1.2.3.4')).toBeNull();
+    expect(prefix48('lixo')).toBeNull();
+  });
+
+  it('muitos /64 do mesmo /48 e contas diferentes: o /48 é limitado', () => {
+    const g = new JoinGuard({ ...CFG, failsPerIp: 1000, failsPerPrefix48: 4 });
+    const t = 1_000;
+    for (let i = 0; i < 4; i++) {
+      expect(g.check(`u${i}`, `2001:db8:abcd:${i}::/64`, t)).toBe('ok');
+      g.fail(`u${i}`, `2001:db8:abcd:${i}::/64`, t);
+    }
+    // novo /64 do MESMO /48, usuário limpo
+    expect(g.check('novo', '2001:db8:abcd:9::/64', t)).toBe('limited');
+    // outro /48 e IPv4 seguem livres
+    expect(g.check('novo', '2001:db8:beef:9::/64', t)).toBe('ok');
+    expect(g.check('v4', '9.9.9.9', t)).toBe('ok');
+    // a janela esvazia
+    expect(g.check('novo2', '2001:db8:abcd:9::/64', t + 61_000)).toBe('ok');
+  });
+
+  it('teto global de falhas: acima dele todos são limitados até a janela esvaziar', () => {
+    const g = new JoinGuard({ ...CFG, failsGlobal: 5, failLockThreshold: 100 });
+    const t = 1_000;
+    for (let i = 0; i < 5; i++) {
+      expect(g.check(`u${i}`, `10.0.0.${i}`, t)).toBe('ok');
+      g.fail(`u${i}`, `10.0.0.${i}`, t);
+    }
+    expect(g.check('limpo', '8.8.8.8', t)).toBe('limited');
+    expect(g.check('limpo', '8.8.8.8', t + 61_000)).toBe('ok');
+  });
+
+  it('ip null (entrada direta sem proxy confiável) conta só o usuário', () => {
+    const g = new JoinGuard({ ...CFG, failLockThreshold: 2, attemptsPerIpPerMin: 1 });
+    const t = 1_000;
+    for (let i = 0; i < 3; i++) expect(g.check('u', null, t)).toBe('ok'); // sem limite por IP
+    g.fail('u', null, t);
+    g.fail('u', null, t);
+    expect(g.check('u', null, t)).toBe('locked');
+    expect(g.check('outro', null, t)).toBe('ok');
   });
 });

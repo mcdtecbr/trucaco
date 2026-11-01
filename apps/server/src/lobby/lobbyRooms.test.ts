@@ -18,6 +18,7 @@ import { TrucoRoom } from '../rooms/TrucoRoom';
 import type { TrucoRoomConfig } from '../rooms/TrucoRoom';
 import { buildColyseusServer } from '../server';
 import { getLobby } from './lobby';
+import type { Grant } from './lobby';
 
 const CFG: AuthConfig = {
   secret: new TextEncoder().encode('segredo-de-teste-com-32-bytes-ou-mais!!'),
@@ -84,6 +85,7 @@ beforeAll(async () => {
         actionsPerIpPerMin: 100_000,
         actionsPerUserPerMin: 100_000,
         createPerUserPerMin: 1000,
+        joinMinLatencyMs: 0,
         guard: {
           attemptsPerIpPerMin: 100_000,
           attemptsPerUserPerMin: 100_000,
@@ -165,6 +167,13 @@ async function sit(reservation: unknown): Promise<SdkRoom> {
   }
   sdkRooms.push(room);
   return room as unknown as SdkRoom;
+}
+function roomAlive(roomId: string): boolean {
+  try {
+    return matchMaker.getLocalRoomById(roomId) !== undefined;
+  } catch {
+    return false;
+  }
 }
 const serverRoom = (roomId: string): TrucoRoom => matchMaker.getLocalRoomById(roomId) as TrucoRoom;
 /** Turnos lentos nesta mesa (o servidor lê `config` a cada turno). Antes do 4º sentar. */
@@ -304,6 +313,26 @@ describe('mesa privada por código, partida até o fim e registro', () => {
     expect(again.status).toBe(201);
   });
 
+  it('P2: criador que senta e sai antes do prazo NÃO fecha a mesa com amigos dentro; volta pelo código', async () => {
+    const [a, b] = await guests(2);
+    const created = await call('POST', '/tables', a!.token, PRIV);
+    expect(created.status).toBe(201);
+    const roomId = created.body.reservation.roomId as string;
+    const owner = await sit(created.body.reservation);
+    const j = await call('POST', '/tables/join', b!.token, { code: created.body.code });
+    expect(j.status).toBe(200);
+    await sit(j.body.reservation);
+    await owner.leave(true);
+    await until(() => getLobby()?.slotKind(a!.id) === null, 'criador liberado');
+    // passa bem do prazo do criador (creatorMs = 1500): o timer não pode fechar a mesa
+    await sleep(2300);
+    expect(roomAlive(roomId)).toBe(true);
+    expect(serverRoom(roomId).clients.length).toBe(1);
+    const back = await call('POST', '/tables/join', a!.token, { code: created.body.code });
+    expect(back.status).toBe(200);
+    await sit(back.body.reservation);
+  });
+
   it('um userId, uma mesa: criar, entrar e fila são recusados enquanto está sentado', async () => {
     const tb = await privateTable({ slowTurns: true });
     const owner = tb.users[0]!;
@@ -318,6 +347,65 @@ describe('mesa privada por código, partida até o fim e registro', () => {
     const crossJoin = await call('POST', '/tables/join', other!.token, { code: tb.code });
     expect(crossJoin.status).toBe(409);
     expect(crossJoin.body.error.code).toBe('ALREADY_IN_TABLE');
+  });
+
+  it('4: POST /queue/leave devolve o estado real (sentado continua seated; criador mantém o ticket)', async () => {
+    const tb = await privateTable({ slowTurns: true });
+    const seated = await call('POST', '/queue/leave', tb.users[0]!.token);
+    expect(seated.status).toBe(200);
+    expect(seated.body).toEqual({ status: 'seated' });
+    expect(getLobby()?.slotKind(tb.users[0]!.id)).toBe('table');
+
+    const [c] = await guests(1);
+    const created = await call('POST', '/tables', c!.token, PRIV);
+    expect(created.status).toBe(201);
+    expect((await call('POST', '/queue/leave', c!.token)).body).toEqual({ status: 'idle' });
+    expect(getLobby()?.slotKind(c!.id)).toBe('ticket'); // a mesa privada não foi abandonada
+    // ...e o criador sem reserva reentra pelo código (5), sem 409
+    const again = await call('POST', '/tables/join', c!.token, { code: created.body.code });
+    expect(again.status).toBe(200);
+    await sit(again.body.reservation);
+  });
+
+  it('10: sair de vez (o bot assume) libera o vínculo; sentado em outra mesa, a antiga é recusada', async () => {
+    const tb = await privateTable({ slowTurns: true });
+    await until(() => tb.room.series !== null, 'série');
+    const leaver = tb.users[1]!;
+    await tb.clients[1]!.leave(true);
+    await until(() => getLobby()?.slotKind(leaver.id) === null, 'vínculo liberado');
+    expect(tb.room.state.players[1]?.isBot).toBe(true);
+    const other = await call('POST', '/tables', leaver.token, PRIV);
+    expect(other.status).toBe(201);
+    await sit(other.body.reservation);
+    expect(getLobby()?.slotKind(leaver.id)).toBe('table');
+    const back = await call('POST', '/tables/join', leaver.token, { code: tb.code });
+    expect(back.status).toBe(409);
+    expect(back.body.error.code).toBe('ALREADY_IN_TABLE');
+    const direct = await call('POST', `/matchmake/joinById/${tb.room.roomId}`, leaver.token, {
+      code: tb.code,
+    });
+    expect(direct.status).not.toBe(200);
+    expect(tb.room.state.players[1]?.isBot).toBe(true); // a cadeira segue com o bot
+  });
+
+  it('10: reconexão com o matchmake direto desligado (padrão): o dono volta ao assento', async () => {
+    const tb = await privateTable({ slowTurns: true });
+    await until(() => tb.room.series !== null, 'série');
+    const owner = tb.users[2]!;
+    const sdk = tb.clients[2]!;
+    sdk.reconnection.enabled = false;
+    sdk.connection.close();
+    await until(() => tb.room.state.players[2]?.status === 'away', 'away');
+    const http = t.sdk.http as unknown as { options: { headers?: Record<string, string> } };
+    const before = http.options.headers;
+    http.options.headers = { authorization: `Bearer ${owner.token}` };
+    try {
+      const back = await t.sdk.reconnect(sdk.reconnectionToken);
+      expect(back.connection.isOpen).toBe(true);
+    } finally {
+      http.options.headers = before ?? {};
+    }
+    await until(() => tb.room.state.players[2]?.status === 'connected', 'dono de volta');
   });
 
   it('direct matchmake de create/join/joinOrCreate da sala truco é bloqueado (403 USE_LOBBY)', async () => {
@@ -387,6 +475,36 @@ describe('entrar por código: sem oráculo, com limite e bloqueio', () => {
     );
   });
 
+  it('7: entrar direto por roomId (joinById) conta falhas e bloqueia o usuário', async () => {
+    const [a] = await guests(1);
+    for (let i = 0; i < 6; i++) {
+      const r = await call('POST', `/matchmake/joinById/inexistente${i}`, a!.token, {});
+      expect(r.status).not.toBe(200);
+      expect(r.status).not.toBe(429);
+    }
+    const blocked = await call('POST', '/matchmake/joinById/inexistente7', a!.token, {});
+    expect(blocked.status).toBe(429);
+    expect(getLobby()?.isLocked(a!.id)).toBe(true);
+  });
+
+  it('8: toda recusa de /tables/join respeita o piso de latência (caminho rápido e caminho da sala)', async () => {
+    const cfg = getLobby()!.config as unknown as { joinMinLatencyMs: number };
+    cfg.joinMinLatencyMs = 120;
+    try {
+      const tb = await privateTable({ slowTurns: true });
+      await until(() => tb.room.series !== null, 'em partida');
+      const [probe] = await guests(1);
+      for (const code of ['AAAAAAAA', tb.code]) {
+        const t0 = Date.now();
+        const r = await call('POST', '/tables/join', probe!.token, { code });
+        expect(r.status).toBe(404);
+        expect(Date.now() - t0).toBeGreaterThanOrEqual(115);
+      }
+    } finally {
+      cfg.joinMinLatencyMs = 0;
+    }
+  });
+
   it('N falhas bloqueiam o usuário (429) mesmo com o código certo; outro usuário não é afetado', async () => {
     const [owner, chutador, amigo] = await guests(3);
     const created = await call('POST', '/tables', owner!.token, PRIV);
@@ -445,6 +563,40 @@ describe('fila pública FIFO', () => {
     expect(direct.status).not.toBe(200);
     expect(getLobby()?.slotKind(stranger!.id)).toBeNull();
     await sit((await call('GET', '/queue', users[3]!.token)).body.reservation);
+  });
+
+  it('2: o assento vem do sorteio do lobby, não da ordem de entrada na sala', async () => {
+    for (let round = 0; round < 3; round++) {
+      const users = await guests(4);
+      for (const u of users) await call('POST', '/queue', u.token, PUB);
+      const reservations: unknown[] = [];
+      for (const u of users)
+        reservations.push((await call('GET', '/queue', u.token)).body.reservation);
+      const roomId = (reservations[0] as { roomId: string }).roomId;
+      const room = serverRoom(roomId);
+      slow(room);
+      // entram em ordem INVERTIDA à da fila
+      for (let i = 3; i >= 0; i--) await sit(reservations[i]);
+      const priv = room as unknown as { grant: Grant; userBySeat: Map<number, string> };
+      expect(priv.grant.seats?.size).toBe(4);
+      for (const u of users) {
+        expect(priv.userBySeat.get(priv.grant.seats!.get(u.id)!)).toBe(u.id);
+      }
+    }
+  });
+
+  it('3: quem casa e não senta paga o cooldown de reentrada (429 QUEUE_COOLDOWN com Retry-After)', async () => {
+    const users = await guests(4);
+    for (const u of users) await call('POST', '/queue', u.token, PUB);
+    for (const u of users.slice(0, 3))
+      await sit((await call('GET', '/queue', u.token)).body.reservation);
+    await until(() => getLobby()?.slotKind(users[0]!.id) === 'queued', 'mesa não encheu', 6000);
+    const absent = await call('POST', '/queue', users[3]!.token, PUB);
+    expect(absent.status).toBe(429);
+    expect(absent.body.error.code).toBe('QUEUE_COOLDOWN');
+    expect(Number(absent.headers.get('retry-after'))).toBeGreaterThan(0);
+    // quem sentou foi devolvido à fila sem pena
+    expect((await call('GET', '/queue', users[0]!.token)).body.status).toBe('queued');
   });
 
   it('um userId, uma fila: duas entradas (outra variante) continuam sendo uma; sair da fila libera', async () => {

@@ -19,7 +19,7 @@ import {
 } from './lobby/lobby';
 import type { LobbyConfig, TableGateway } from './lobby/lobby';
 import { buildHealth } from './index';
-import { SlidingWindowLimiter, clientKey } from './rateLimit';
+import { SlidingWindowLimiter, clientKey, normalizeIp } from './rateLimit';
 import { reconnectUpgradeGuard } from './rooms/reconnectGuard';
 import { configureRoomAuth, identityFromToken, tokenFromHeaders } from './rooms/roomAuth';
 import { TRUCO_ROOM_NAME, TrucoRoom, defineTrucoRoom } from './rooms/TrucoRoom';
@@ -124,6 +124,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
     allowDevAuth: deps.allowDevAuth === true,
   });
   directMatchmake = deps.directMatchmake === true;
+  trustProxyForJoin = deps.trustProxy === true;
   const lobby = new Lobby(tableGateway(), {
     ...DEFAULT_LOBBY_CONFIG,
     ...deps.lobby,
@@ -279,6 +280,22 @@ function guardMatchmakeReconnect(): void {
       }
       throw new ServerError(403, 'USE_LOBBY');
     }
+    if (method === 'joinById' && !directMatchmake) {
+      // Entrar por roomId fora do lobby também conta falhas no freio de força bruta (usuário e, atrás de
+      // proxy confiável, IP). Quem não se autentica segue para o `onAuth` do core (401/503).
+      const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
+      const lobby = getLobby();
+      if (identity.ok && lobby !== null) {
+        const ip = trustedIp(authOptions?.headers);
+        if (!lobby.allowDirectJoin(identity.userId, ip)) throw new ServerError(429, 'RATE_LIMITED');
+        try {
+          return await original(method, roomName, clientOptions, authOptions);
+        } catch (err) {
+          lobby.noteDirectJoinFailure(identity.userId, ip);
+          throw err;
+        }
+      }
+    }
     if (method === 'reconnect') {
       const identity = await identityFromToken(tokenFromHeaders(authOptions?.headers));
       if (!identity.ok) {
@@ -307,6 +324,14 @@ const WRAPPED = Symbol.for('trucaco.matchmakeReconnectGuard');
 
 /** Estado do processo (um servidor por processo): lido pelo wrapper, que é instalado uma única vez. */
 let directMatchmake = false;
+let trustProxyForJoin = false;
+
+/** IP do cliente só quando há proxy confiável (último item de `X-Forwarded-For`); senão `null`. */
+function trustedIp(headers: Headers | undefined): string | null {
+  if (!trustProxyForJoin) return null;
+  const last = headers?.get('x-forwarded-for')?.split(',').at(-1)?.trim();
+  return last === undefined || last === '' ? null : normalizeIp(last);
+}
 
 /** Costura do lobby com o matchmaker do Colyseus. */
 function tableGateway(): TableGateway {

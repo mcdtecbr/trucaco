@@ -2,7 +2,7 @@
 import type { RoomOptions } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOBBY_CONFIG, GatewayAuthError, Lobby } from './lobby';
-import type { LobbyConfig, SeatReservation, TableGateway } from './lobby';
+import type { Grant, LobbyConfig, SeatReservation, TableGateway } from './lobby';
 import { setLogSink } from '../logger';
 
 setLogSink(() => undefined);
@@ -19,6 +19,8 @@ interface Fake extends TableGateway {
   reserved: { roomId: string; code?: string; bearer: string }[];
   failCreate: boolean;
   failReserve: false | 'generic' | 'auth';
+  /** Quando definido, `reserve` espera esta promessa (reserva pendente). */
+  hold: Promise<void> | null;
 }
 
 function fakeGateway(): Fake {
@@ -27,6 +29,7 @@ function fakeGateway(): Fake {
     reserved: [],
     failCreate: false,
     failReserve: false,
+    hold: null,
     async createRoom(options, token) {
       await Promise.resolve();
       if (g.failCreate) throw new Error('boom');
@@ -36,6 +39,7 @@ function fakeGateway(): Fake {
     },
     async reserve(roomId, joinOptions, bearer): Promise<SeatReservation> {
       await Promise.resolve();
+      if (g.hold !== null) await g.hold;
       if (g.failReserve === 'auth') throw new GatewayAuthError(401);
       if (g.failReserve === 'generic') throw new Error('cheia');
       g.reserved.push({ roomId, ...joinOptions, bearer });
@@ -45,10 +49,13 @@ function fakeGateway(): Fake {
   return g;
 }
 
-function setup(over: Partial<LobbyConfig> = {}): { lobby: Lobby; gw: Fake; now: { t: number } } {
+function setup(
+  over: Partial<LobbyConfig> = {},
+  rand?: (min: number, max: number) => number,
+): { lobby: Lobby; gw: Fake; now: { t: number } } {
   const gw = fakeGateway();
   const now = { t: 1_000_000 };
-  const lobby = new Lobby(gw, { ...DEFAULT_LOBBY_CONFIG, ...over }, () => now.t);
+  const lobby = new Lobby(gw, { ...DEFAULT_LOBBY_CONFIG, ...over }, () => now.t, rand);
   return { lobby, gw, now };
 }
 
@@ -282,8 +289,9 @@ describe('Lobby: mesa privada e entrada por código', () => {
     const ok = await lobby.joinByCode('amigo', 'tk2', 'ip', code);
     expect(ok).toMatchObject({ ok: true, reservation: { roomId: 'room-1' } });
     expect(gw.reserved.at(-1)).toMatchObject({ code, bearer: 'tk2' });
-    // dono já tem slot
-    expect(await lobby.joinByCode('dono', 'tk', 'ip', code)).toMatchObject({
+    // o dono (ticket desta mesa) volta pelo próprio código; outra mesa, não
+    expect(await lobby.joinByCode('dono', 'tk', 'ip', code)).toMatchObject({ ok: true });
+    expect(await lobby.joinByCode('dono', 'tk', 'ip', 'AAAAAAAA')).toMatchObject({
       ok: false,
       error: 'ALREADY_IN_TABLE',
     });
@@ -338,5 +346,258 @@ describe('Lobby: mesa privada e entrada por código', () => {
     expect(blocked).toMatchObject({ ok: false, error: 'RATE_LIMITED' });
     now.t += 61_000;
     expect(await lobby.joinByCode('chutador', 't', 'ip', code)).toMatchObject({ ok: true });
+  });
+});
+
+describe('Lobby: assentos sorteados da fila (2)', () => {
+  const four = ['a', 'b', 'c', 'd'];
+  async function formed(lobby: Lobby, gw: Fake, users = four): Promise<Grant> {
+    for (const u of users) await lobby.enqueue(u, 't', Q());
+    return lobby.consumeGrant(gw.created.at(-1)!.token)!;
+  }
+
+  it('o Grant traz um assento distinto 0..3 para cada sorteado', async () => {
+    const { lobby, gw } = setup();
+    const grant = await formed(lobby, gw);
+    expect([...grant.seats!.keys()].sort()).toEqual(four);
+    expect([...grant.seats!.values()].sort()).toEqual([0, 1, 2, 3]);
+    expect(grant.allowed).toEqual(new Set(four));
+  });
+
+  it('mesa privada não tem assentos sorteados', async () => {
+    const { lobby, gw } = setup();
+    await lobby.createTable('dono', 't', { ...Q(), visibility: 'private' });
+    expect(lobby.consumeGrant(gw.created[0]!.token)!.seats).toBeNull();
+  });
+
+  it('distribuição não degenerada (semente injetável): ninguém fica preso ao assento de chegada', async () => {
+    let state = 12345;
+    const next = (): number => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return state / 2 ** 32;
+    };
+    const rand = (min: number, max: number): number => min + Math.floor(next() * (max - min));
+    const { lobby, gw } = setup({}, rand);
+    const N = 400;
+    const bySlot = Array.from({ length: 4 }, () => [0, 0, 0, 0]);
+    let partnersOfFirst = 0;
+    for (let i = 0; i < N; i++) {
+      const users = four.map((u) => `${u}${i}`);
+      for (const u of users) await lobby.enqueue(u, 't', Q());
+      const grant = lobby.consumeGrant(gw.created[i]!.token)!;
+      users.forEach((u, p) => {
+        bySlot[p]![grant.seats!.get(u)!]!++;
+      });
+      if (grant.seats!.get(users[0]!)! % 2 === grant.seats!.get(users[1]!)! % 2) partnersOfFirst++;
+    }
+    for (const row of bySlot) for (const n of row) expect(n).toBeGreaterThan(60); // esperado: 100
+    // 1º e 2º a chegar: parceiros em ~1/3 das mesas (FIFO puro daria 0)
+    expect(partnersOfFirst / N).toBeGreaterThan(0.25);
+    expect(partnersOfFirst / N).toBeLessThan(0.42);
+  });
+});
+
+describe('Lobby: cooldown de reentrada na fila (3)', () => {
+  async function matched(lobby: Lobby, users = ['a', 'b', 'c', 'd']): Promise<void> {
+    for (const u of users) await lobby.enqueue(u, 't', Q());
+  }
+
+  it('não sentou até o fim do prazo: o ausente paga, quem sentou volta sem pena', async () => {
+    const { lobby, now } = setup({ queueReentryCooldownMs: 60_000 });
+    await matched(lobby);
+    expect(lobby.seat('a', 'room-1')).toBe(true);
+    lobby.failFill('room-1');
+    expect(lobby.slotKind('a')).toBe('queued');
+    const blocked = await lobby.enqueue('d', 't', Q());
+    expect(blocked).toEqual({ ok: false, error: 'QUEUE_COOLDOWN', retryAfterSec: 60 });
+    expect(lobby.slotKind('d')).toBeNull();
+    now.t += 30_000;
+    expect(await lobby.enqueue('d', 't', Q())).toMatchObject({
+      ok: false,
+      error: 'QUEUE_COOLDOWN',
+      retryAfterSec: 30,
+    });
+    now.t += 30_001;
+    expect(await lobby.enqueue('d', 't', Q())).toMatchObject({ ok: true });
+  });
+
+  it('desistir depois de casar (leaveQueue com ticket) paga; sair ANTES de casar não', async () => {
+    const { lobby } = setup();
+    await lobby.enqueue('cedo', 't', Q());
+    await lobby.leaveQueue('cedo');
+    expect(await lobby.enqueue('cedo', 't', Q())).toMatchObject({ ok: true });
+    await lobby.leaveQueue('cedo');
+
+    await matched(lobby);
+    await lobby.leaveQueue('b'); // casou e desistiu
+    expect(await lobby.enqueue('b', 't', Q())).toMatchObject({
+      ok: false,
+      error: 'QUEUE_COOLDOWN',
+    });
+    // quem ficou no ticket não é afetado
+    expect(lobby.slotKind('a')).toBe('ticket');
+  });
+
+  it('ticket vencido sem sentar paga (sweep); ticket de mesa em criação (sem roomId) não', async () => {
+    const { lobby, now } = setup({ fillMs: 10_000 });
+    await matched(lobby);
+    now.t += 11_000;
+    lobby.sweep();
+    expect(await lobby.enqueue('a', 't', Q())).toMatchObject({
+      ok: false,
+      error: 'QUEUE_COOLDOWN',
+    });
+  });
+
+  it('sentou e saiu da mesa da fila em espera paga; a saída "sem pena" (bot) não', async () => {
+    const { lobby } = setup();
+    await matched(lobby);
+    lobby.seat('a', 'room-1');
+    lobby.seat('b', 'room-1');
+    lobby.unseat('a', 'room-1', true);
+    lobby.unseat('b', 'room-1'); // partida em curso (bot assumiu): sem cooldown
+    expect(await lobby.enqueue('a', 't', Q())).toMatchObject({
+      ok: false,
+      error: 'QUEUE_COOLDOWN',
+    });
+    expect(await lobby.enqueue('b', 't', Q())).toMatchObject({ ok: true });
+  });
+
+  it('0 desliga; mesa privada nunca penaliza; teto de chaves descarta o mais antigo', async () => {
+    const off = setup({ queueReentryCooldownMs: 0 });
+    await matched(off.lobby);
+    await off.lobby.leaveQueue('b');
+    expect(await off.lobby.enqueue('b', 't', Q())).toMatchObject({ ok: true });
+
+    const priv = setup();
+    await priv.lobby.createTable('dono', 't', { ...Q(), visibility: 'private' });
+    await priv.lobby.leaveQueue('dono');
+    priv.lobby.releaseRoom('room-1');
+    expect(await priv.lobby.enqueue('dono', 't', Q())).toMatchObject({ ok: true });
+
+    const cap = setup({ maxCooldownKeys: 2 });
+    await matched(cap.lobby, ['a', 'b', 'c', 'd']);
+    for (const u of ['a', 'b', 'c']) await cap.lobby.leaveQueue(u);
+    expect(await cap.lobby.enqueue('a', 't', Q())).toMatchObject({ ok: true }); // evictado
+    expect(await cap.lobby.enqueue('c', 't', Q())).toMatchObject({ error: 'QUEUE_COOLDOWN' });
+  });
+});
+
+describe('Lobby: ticket do criador e reservas pendentes (4, 5, 6)', () => {
+  const priv: RoomOptions = {
+    variant: 'paulista',
+    format: 'single',
+    ironHand: false,
+    visibility: 'private',
+  };
+  async function table(lobby: Lobby, gw: Fake, user = 'dono'): Promise<string> {
+    const r = await lobby.createTable(user, 'tk', priv);
+    if (!r.ok) throw new Error(r.error);
+    const created = gw.created.at(-1)!;
+    const grant = lobby.consumeGrant(created.token)!;
+    lobby.registerRoom(created.roomId, grant.code, 'private', grant);
+    return r.code;
+  }
+
+  it('4: leaveQueue não apaga o ticket do criador de mesa privada', async () => {
+    const { lobby, gw } = setup();
+    await table(lobby, gw);
+    await lobby.leaveQueue('dono');
+    expect(lobby.slotKind('dono')).toBe('ticket');
+    expect(await lobby.statusOf('dono', 'tk')).toEqual({ status: 'idle' });
+  });
+
+  it('5: o criador sem a reserva reentra pelo código (reaproveita a viva, reemite a vencida)', async () => {
+    const { lobby, gw, now } = setup();
+    const code = await table(lobby, gw);
+    expect(gw.reserved).toHaveLength(1);
+    const reuse = await lobby.joinByCode('dono', 'tk', 'ip', code);
+    expect(reuse).toMatchObject({ ok: true, reservation: { roomId: 'room-1', sessionId: 's1' } });
+    expect(gw.reserved).toHaveLength(1); // viva: nada novo segurado
+    now.t += 20_000; // reserva do core (15 s) vencida; ticket (30 s) ainda de pé
+    const fresh = await lobby.joinByCode('dono', 'tk', 'ip', code);
+    expect(fresh).toMatchObject({ ok: true, reservation: { sessionId: 's2' } });
+    expect(gw.reserved).toHaveLength(2);
+    expect(lobby.slotKind('dono')).toBe('ticket');
+    // outra mesa continua recusada
+    expect(await lobby.joinByCode('dono', 'tk', 'ip', 'AAAAAAAA')).toMatchObject({
+      error: 'ALREADY_IN_TABLE',
+    });
+  });
+
+  it('5: o ticket vale o prazo do criador (nem mais, nem menos) e some com a mesa fechada', async () => {
+    const { lobby, gw, now } = setup({ creatorMs: 30_000 });
+    await table(lobby, gw);
+    now.t += 29_000;
+    lobby.sweep();
+    expect(lobby.slotKind('dono')).toBe('ticket');
+    now.t += 2_000;
+    lobby.sweep();
+    expect(lobby.slotKind('dono')).toBeNull();
+
+    await table(lobby, gw, 'outro');
+    lobby.releaseRoom('room-2');
+    expect(lobby.slotKind('outro')).toBeNull();
+  });
+
+  it('6: reserva pendente ocupa o slot: não dá para segurar vagas em duas mesas', async () => {
+    const { lobby, gw } = setup();
+    const c1 = await table(lobby, gw, 'd1');
+    const c2 = await table(lobby, gw, 'd2');
+    // os donos sentam (liberam a entrada de convidados)
+    lobby.seat('d1', 'room-1');
+    lobby.seat('d2', 'room-2');
+    let release: () => void = () => undefined;
+    gw.hold = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = lobby.joinByCode('x', 'tk', 'ip', c1);
+    await Promise.resolve();
+    expect(lobby.slotKind('x')).toBe('ticket');
+    expect(await lobby.joinByCode('x', 'tk', 'ip', c2)).toMatchObject({
+      ok: false,
+      error: 'ALREADY_IN_TABLE',
+    });
+    release();
+    expect(await first).toMatchObject({ ok: true, reservation: { roomId: 'room-1' } });
+    expect(lobby.slotKind('x')).toBe('ticket');
+    // chamadas simultâneas à MESMA mesa dividem uma reserva só
+    gw.reserved.length = 0;
+    const [r1, r2] = await Promise.all([
+      lobby.joinByCode('y', 'tk', 'ip', c1),
+      lobby.joinByCode('y', 'tk', 'ip', c1),
+    ]);
+    expect(r1).toMatchObject({ ok: true });
+    expect(r2).toMatchObject({ ok: true });
+    expect(gw.reserved).toHaveLength(1);
+  });
+
+  it('6: reserva recusada solta o slot; o ticket do convidado expira se ele não sentar', async () => {
+    const { lobby, gw, now } = setup();
+    const code = await table(lobby, gw);
+    lobby.seat('dono', 'room-1');
+    gw.failReserve = 'generic';
+    expect(await lobby.joinByCode('x', 'tk', 'ip', code)).toMatchObject({
+      error: 'TABLE_UNAVAILABLE',
+    });
+    expect(lobby.slotKind('x')).toBeNull();
+    gw.failReserve = false;
+    await lobby.joinByCode('x', 'tk', 'ip', code);
+    expect(lobby.slotKind('x')).toBe('ticket');
+    now.t += 17_000;
+    lobby.sweep();
+    expect(lobby.slotKind('x')).toBeNull();
+  });
+
+  it('7: entrada direta por roomId conta falhas no mesmo freio (usuário; IP quando confiável)', () => {
+    const { lobby } = setup({
+      guard: { ...DEFAULT_LOBBY_CONFIG.guard, failLockThreshold: 3, lockMs: 60_000 },
+    });
+    for (let i = 0; i < 3; i++) {
+      expect(lobby.allowDirectJoin('u', null)).toBe(true);
+      lobby.noteDirectJoinFailure('u', null);
+    }
+    expect(lobby.allowDirectJoin('u', null)).toBe(false);
+    expect(lobby.allowDirectJoin('outro', null)).toBe(true);
   });
 });

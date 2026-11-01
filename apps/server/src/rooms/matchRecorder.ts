@@ -10,7 +10,9 @@
  * 69 mãos. Uma mão tem no máximo ~26 eventos (início, 12 cartas, 3 vazas, 8 de aposta, fim). Logo
  * <= ~1800 eventos, ~150 B cada = ~270 KB, bem abaixo do CHECK de 2 MiB de `events`. Medido (300 sementes de
  * bo3 só com bots, sem apostas): máximo de 883 eventos e 112 KB. Teto aqui: 6000 eventos
- * e 1,5 MB (3x de folga na contagem; na prática o limite de bytes é o que vale se algo explodir).
+ * e 1 MB (3x de folga na contagem; na prática o limite de bytes é o que vale se algo explodir).
+ * O CHECK do banco mede o `jsonb`, que pode ser maior que o texto JSON medido aqui (separadores e
+ * cabeçalhos por chave); com 1 MB de texto sobra mais de 2x de margem para essa diferença.
  */
 import type { PublicGameEvent } from '@trucaco/rules';
 import { log } from '../logger';
@@ -27,7 +29,7 @@ import type { RoomOptions } from '@trucaco/protocol';
 
 export const MATCH_EVENTS_MAX = 6000;
 /** Orçamento de bytes do JSON de `events` (o CHECK do banco recusa >= 2 MiB). */
-export const MATCH_EVENTS_MAX_BYTES = 1_500_000;
+export const MATCH_EVENTS_MAX_BYTES = 1_000_000;
 export const MATCH_DEALS_MAX = 200;
 export const PERSIST_ATTEMPTS = 3;
 export const PERSIST_RETRY_MS = 250;

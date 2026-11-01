@@ -8,12 +8,13 @@
  * | `POST /tables/join`      | `{ code }`                 | `200 { reservation }`                              |
  * | `POST /queue`            | `RoomOptions` (public, single) | `200 { status, ... }`                          |
  * | `GET /queue`             | -                          | `200 { status: idle|queued|matched|seated, ... }`  |
- * | `POST /queue/leave`      | -                          | `200 { status: 'idle' }`                           |
+ * | `POST /queue/leave`      | -                          | `200 { status }` (estado real: `idle`, ou `seated`) |
  *
  * (`POST` no lugar de `DELETE` para sair da fila: a lista de métodos do CORS é só GET/POST/PUT.)
  * Erros: `{ error: { code } }`. Entrar por código devolve o MESMO erro `404 TABLE_UNAVAILABLE` para código
  * inexistente, mesa cheia, em partida, de outro tipo ou fechada.
  */
+import { randomInt } from 'node:crypto';
 import express from 'express';
 import type { Application, Request, RequestHandler, Response } from 'express';
 import { validateRoomOptions } from '@trucaco/protocol';
@@ -22,6 +23,8 @@ import { AuthError, bearerFromHeader } from '../auth/authService';
 import type { AuthService } from '../auth/authService';
 import type { UserRepository } from '../db/types';
 import { GatewayAuthError } from '../lobby/lobby';
+import { holdUntilFloor } from '../lobby/minLatency';
+import type { LatencyDeps } from '../lobby/minLatency';
 import type { Fail, Lobby, LobbyError } from '../lobby/lobby';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
 import { BODY_LIMIT } from './rest';
@@ -31,7 +34,18 @@ export interface LobbyRoutesOptions {
   readonly users: UserRepository;
   readonly lobby: Lobby;
   readonly trustProxy: boolean;
+  /** Relógio/espera/sorteio do piso de latência (testes). Padrão: reais. */
+  readonly latency?: LatencyDeps;
 }
+
+const REAL_LATENCY: LatencyDeps = {
+  now: Date.now,
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+  rand: (max) => randomInt(0, max),
+};
 
 const STATUS: Record<LobbyError, number> = {
   ALREADY_IN_TABLE: 409,
@@ -39,6 +53,7 @@ const STATUS: Record<LobbyError, number> = {
   INVALID_CODE: 400,
   TABLE_UNAVAILABLE: 404,
   QUEUE_FULL: 503,
+  QUEUE_COOLDOWN: 429,
   RATE_LIMITED: 429,
   UNAVAILABLE: 503,
 };
@@ -61,6 +76,7 @@ export function mountLobbyRoutes(app: Application, opts: LobbyRoutesOptions): vo
   const ipLimiter = new SlidingWindowLimiter(cfg.actionsPerIpPerMin, 60_000);
   const userLimiter = new SlidingWindowLimiter(cfg.actionsPerUserPerMin, 60_000);
   const createLimiter = new SlidingWindowLimiter(cfg.createPerUserPerMin, 60_000);
+  const latency = opts.latency ?? REAL_LATENCY;
   const ipOf = (req: Request): string => clientKey(req, opts.trustProxy);
 
   const byIp: RequestHandler = (req, res, next) => {
@@ -166,10 +182,15 @@ export function mountLobbyRoutes(app: Application, opts: LobbyRoutesOptions): vo
       failWith(res, 'INVALID_BODY', 400);
       return;
     }
+    const startedAt = latency.now();
     await guardGateway(res, async () => {
       const r = await lobby.joinByCode(userId, bearer, ipOf(req), (body as { code: unknown }).code);
-      if (!r.ok) failLobby(res, r);
-      else res.status(200).json({ reservation: r.reservation });
+      if (!r.ok) {
+        // Piso de latência: recusa rápida (código inexistente) e recusa lenta (mesa que existe) não se
+        // distinguem pelo tempo.
+        await holdUntilFloor(startedAt, cfg.joinMinLatencyMs, latency);
+        failLobby(res, r);
+      } else res.status(200).json({ reservation: r.reservation });
     });
   });
 
@@ -194,8 +215,13 @@ export function mountLobbyRoutes(app: Application, opts: LobbyRoutesOptions): vo
     });
   });
 
+  // Responde o estado REAL depois de sair: `idle` se estava na fila; quem está sentado continua `seated`
+  // (sair da fila não derruba ninguém da mesa) e o criador de mesa privada segue com a mesa.
   app.post('/queue/leave', byIp, authenticate, async (_req, res) => {
-    await lobby.leaveQueue(locals(res).userId);
-    res.status(200).json({ status: 'idle' });
+    const { userId, bearer } = locals(res);
+    await guardGateway(res, async () => {
+      await lobby.leaveQueue(userId);
+      res.status(200).json(await lobby.statusOf(userId, bearer));
+    });
   });
 }

@@ -14,7 +14,7 @@
  * `table` (sentado). Mesa privada: o criador nasce como `ticket` da própria mesa. Quem tem slot não
  * enfileira, não cria nem entra em outra mesa.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { isValidRoomCode } from '@trucaco/protocol';
 import type { RoomOptions, Visibility } from '@trucaco/protocol';
 import { log } from '../logger';
@@ -45,6 +45,15 @@ export interface LobbyConfig {
   readonly createPerUserPerMin: number;
   /** Depois deste tempo sem sentar, `GET /queue` emite uma reserva nova (a anterior já expirou). */
   readonly reservationReuseMs: number;
+  /**
+   * Quem casa numa mesa da fila e não senta (ou desiste/sai depois de casar) fica este tempo sem poder
+   * reentrar na fila (por `userId`). 0 desliga. Sair da fila ANTES de casar não é penalizado.
+   */
+  readonly queueReentryCooldownMs: number;
+  /** Piso de latência das recusas de `POST /tables/join` (anti oráculo de tempo). 0 desliga. */
+  readonly joinMinLatencyMs: number;
+  /** Teto de usuários com cooldown guardados (memória limitada). */
+  readonly maxCooldownKeys: number;
   readonly guard: JoinGuardConfig;
 }
 
@@ -59,6 +68,9 @@ export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   createPerUserPerMin: 6,
   // Maior que a reserva do core (15 s): nunca duas reservas vivas do mesmo usuário.
   reservationReuseMs: 16_000,
+  queueReentryCooldownMs: 60_000,
+  joinMinLatencyMs: 150,
+  maxCooldownKeys: 50_000,
   guard: DEFAULT_JOIN_GUARD,
 };
 
@@ -70,6 +82,11 @@ export interface Grant {
   readonly creator: string | null;
   /** Mesa da fila: únicos usuários admitidos. */
   readonly allowed: ReadonlySet<string> | null;
+  /**
+   * Mesa da fila: assento SORTEADO de cada usuário (0..3; duplas 0/2 e 1/3). O assento vem daqui, nunca da
+   * ordem de chegada: contas combinadas não escolhem ser parceiras nem ocupar vagas por pressa.
+   */
+  readonly seats: ReadonlyMap<string, number> | null;
   readonly creatorMs: number;
   readonly fillMs: number;
   readonly waitMs: number;
@@ -96,17 +113,20 @@ export class GatewayAuthError extends Error {
   }
 }
 
+interface TicketSlot {
+  kind: 'ticket';
+  roomId: string | null;
+  expiresAt: number;
+  /** `null` = ticket de mesa privada (criador ou quem entra por código); fila: a entrada original. */
+  entry: QueueEntry | null;
+  reservation?: SeatReservation;
+  claimedAt?: number;
+  claiming?: Promise<SeatReservation>;
+}
+
 type Slot =
   | { kind: 'queued'; entry: QueueEntry }
-  | {
-      kind: 'ticket';
-      roomId: string | null;
-      expiresAt: number;
-      entry: QueueEntry | null;
-      reservation?: SeatReservation;
-      claimedAt?: number;
-      claiming?: Promise<SeatReservation>;
-    }
+  | TicketSlot
   | { kind: 'table'; roomId: string; entry: QueueEntry | null };
 
 interface RoomInfo {
@@ -122,6 +142,7 @@ export type LobbyError =
   | 'INVALID_CODE'
   | 'TABLE_UNAVAILABLE'
   | 'QUEUE_FULL'
+  | 'QUEUE_COOLDOWN'
   | 'RATE_LIMITED'
   | 'UNAVAILABLE';
 
@@ -144,6 +165,8 @@ export class Lobby {
   /** código -> roomId; `null` = código reservado e ainda sem sala. */
   private readonly codes = new Map<string, string | null>();
   private readonly grants = new Map<string, Grant>();
+  /** userId -> fim do cooldown de reentrada na fila (FIFO com teto de chaves). */
+  private readonly cooldowns = new Map<string, number>();
   private readonly guard: JoinGuard;
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -151,7 +174,7 @@ export class Lobby {
     private readonly gateway: TableGateway,
     readonly config: LobbyConfig = DEFAULT_LOBBY_CONFIG,
     private readonly clock: () => number = Date.now,
-    private readonly rand?: RandomIntFn,
+    private readonly rand: RandomIntFn = randomInt,
   ) {
     this.queue = new MatchQueue(config.maxQueue);
     this.guard = new JoinGuard(config.guard);
@@ -228,10 +251,39 @@ export class Lobby {
     return true;
   }
 
-  /** O usuário deixou a mesa de vez (saiu na espera ou o bot assumiu). Libera o vínculo. */
-  unseat(userId: string, roomId: string): void {
+  /**
+   * O usuário deixou a mesa de vez (saiu na espera ou o bot assumiu). Libera o vínculo. `penalize`: saiu
+   * de uma mesa da fila ainda em espera (casou, sentou e desistiu): cooldown de reentrada na fila.
+   */
+  unseat(userId: string, roomId: string, penalize = false): void {
     const slot = this.slots.get(userId);
-    if (slot?.kind === 'table' && slot.roomId === roomId) this.slots.delete(userId);
+    if (slot?.kind === 'table' && slot.roomId === roomId) {
+      this.slots.delete(userId);
+      if (penalize && slot.entry !== null) this.penalize(userId);
+    }
+  }
+
+  /** Cooldown de reentrada na fila (no-op com a opção desligada). */
+  private penalize(userId: string): void {
+    if (this.config.queueReentryCooldownMs <= 0) return;
+    this.cooldowns.delete(userId);
+    this.cooldowns.set(userId, this.clock() + this.config.queueReentryCooldownMs);
+    if (this.cooldowns.size > this.config.maxCooldownKeys) {
+      const oldest = this.cooldowns.keys().next();
+      if (oldest.done !== true) this.cooldowns.delete(oldest.value);
+    }
+  }
+
+  /** Segundos que faltam do cooldown (0 = livre). Remove o vencido. */
+  private cooldownLeftSec(userId: string): number {
+    const until = this.cooldowns.get(userId);
+    if (until === undefined) return 0;
+    const left = until - this.clock();
+    if (left <= 0) {
+      this.cooldowns.delete(userId);
+      return 0;
+    }
+    return Math.ceil(left / 1000);
   }
 
   /** A sala foi descartada: libera código, vínculos e tickets dela. */
@@ -257,6 +309,9 @@ export class Lobby {
       if (slot.kind === 'table' && slot.roomId === roomId && slot.entry !== null) {
         back.push(slot.entry);
         this.slots.delete(userId);
+      } else if (slot.kind === 'ticket' && slot.roomId === roomId && slot.entry !== null) {
+        // Casou e não sentou: ocupou a vaga de outros três.
+        this.penalize(userId);
       }
     }
     this.releaseRoom(roomId);
@@ -278,10 +333,11 @@ export class Lobby {
     this.sweep();
     if (this.slots.has(userId)) return { ok: false, error: 'ALREADY_IN_TABLE' };
     const now = this.clock();
-    const slot: Slot = {
+    // Prazo provisório (a criação da sala é assíncrona); depois de criada, alinha com o prazo da sala.
+    const slot: TicketSlot = {
       kind: 'ticket',
       roomId: null,
-      expiresAt: now + this.config.creatorMs + 5000,
+      expiresAt: now + this.config.creatorMs,
       entry: null,
     };
     this.slots.set(userId, slot);
@@ -295,6 +351,7 @@ export class Lobby {
         code,
         creator: userId,
         allowed: null,
+        seats: null,
         creatorMs: this.config.creatorMs,
         fillMs: this.config.fillMs,
         waitMs: this.config.tableWaitMs,
@@ -314,8 +371,11 @@ export class Lobby {
       return { ok: false, error: 'UNAVAILABLE' };
     }
     slot.roomId = roomId;
+    // O timer do criador da sala foi armado em `onCreate` (um pouco antes de agora): o ticket vale pelo
+    // mesmo prazo e nunca sobrevive à mesa fechada (`releaseRoom` o remove) nem falta enquanto ela espera.
+    slot.expiresAt = this.clock() + this.config.creatorMs;
     try {
-      const reservation = await this.gateway.reserve(roomId, {}, bearer);
+      const reservation = await this.claim(slot, roomId, {}, bearer);
       return { ok: true, code, reservation };
     } catch (err) {
       // A mesa sem criador se fecha sozinha (prazo do criador); o usuário fica livre já.
@@ -351,19 +411,69 @@ export class Lobby {
     const roomId = this.codes.get(code) ?? undefined;
     const info = roomId === undefined ? undefined : this.rooms.get(roomId);
     const slot = this.slots.get(userId);
-    if (slot !== undefined && !(slot.kind === 'table' && slot.roomId === roomId)) {
-      // Estado do próprio usuário (não revela nada sobre o código consultado).
-      return { ok: false, error: 'ALREADY_IN_TABLE' };
-    }
+    // Mesma mesa (sentado, ou ticket desta mesa: criador que perdeu a reserva) segue; outra mesa/fila, não.
+    // É o estado do próprio usuário: não revela nada sobre o código consultado.
+    const sameRoom =
+      slot !== undefined &&
+      roomId !== undefined &&
+      (slot.kind === 'table' || slot.kind === 'ticket') &&
+      slot.roomId === roomId;
+    if (slot !== undefined && !sameRoom) return { ok: false, error: 'ALREADY_IN_TABLE' };
     if (roomId === undefined || info === undefined || info.grant?.kind !== 'private') {
       return this.unavailable(userId, ip);
     }
+    // A reserva pendente ocupa o slot do usuário: não dá para segurar várias vagas de uma vez.
+    let own: TicketSlot | null = slot?.kind === 'ticket' ? slot : null;
+    let created: TicketSlot | null = null;
+    if (slot === undefined) {
+      created = {
+        kind: 'ticket',
+        roomId,
+        expiresAt: this.clock() + this.config.reservationReuseMs,
+        entry: null,
+      };
+      own = created;
+      this.slots.set(userId, created);
+    }
     try {
-      const reservation = await this.gateway.reserve(roomId, { code }, bearer);
+      const reservation =
+        own !== null
+          ? await this.claim(own, roomId, { code }, bearer)
+          : await this.gateway.reserve(roomId, { code }, bearer);
       return { ok: true, reservation };
     } catch (err) {
+      if (created !== null && this.slots.get(userId) === created) this.slots.delete(userId);
       if (err instanceof GatewayAuthError) throw err;
       return this.unavailable(userId, ip);
+    }
+  }
+
+  /**
+   * Reserva de assento do ticket: reaproveita a reserva ainda viva (dentro de `reservationReuseMs`, menor
+   * que a validade no core) e junta chamadas simultâneas numa só (nunca duas vagas seguradas).
+   */
+  private async claim(
+    slot: TicketSlot,
+    roomId: string,
+    joinOptions: { code?: string },
+    bearer: string,
+  ): Promise<SeatReservation> {
+    if (
+      slot.reservation !== undefined &&
+      slot.claimedAt !== undefined &&
+      this.clock() - slot.claimedAt < this.config.reservationReuseMs
+    ) {
+      return slot.reservation;
+    }
+    slot.claiming ??= this.gateway.reserve(roomId, joinOptions, bearer);
+    const pending = slot.claiming;
+    try {
+      const reservation = await pending;
+      slot.reservation = reservation;
+      slot.claimedAt = this.clock();
+      return reservation;
+    } finally {
+      if (slot.claiming === pending) delete slot.claiming;
     }
   }
 
@@ -374,6 +484,19 @@ export class Lobby {
 
   isLocked(userId: string): boolean {
     return this.guard.isLocked(userId, this.clock());
+  }
+
+  /**
+   * `/matchmake/joinById` (fora do lobby): mesmo freio de força bruta do `joinByCode`. `ip` só entra quando
+   * é confiável (atrás de proxy configurado); sem ele conta só o usuário. `true` = pode tentar.
+   */
+  allowDirectJoin(userId: string, ip: string | null): boolean {
+    return this.guard.check(userId, ip, this.clock()) === 'ok';
+  }
+
+  /** Falha de uma entrada direta por roomId (sala inexistente, cheia, recusada). */
+  noteDirectJoinFailure(userId: string, ip: string | null): void {
+    this.guard.fail(userId, ip, this.clock());
   }
 
   // ------------------------------------------------------------------ fila pública
@@ -391,6 +514,8 @@ export class Lobby {
         : { ok: false, error: 'ALREADY_IN_TABLE' };
     }
     if (slot === undefined) {
+      const wait = this.cooldownLeftSec(userId);
+      if (wait > 0) return { ok: false, error: 'QUEUE_COOLDOWN', retryAfterSec: wait };
       const entry = this.queue.enqueue(userId, options, this.clock(), this.config.queueTtlMs);
       if (entry === null) return { ok: false, error: 'QUEUE_FULL' };
       this.slots.set(userId, { kind: 'queued', entry });
@@ -406,9 +531,12 @@ export class Lobby {
     if (slot.kind === 'queued') {
       this.queue.remove(userId);
       this.slots.delete(userId);
-    } else if (slot.kind === 'ticket') {
-      // Mesa formada e ainda não sentou: desiste. A mesa se resolve no prazo (`failFill`).
+    } else if (slot.kind === 'ticket' && slot.entry !== null) {
+      // Mesa da fila formada e ainda não sentou: desiste (e paga o cooldown: deixou três esperando). A
+      // mesa se resolve no prazo (`failFill`). Ticket sem entrada (criador/convidado de mesa privada) não
+      // é da fila e não é tocado.
       this.slots.delete(userId);
+      this.penalize(userId);
     }
   }
 
@@ -421,27 +549,12 @@ export class Lobby {
     // Criador de mesa privada não está na fila.
     if (slot.entry === null) return { status: 'idle' };
     if (slot.roomId === null) return { status: 'queued', expiresAt: slot.expiresAt };
-    const now = this.clock();
-    const fresh =
-      slot.reservation !== undefined &&
-      slot.claimedAt !== undefined &&
-      now - slot.claimedAt < this.config.reservationReuseMs;
-    if (fresh && slot.reservation !== undefined) {
-      return { status: 'matched', reservation: slot.reservation };
-    }
-    slot.claiming ??= this.gateway.reserve(slot.roomId, {}, bearer);
-    const pending = slot.claiming;
     try {
-      const reservation = await pending;
-      slot.reservation = reservation;
-      slot.claimedAt = this.clock();
-      return { status: 'matched', reservation };
+      return { status: 'matched', reservation: await this.claim(slot, slot.roomId, {}, bearer) };
     } catch (err) {
       if (this.slots.get(userId) === slot) this.slots.delete(userId);
       if (err instanceof GatewayAuthError) throw err;
       return { status: 'idle' };
-    } finally {
-      if (slot.claiming === pending) delete slot.claiming;
     }
   }
 
@@ -457,8 +570,16 @@ export class Lobby {
     if (first === undefined) return;
     const now = this.clock();
     const tickets = new Map<string, Slot>();
+    // Assentos sorteados (Fisher-Yates com `crypto.randomInt`): a ordem de chegada na fila ou de entrada na
+    // sala não decide parceria nem vaga.
+    const order = group.map((e) => e.userId);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = this.rand(0, i + 1);
+      [order[i], order[j]] = [order[j] as string, order[i] as string];
+    }
+    const seats = new Map(order.map((userId, seat) => [userId, seat] as const));
     for (const entry of group) {
-      const ticket: Slot = {
+      const ticket: TicketSlot = {
         kind: 'ticket',
         roomId: null,
         expiresAt: now + this.config.fillMs,
@@ -483,6 +604,7 @@ export class Lobby {
         code,
         creator: null,
         allowed: new Set(group.map((e) => e.userId)),
+        seats,
         creatorMs: this.config.creatorMs,
         fillMs: this.config.fillMs,
         waitMs: this.config.tableWaitMs,
@@ -518,7 +640,11 @@ export class Lobby {
       if (slot?.kind === 'queued' && slot.entry === entry) this.slots.delete(entry.userId);
     }
     for (const [userId, slot] of this.slots) {
-      if (slot.kind === 'ticket' && slot.expiresAt <= now) this.slots.delete(userId);
+      if (slot.kind === 'ticket' && slot.expiresAt <= now) {
+        this.slots.delete(userId);
+        // Ticket da fila vencido sem sentar: casou e não apareceu.
+        if (slot.entry !== null && slot.roomId !== null) this.penalize(userId);
+      }
     }
   }
 

@@ -288,6 +288,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private grant: Grant | null = null;
   private waitTimer: Timer | null = null;
   private creatorTimer: Timer | null = null;
+  /** O criador da mesa privada chegou a sentar (vale para sempre; cancela o prazo do criador). */
+  private creatorSeated = false;
   /** userId -> fim da reserva de assento ainda não consumida (um humano não segura mais de um assento). */
   private readonly pendingReservations = new Map<string, number>();
   private recorder: MatchRecorder | null = null;
@@ -463,7 +465,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       }
     }
     if (this.series !== null) throw new ServerError(409, 'ROOM_FULL');
-    const seat = this.firstFreeSeat();
+    const seat = this.seatFor(auth.userId);
     if (seat === null) throw new ServerError(409, 'ROOM_FULL');
     this.bindToTable(auth.userId);
     this.seatBySession.set(client.sessionId, seat);
@@ -553,7 +555,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       // Antes da partida o assento volta a ficar livre.
       this.seatBySession.delete(client.sessionId);
       const leaver = this.userBySeat.get(seat);
-      if (leaver !== undefined) getLobby()?.unseat(leaver, this.roomId);
+      // Mesa da fila ainda em espera: sair depois de sentar custa o cooldown de reentrada na fila.
+      if (leaver !== undefined) {
+        getLobby()?.unseat(leaver, this.roomId, this.grant?.kind === 'queue' && !this.closing);
+      }
       this.userBySeat.delete(seat);
       // Nada do ocupante anterior pode ser herdado pelo próximo (strikes, contadores). EXCEÇÃO de
       // propósito: cooldowns de sinal/sfx/chat (`lastSignalAt`, `lastSfxAt`, `lastChatAt`) ficam por
@@ -623,9 +628,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     );
     if (grant.kind === 'private') {
       this.creatorTimer = this.clock.setTimeout(() => {
-        const creator = grant.creator;
-        const seated = creator !== null && [...this.userBySeat.values()].includes(creator);
-        if (seated || this.closing) return;
+        this.creatorTimer = null;
+        // Só vale "nunca sentou". Quem sentou e saiu depois não fecha a mesa: ela segue aberta enquanto
+        // houver gente (sala vazia fecha pelo `autoDispose`; o resto, pelo `waitMs`).
+        if (this.creatorSeated || this.closing) return;
         log.info('truco: criador não sentou, mesa fechada', { room: this.roomId });
         this.disconnect().catch((err: unknown) =>
           log.error('truco: disconnect falhou', { err: String(err) }),
@@ -878,6 +884,22 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (getLobby()?.seat(userId, this.roomId) === false) {
       throw new ServerError(409, 'ALREADY_IN_TABLE');
     }
+    if (this.grant?.kind === 'private' && this.grant.creator === userId) {
+      this.creatorSeated = true;
+      this.creatorTimer?.clear();
+      this.creatorTimer = null;
+    }
+  }
+
+  /**
+   * Assento de quem entra. Mesa da fila: o SORTEADO pelo lobby para este `userId` (a ordem de chegada não
+   * conta); sem assento sorteado ou ocupado, recusa. Demais mesas: o primeiro livre.
+   */
+  private seatFor(userId: string): Seat | null {
+    const seats = this.grant?.kind === 'queue' ? this.grant.seats : null;
+    if (seats === null) return this.firstFreeSeat();
+    const seat = seats.get(userId);
+    return seat !== undefined && !this.userBySeat.has(seat) ? seat : null;
   }
 
   private firstFreeSeat(): Seat | null {

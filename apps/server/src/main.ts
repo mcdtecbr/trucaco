@@ -42,6 +42,13 @@ function positiveInt(raw: string | undefined, name: string): number | undefined 
   return n;
 }
 
+function nonNegativeInt(raw: string | undefined, name: string): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name} inválida: ${raw}`);
+  return n;
+}
+
 /** Ajustes do lobby por ambiente (segundos nas variáveis, ms no código). Ausente = padrão. */
 function lobbyConfig(): NonNullable<ServerDeps['lobby']> {
   const sec = (name: string): number | undefined => {
@@ -63,10 +70,24 @@ function lobbyConfig(): NonNullable<ServerDeps['lobby']> {
     process.env.JOIN_FAIL_LOCK_THRESHOLD,
     'JOIN_FAIL_LOCK_THRESHOLD',
   );
+  const cooldownSec = nonNegativeInt(
+    process.env.QUEUE_REENTRY_COOLDOWN_SECONDS,
+    'QUEUE_REENTRY_COOLDOWN_SECONDS',
+  );
+  const joinMinLatencyMs = nonNegativeInt(process.env.JOIN_MIN_LATENCY_MS, 'JOIN_MIN_LATENCY_MS');
+  const failsPerPrefix48 = positiveInt(
+    process.env.JOIN_FAILS_PER_IPV6_48,
+    'JOIN_FAILS_PER_IPV6_48',
+  );
+  const failsGlobal = positiveInt(process.env.JOIN_FAILS_GLOBAL, 'JOIN_FAILS_GLOBAL');
   return {
     ...(queueTtlMs !== undefined ? { queueTtlMs } : {}),
     ...(fillMs !== undefined ? { fillMs } : {}),
+    ...(cooldownSec !== undefined ? { queueReentryCooldownMs: cooldownSec * 1000 } : {}),
+    ...(joinMinLatencyMs !== undefined ? { joinMinLatencyMs } : {}),
     guard: {
+      ...(failsPerPrefix48 !== undefined ? { failsPerPrefix48 } : {}),
+      ...(failsGlobal !== undefined ? { failsGlobal } : {}),
       ...(lockMs !== undefined ? { lockMs } : {}),
       ...(attemptsPerUserPerMin !== undefined ? { attemptsPerUserPerMin } : {}),
       ...(attemptsPerIpPerMin !== undefined ? { attemptsPerIpPerMin } : {}),
