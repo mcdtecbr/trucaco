@@ -16,3 +16,5 @@ metadata:
 **Why:** o usuário quer decidir quando abrir PR (PRs #1 e #2 mesclados em 2026-11-01). Até então prefere o ritmo direto na `develop`. O repositório é público até o fim do levantamento: não versionar segredos nem material sem direito de redistribuição.
 
 **How to apply:** no modo atual, commitar e dar push na `develop` ao fim de cada bloco de trabalho. **Abrir PR, mexer na `master` ou criar branch de feature só quando o usuário pedir.** Detalhes de como abrir PR sem `gh` em [[trucaco-ambiente-dev]].
+
+**Ordem do usuário (2026-11-01, Fase 2)**: commit e push a CADA etapa concluída (bloco de implementação, rodada de correção de revisão, testes, docs), antes de iniciar a seguinte. Uma etapa só conta como concluída com a verificação completa verde (`format:check`, `lint`, `typecheck`, `test`, `build`) conferida pelo orquestrador. Etapa em andamento (agente ainda trabalhando) não é commitada parcialmente.
