@@ -11,6 +11,8 @@ import type { Variant } from './variant';
 export interface SeriesConfig {
   /** single = um jogo de 12 pontos; bo3 = melhor de 3 jogos. */
   readonly format: 'single' | 'bo3';
+  /** Mão de ferro quando as duas duplas estão no limiar (padrão true). */
+  readonly ironHand?: boolean;
 }
 
 export interface SeriesState {
@@ -42,7 +44,13 @@ export function gamesToWin(config: SeriesConfig): number {
 
 export function startSeries(p: StartSeriesParams): Transition<SeriesState> {
   const seats = p.seats ?? DEFAULT_SEATS;
-  const m = startMatch({ variant: p.variant, seats, pe: p.pe, rng: p.rng });
+  const m = startMatch({
+    variant: p.variant,
+    seats,
+    pe: p.pe,
+    ironHand: p.config.ironHand,
+    rng: p.rng,
+  });
   const state: SeriesState = {
     variant: p.variant,
     seats,
@@ -81,7 +89,13 @@ export function applySeriesAction(
   }
   // Placar zera; assentos e duplas ficam; o pé segue o rodízio.
   const pe = nextSeat(r.state.hand.pe, state.seats);
-  const m = startMatch({ variant: state.variant, seats: state.seats, pe, rng });
+  const m = startMatch({
+    variant: state.variant,
+    seats: state.seats,
+    pe,
+    ironHand: state.config.ironHand,
+    rng,
+  });
   const gameNumber = state.gameNumber + 1;
   events.push({ type: 'gameStarted', gameNumber }, ...m.events);
   return { ok: true, state: { ...state, match: m.state, gameNumber, games, history }, events };

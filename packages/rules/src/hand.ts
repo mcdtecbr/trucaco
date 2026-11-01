@@ -95,6 +95,8 @@ export interface StartHandFromCards {
   readonly seats?: number;
   readonly pe: Seat;
   readonly scores?: readonly [number, number];
+  /** Mão de ferro quando as duas duplas estão no limiar (padrão true). */
+  readonly ironHand?: boolean;
   readonly hands: readonly (readonly Card[])[];
   readonly vira: Card | null;
 }
@@ -104,6 +106,8 @@ export interface StartHandParams {
   readonly seats?: number;
   readonly pe: Seat;
   readonly scores?: readonly [number, number];
+  /** Mão de ferro quando as duas duplas estão no limiar (padrão true). */
+  readonly ironHand?: boolean;
   readonly rng: Rng;
 }
 
@@ -114,7 +118,8 @@ export function startHandFromCards(p: StartHandFromCards): HandState {
   const t = p.variant.specialHandThreshold;
   const at0 = scores[0] === t;
   const at1 = scores[1] === t;
-  const special: SpecialKind = at0 && at1 ? 'maoDeFerro' : at0 || at1 ? 'maoDeOnze' : 'normal';
+  const ferro = at0 && at1 && (p.ironHand ?? true);
+  const special: SpecialKind = ferro ? 'maoDeFerro' : at0 !== at1 ? 'maoDeOnze' : 'normal';
   const specialTeam: Team | null = special === 'maoDeOnze' ? (at0 ? 0 : 1) : null;
   const mao = nextSeat(p.pe, seats);
   return {

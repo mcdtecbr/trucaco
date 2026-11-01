@@ -12,6 +12,8 @@ import type { Variant } from './variant';
 export interface MatchState {
   readonly variant: Variant;
   readonly seats: number;
+  /** Mão de ferro habilitada (opção da sala). */
+  readonly ironHand: boolean;
   /** Placar atual por dupla (já com as mãos encerradas). */
   readonly scores: readonly [number, number];
   /** Pé da mão em curso (ou da última mão, se o jogo acabou). */
@@ -28,6 +30,8 @@ export interface StartMatchParams {
   readonly seats?: number;
   /** Pé da primeira mão (padrão 0). */
   readonly pe?: Seat;
+  /** Mão de ferro quando as duas duplas estão no limiar (padrão true). */
+  readonly ironHand?: boolean;
   readonly rng: Rng;
 }
 
@@ -44,10 +48,12 @@ function handStartedEvent(m: MatchState): GameEvent {
 export function startMatch(p: StartMatchParams): Transition<MatchState> {
   const seats = p.seats ?? DEFAULT_SEATS;
   const pe = p.pe ?? 0;
-  const hand = startHand({ variant: p.variant, seats, pe, scores: [0, 0], rng: p.rng });
+  const ironHand = p.ironHand ?? true;
+  const hand = startHand({ variant: p.variant, seats, pe, scores: [0, 0], ironHand, rng: p.rng });
   const state: MatchState = {
     variant: p.variant,
     seats,
+    ironHand,
     scores: [0, 0],
     pe,
     handNumber: 1,
@@ -78,7 +84,14 @@ export function applyMatchAction(
     return { ok: true, state: { ...state, scores, hand: r.state, winner }, events };
   }
   const pe = nextSeat(state.pe, state.seats);
-  const hand = startHand({ variant: state.variant, seats: state.seats, pe, scores, rng });
+  const hand = startHand({
+    variant: state.variant,
+    seats: state.seats,
+    pe,
+    scores,
+    ironHand: state.ironHand,
+    rng,
+  });
   const next: MatchState = { ...state, scores, pe, handNumber: state.handNumber + 1, hand };
   events.push(handStartedEvent(next));
   return { ok: true, state: next, events };

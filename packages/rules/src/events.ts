@@ -80,11 +80,12 @@ export type PublicGameEvent =
       readonly blind: boolean;
     };
 
-/** Remove a identidade de carta coberta/às cegas. `viewer` (o próprio jogador) pode ver a sua coberta. */
+/** Remove a identidade de carta coberta. `viewer` (o próprio jogador) pode ver a sua coberta. */
 export function publicEvent(event: GameEvent, viewer?: Seat): PublicGameEvent {
   if (event.type !== 'cardPlayed') return event;
-  // Às cegas: ninguém conhece a carta; coberta: só o próprio jogador.
-  const hidden = event.blind || (event.covered && event.seat !== viewer);
+  // Coberta: só o próprio jogador a vê. Às cegas (mão de ferro): escolhida sem ver, mas
+  // aberta e visível a toda a mesa ao ser jogada.
+  const hidden = event.covered && event.seat !== viewer;
   return { ...event, card: hidden ? null : event.card };
 }
 

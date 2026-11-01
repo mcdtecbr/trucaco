@@ -138,9 +138,11 @@ describe('publicEvent', () => {
     expect(publicEvent(e, 0)).toMatchObject({ card: null });
     expect(publicEvent(e, 1)).toMatchObject({ card });
   });
-  it('esconde carta às cegas de todos', () => {
+  it('carta jogada às cegas (mão de ferro) fica visível a toda a mesa', () => {
     const e: GameEvent = { type: 'cardPlayed', seat: 1, card, covered: false, blind: true };
-    expect(publicEvent(e, 1)).toMatchObject({ card: null });
+    expect(publicEvent(e)).toMatchObject({ card });
+    expect(publicEvent(e, 0)).toMatchObject({ card });
+    expect(publicEvent(e, 1)).toMatchObject({ card });
   });
   it('carta aberta passa intacta', () => {
     const e: GameEvent = { type: 'cardPlayed', seat: 1, card, covered: false, blind: false };
