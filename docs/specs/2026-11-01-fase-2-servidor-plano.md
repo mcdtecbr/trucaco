@@ -1,5 +1,17 @@
 # Fase 2: plano do servidor Colyseus
 
+**Estado: concluído em 2026-11-01; divergências do plano:**
+
+- **Sem `LobbyRoom`**: o lobby é REST (`/tables`, `/tables/join`, `/queue`) + `matchMaker`, que devolve reserva de assento. Motivo em `apps/server/README.md` ("Desenho e por que"). A `LobbyRoom` do core publicava a lista de mesas e não tinha fila.
+- **JWT HS256** (`jose`), não assimétrico: só este servidor emite e verifica. ES256 fica para quando houver verificador externo.
+- **Código de sala com 8 caracteres** (decisão do usuário após a auditoria), não 6.
+- **Revisão pela Rita-C** (`rita-revisora-claude`, `opus`), no lugar do Codex: o container não tem o Codex CLI.
+- **Build gera `dist/main.js`** (não `dist/index.js`); o `index.ts` só exporta funções puras.
+- **`userId` não está em `players[]`** do schema (ver a linha de `TableState` abaixo).
+- **`error` leva só `code`**: não há campo `message` (o tipo do protocolo não o tem).
+
+Pendências e ressalvas: `docs/plano-desenvolvimento.md`, Fase 2.
+
 Autor: `artur-arquiteto` (somente leitura), 2026-11-01. Complementa a §5 do design (`2026-11-01-trucaco-design.md`). Onde houver divergência com a §5, vale este plano e a §5 deve ser atualizada pelo `teo-docs` (`@filter` virou `StateView`; eventos em camelCase).
 
 Versões conferidas no registro do npm em 2026-11-01. **A API de cada pacote ainda precisa ser confirmada nos `.d.ts` instalados** (a documentação web do Colyseus estava bloqueada no ambiente de planejamento).
@@ -42,7 +54,7 @@ Escopo de 2G: `POST /auth/guest`, `/auth/refresh` (rotativo em Redis), `/auth/li
 
 **Eventos públicos:** vale o nome camelCase do motor (sem tabela de tradução). `protocol` declara `PublicGameEvent` estruturalmente igual ao do motor, com comentário de sincronia; o servidor atribui `const e: protocol.PublicGameEvent = publicEvent(ev, seat)` e o `tsc` acusa divergência. O grito do avatar vem de `BET_CRY_BY_VALUE` (3 e 4 → truco; 6; 8; 9 → nove; 10; 12). O cliente infere o `betAccepted` implícito em `betRaised` (documentar no tipo).
 
-**Schema da mesa (`TableState`):** `roomCode`, `options`, `phase` (`waiting|playing|finished`), `players[4] {seat, userId, nickname, avatar, status, handSize, isBot}`, `series`, `game {scores, handNumber, pe}`, `hand {vira, special, specialTeam, phase, turn, value, level, pending?, tricks, current}`, `turnDeadlineAt`, `cancelVotes`. Por assento, só para o dono: cartas na mão (na mão de ferro, só `handSize`), `legalActions` (ids: `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`) e `partnerCards` na decisão de onze/dez. Carta coberta alheia aparece como `{covered: true}`, sem rank.
+**Schema da mesa (`TableState`):** `roomCode`, `options`, `phase` (`waiting|playing|finished`), `players[4] {seat, nickname, avatar, status, handSize, isBot}`, `series`, `game {scores, handNumber, pe}`, `hand {vira, special, specialTeam, phase, turn, value, level, pending?, tricks, current}`, `turnDeadlineAt`, `cancelVotes`. **`userId` foi removido do schema compartilhado** (decisão tomada na implementação, 2026-11-01): o estado vai a todos os clientes, então o `userId` ficaria exposto a quem está na mesa. Ele fica só em memória do servidor (mapa por assento, usado para reserva, retomada do dono e vínculo do lobby); a identidade pública é `seat` + `nickname`. Por assento, só para o dono: cartas na mão (na mão de ferro, só `handSize`), `legalActions` (ids: `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`) e `partnerCards` na decisão de onze/dez. Carta coberta alheia aparece como `{covered: true}`, sem rank.
 
 ## Decisões
 

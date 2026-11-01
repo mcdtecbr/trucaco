@@ -19,7 +19,8 @@ Referência normativa para `packages/rules`. Quando o código e este documento d
 - **Mão de ferro é opcional**: quem abre a sala escolhe se ela vale (`ironHand`, padrão ligada). Com a opção desligada e as duas duplas no limiar, a mão é **normal**: cartas abertas, valor base e apostas liberadas. A mão de onze/dez com apenas uma dupla no limiar vale sempre, independente da opção.
 - **Bot**: nunca pede nem aumenta aposta; essa decisão é sempre de jogador humano. Ele corre de aposta pendente, decide a mão de onze/dez e joga a carta mais fraca. O bot pode emitir **sinais** (servidor e avatar, Fases 2 e 4); isso não é função do motor.
 - **Timer de turno**: 20 s por ação (configurável). Ao estourar: carta mais fraca é jogada automaticamente; se havia truco pendente, a resposta automática é `correr`.
-- **Desconexão**: 60 s para reconectar. Depois disso a cadeira é assumida por bot até o fim da mão em curso; se a mão seguinte começar sem o jogador, a mesa pode ser encerrada por voto da maioria.
+- **Desconexão**: 60 s para reconectar. Depois disso (ou na saída consentida, que já libera o bot na hora) a cadeira é assumida por bot e **fica com o bot até o dono voltar por um novo join**, com o mesmo usuário. A vaga continua reservada ao dono, e a mesa destranca para ele entrar de novo. Há teto de 20 reconexões por assento; acima disso, a queda já vai direto para o bot.
+- **Cancelar a mesa por voto** (`voteCancel`): vale a **unanimidade dos humanos conectados** (bot não vota; quem está na janela de reconexão não conta). O voto vale só dentro da mão em curso e zera a cada mão nova. Se nenhum humano fica conectado por 60 s, ou não resta nenhum humano na mesa, a série é cancelada sem vencedor e sem estatística de vitória.
 
 ## Truco Paulista
 

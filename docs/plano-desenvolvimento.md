@@ -28,7 +28,9 @@ Documentos de apoio por tema: `docs/regras-truco.md` (regras e série), `docs/si
 | `legalActions` e bot mínimo (carta mais fraca, corre a truco)                                                     | `tales-regras` | Bot termina 1000 partidas simuladas sem ação ilegal            |
 | Revisão de cobertura e casos de borda                                                                             | `catia-qa`     | Cobertura ≥ 90% em `rules`                                     |
 
-## Fase 2: servidor Colyseus (2–3 semanas)
+## Fase 2: servidor Colyseus (2–3 semanas): concluída em 2026-11-01, com ressalvas
+
+Divergências do plano original (sem `LobbyRoom`, JWT HS256, código de 8 caracteres, Rita-C na revisão) estão na nota no topo de `docs/specs/2026-11-01-fase-2-servidor-plano.md`. Contrato em `docs/protocolo-servidor.md`; operação em `apps/server/README.md`.
 
 | Etapa                                                                                                                 | Agente                              | Pronto quando                                                       |
 | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------- |
@@ -43,6 +45,23 @@ Documentos de apoio por tema: `docs/regras-truco.md` (regras e série), `docs/si
 | Chat da dupla e da mesa: filtro, rate limit, frases rápidas                                                           | `caio-colyseus`                     | Teste: mensagem de parceiro não chega ao adversário                 |
 | Auth: guest, JWT, `onAuth`, refresh em Redis                                                                          | `caio-colyseus`                     | Teste de integração de login e entrada em sala                      |
 | Auditoria de auth, filtro de cartas, rate limit                                                                       | `vitor-seguranca`                   | Sem achado crítico ou alto em aberto                                |
+
+### Fase 2: pendências e ressalvas (para depois)
+
+- **Retenção e expurgo**: nenhum job roda. Vale para `deals`, `events`, partidas canceladas, `reports` e convidados inativos (`docs/banco-de-dados.md`, seção "Retenção").
+- **Estado do lobby e limites em Redis** para multi-instância: fila, mesas, `JoinGuard`, rate limit REST e de matchmaking estão em memória do processo. Presença e `mm:*` do desenho ainda não existem.
+- **Moderação**: silenciar, bloquear, denunciar (ponto de extensão `canReceiveChat`) e filtro de palavrões no chat. Hoje só há limpeza de texto e rate limit.
+- **Ban persistente**: o `bannedUsers` da sala existe só em memória e se perde com a sala.
+- **`partnerUserId` e filtro de bloqueados na fila**: o campo existe em `JoinOptions`, mas nada o usa.
+- **Logout e "sair de todos os aparelhos"**: `revokeAllForUser` existe, sem rota.
+- **Google, Apple e `POST /auth/link`**: respondem `501` (Fase 3).
+- **Homóglifos no apelido**: letras latinas parecidas passam na validação (sem skeleton/confusables).
+- **Avatar com texto livre**: `parts` aceita texto de até 140 caracteres; validar contra o catálogo do rig na Fase 4.
+- **Janela do access JWT**: até 15 min de acesso após revogação (logout, reuso), porque o WebSocket já aberto não consulta o Redis.
+- **Usuário órfão** se o Redis falha em `createGuest` (sem `delete` no repositório).
+- **Validação de Docker e CI no GitHub**: o workflow ainda não rodou no GitHub, e o container de desenvolvimento não tem Docker. A sequência do CI foi reproduzida localmente.
+- **ZWJ rejeitado no chat**: emoji com ZWJ (comum no celular) é recusado com `CHAT_BLOCKED`. Decidir se libera.
+- **Outros achados**: a rota `GET /matches` não existe (o repositório já tem `listForUser`); o `TRUST_PROXY` usa o último item de `X-Forwarded-For`, e na Fly.io o certo é `Fly-Client-IP` (tratar no deploy).
 
 ## Fase 3: cliente jogável (3 semanas)
 
