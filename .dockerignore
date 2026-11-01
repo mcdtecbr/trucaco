@@ -12,3 +12,4 @@ assets
 .env.*
 !.env.example
 *.md
+**/src/generated

@@ -41,3 +41,6 @@ Thumbs.db
 .claude/agents-old/
 .claude/settings.local.json
 graphify-out/
+
+# Prisma Client gerado (pnpm --filter @trucaco/server db:generate)
+apps/server/src/generated/

@@ -3,7 +3,7 @@
 ARG NODE_IMAGE=node:22.12.0-alpine3.21
 
 # Os package.json dos demais workspaces entram só para o lockfile casar com --frozen-lockfile.
-# ---- build: instala tudo e gera apps/server/dist/main.js (bundle tsup) ----
+# ---- build: instala tudo, gera o Prisma Client e apps/server/dist/main.js (bundle tsup) ----
 FROM ${NODE_IMAGE} AS build
 ENV CI=true
 WORKDIR /repo
@@ -21,12 +21,18 @@ RUN pnpm install --frozen-lockfile --filter @trucaco/server...
 COPY apps/server apps/server
 COPY packages/protocol packages/protocol
 COPY packages/rules packages/rules
+# Gera o Prisma Client (apps/server/src/generated, fora do git) ANTES do tsup/tsc: o bundle o embute.
+# `prisma generate` não conecta ao banco e não precisa de DATABASE_URL. O turbo também encadeia
+# `db:generate` antes do build; o passo explícito falha cedo se o schema estiver quebrado.
+RUN pnpm --filter @trucaco/server db:generate
 RUN pnpm turbo run build --filter=@trucaco/server
 # `pnpm deploy` gera uma pasta autossuficiente (node_modules sem symlinks para a raiz do monorepo).
 # Copiar só apps/server/node_modules quebraria com ERR_MODULE_NOT_FOUND. Os pacotes @trucaco/*
 # ficam dentro do bundle tsup.
 RUN pnpm --filter @trucaco/server deploy --prod /out
 
+# Migrações NÃO rodam no runtime: o CLI `prisma` é devDependency e não vai para /out. Rode
+# `pnpm --filter @trucaco/server db:deploy` num passo de release (CI/Fly release_command) com DATABASE_URL.
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \

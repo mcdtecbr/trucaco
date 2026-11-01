@@ -1,0 +1,225 @@
+// Esquema Postgres do Trucaco (bloco 2C). Modelo completo e política de retenção:
+// docs/banco-de-dados.md.
+//
+// O Prisma NÃO expressa três regras que vivem no SQL da migração (editado à mão):
+//   - CHECK de tamanho do apelido (3..16) e índice único em lower(nickname);
+//   - CHECK de par ordenado em partner_codes (user_a_id < user_b_id);
+//   - CHECK de auto-bloqueio, de seat/team e de coerência de status em matches.
+// Ao criar uma migração nova, confira o SQL gerado para não descartar nada disso.
+//
+// Ids são UUID aleatórios (nunca sequenciais): evitam enumeração e IDOR.
+// Sem e-mail, nome real ou senha: minimização de dados (LGPD) e não há login por senha.
+
+generator client {
+  provider = "prisma-client"
+  // Gerado por `pnpm db:generate`; ignorado pelo git, lint e Prettier.
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // A URL fica em prisma.config.ts (Prisma 7); o runtime usa o driver adapter-pg.
+}
+
+enum AuthProvider {
+  guest
+  google
+  apple
+
+  @@map("auth_provider")
+}
+
+enum Variant {
+  paulista
+  mineiro
+
+  @@map("variant")
+}
+
+enum MatchFormat {
+  single
+  bo3
+
+  @@map("match_format")
+}
+
+enum MatchVisibility {
+  public
+  private
+
+  @@map("match_visibility")
+}
+
+enum MatchStatus {
+  finished
+  cancelled
+
+  @@map("match_status")
+}
+
+enum ReportReason {
+  cheating
+  abusive_chat
+  offensive_nickname
+  harassment
+  other
+
+  @@map("report_reason")
+}
+
+enum ReportStatus {
+  open
+  reviewed
+  dismissed
+
+  @@map("report_status")
+}
+
+model User {
+  id              String       @id @default(uuid()) @db.Uuid
+  provider        AuthProvider
+  // Convidado: identificador aleatório gerado pelo servidor. Social: `sub` do provedor.
+  providerSubject String       @map("provider_subject")
+  // 3..16 caracteres (CHECK) e único sem diferenciar caixa (índice em lower(nickname), no SQL).
+  nickname        String       @db.VarChar(16)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt      DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+
+  avatar          Avatar?
+  matchSeats      MatchPlayer[]
+  partnerCodesA   PartnerCodes[] @relation("PartnerCodesA")
+  partnerCodesB   PartnerCodes[] @relation("PartnerCodesB")
+  reportsFiled    Report[]       @relation("ReportReporter")
+  reportsReceived Report[]       @relation("ReportReported")
+  blocksMade      Block[]        @relation("BlockBlocker")
+  blocksReceived  Block[]        @relation("BlockBlocked")
+
+  @@unique([provider, providerSubject])
+  @@map("users")
+}
+
+// Um avatar por usuário (a PK é a própria FK). `parts` é o AvatarParts, validado no servidor.
+model Avatar {
+  userId    String   @id @map("user_id") @db.Uuid
+  parts     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("avatars")
+}
+
+// Partida terminada ou cancelada. Só é gravada ao fim (nada de partida em andamento aqui).
+// Histórico sobrevive à remoção de usuário: match_players.user_id vira NULL (anonimização).
+model Match {
+  id         String          @id @default(uuid()) @db.Uuid
+  variant    Variant
+  format     MatchFormat
+  ironHand   Boolean         @map("iron_hand")
+  visibility MatchVisibility
+  roomCode   String?         @map("room_code") @db.VarChar(8)
+  // Semente do RNG da sala (uint32, não cabe em int4; CHECK 0..2^32-1): reproduz a partida.
+  seed       BigInt
+  options    Json
+  // [{ seq, at, event }] em visão PÚBLICA (carta coberta sem identidade). Pode sair por REST.
+  events     Json
+  // Mãos distribuídas (cartas de todos): SÓ para auditoria anti-trapaça. NUNCA sai por REST.
+  // Retenção: zerado (NULL) após 30 dias; o resto da linha é apagado após 12 meses.
+  // Detalhes em docs/banco-de-dados.md.
+  deals      Json?
+  // 0 ou 1; NULL se cancelada (CHECK: finished <=> winner_team preenchido).
+  winnerTeam Int?            @map("winner_team") @db.SmallInt
+  // Jogos da série, por exemplo [[12,7],[5,12],[12,3]] ou o formato definido pelo 2H.
+  games      Json
+  status     MatchStatus
+  startedAt  DateTime        @map("started_at") @db.Timestamptz(3)
+  endedAt    DateTime        @map("ended_at") @db.Timestamptz(3)
+
+  players MatchPlayer[]
+  reports Report[]
+
+  // Retenção (expurgo por ended_at) e paginação por cursor (ended_at, id).
+  @@index([endedAt(sort: Desc), id(sort: Desc)])
+  @@map("matches")
+}
+
+// PK composta (match_id, seat) = UNIQUE(match, seat). Cascade só de match -> match_players.
+model MatchPlayer {
+  matchId String  @map("match_id") @db.Uuid
+  seat    Int     @db.SmallInt
+  // NULL = bot desde o início ou usuário removido (anonimizado). `botFrom` distingue.
+  userId  String? @map("user_id") @db.Uuid
+  team    Int     @db.SmallInt
+  // Número do evento (seq) em que um bot assumiu o assento; NULL = humano até o fim.
+  botFrom Int?    @map("bot_from")
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // GET /matches: partidas de um usuário (junta com matches por match_id).
+  @@id([matchId, seat])
+  @@index([userId, matchId])
+  @@map("match_players")
+}
+
+// Códigos secretos da dupla. Par NÃO ordenado tratado como ordenado: o servidor ordena os dois
+// ids (string UUID minúscula) e o CHECK user_a_id < user_b_id garante a forma canônica.
+model PartnerCodes {
+  id        String   @id @default(uuid()) @db.Uuid
+  userAId   String   @map("user_a_id") @db.Uuid
+  userBId   String   @map("user_b_id") @db.Uuid
+  // { [signalId]: significado }, até 140 caracteres por significado (validado no repositório).
+  codes     Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  userA User @relation("PartnerCodesA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB User @relation("PartnerCodesB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  // "Duplas frequentes" do outro lado do par (o lado A é coberto pelo UNIQUE).
+  @@index([userBId])
+  @@map("partner_codes")
+}
+
+// Denúncia. Reporter e reported viram NULL se o usuário for removido (evidência preservada).
+model Report {
+  id         String       @id @default(uuid()) @db.Uuid
+  reporterId String?      @map("reporter_id") @db.Uuid
+  reportedId String?      @map("reported_id") @db.Uuid
+  matchId    String?      @map("match_id") @db.Uuid
+  reason     ReportReason
+  // Até 500 caracteres.
+  text       String?      @db.VarChar(500)
+  status     ReportStatus @default(open)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  reviewedAt DateTime?    @map("reviewed_at") @db.Timestamptz(3)
+
+  reporter User?  @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  reported User?  @relation("ReportReported", fields: [reportedId], references: [id], onDelete: SetNull)
+  match    Match? @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  // Fila de moderação (reports abertos, mais antigos primeiro) e histórico por denunciado.
+  @@index([status, createdAt])
+  @@index([reportedId, createdAt])
+  @@index([reporterId, createdAt])
+  @@index([matchId])
+  @@map("reports")
+}
+
+// Bloqueio: o bloqueador não é sorteado na mesma mesa pública que o bloqueado.
+model Block {
+  id        String   @id @default(uuid()) @db.Uuid
+  blockerId String   @map("blocker_id") @db.Uuid
+  blockedId String   @map("blocked_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  blocker User @relation("BlockBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlockBlocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  // CHECK blocker_id <> blocked_id fica no SQL. O UNIQUE cobre "bloqueios do usuário X".
+  @@unique([blockerId, blockedId])
+  // Direção inversa (matchmaking checa os dois sentidos).
+  @@index([blockedId])
+  @@map("blocks")
+}

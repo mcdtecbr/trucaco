@@ -7,7 +7,14 @@ const internalImports = (names, message) => ({
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.turbo/**', '**/coverage/**', '**/.expo/**'],
+    ignores: [
+      '**/generated/**',
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      '**/.expo/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

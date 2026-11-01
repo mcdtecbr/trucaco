@@ -37,7 +37,27 @@ Mesa de 4 jogadores, registrada em `createServer` com `server.define('truco', ..
 
 ## Chaves Redis
 
-A definir pela `dalva-dba` na Fase 2 (sessões, refresh tokens, filas, presença), documentando prefixo, TTL, quem escreve e quem lê.
+Desenhadas em `docs/banco-de-dados.md` (seção 2): prefixo `trucaco:v1:`, refresh rotativo com detecção de reuso, `jti`, presença, filas de matchmaking por variante e rate limit compartilhado, cada uma com tipo, TTL, quem escreve e quem lê. O cliente Redis ainda não existe (blocos 2G/2H).
+
+## Banco de dados (Postgres via Prisma 7)
+
+Modelo, índices, `onDelete` e retenção: `docs/banco-de-dados.md`. Schema em `prisma/schema.prisma`; a URL fica em `prisma.config.ts` (lê `DATABASE_URL`). O Prisma 7 exige driver adapter (`@prisma/adapter-pg`): `createPrisma(databaseUrl)` em `src/db/prisma.ts`. O client é gerado em `src/generated/prisma` (fora do git, do lint e do Prettier).
+
+```bash
+pnpm db:up                                  # Postgres 16 (5432) e Redis 7 (6380) em Docker
+export DATABASE_URL=postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco   # ou copie de .env.example
+
+pnpm --filter @trucaco/server db:generate   # gera o Prisma Client (o turbo faz isso antes de build/typecheck/test/lint)
+pnpm --filter @trucaco/server db:migrate    # prisma migrate dev (local): cria e aplica migração. Use --create-only para editar o SQL
+pnpm --filter @trucaco/server db:deploy     # prisma migrate deploy (CI/produção): só aplica
+pnpm --filter @trucaco/server test:int      # testes de integração (*.int.test.ts), exigem DATABASE_URL de um banco descartável
+```
+
+`pnpm test` NÃO exige banco: exclui `*.int.test.ts`. O `test:int` trunca as tabelas; nunca aponte para um banco com dados. Sem Docker, qualquer Postgres 16 serve (`createdb trucaco`). Rode `db:generate` uma vez após o `pnpm install` se for executar `tsc`/`vitest` direto no pacote, fora do turbo.
+
+Ao criar uma migração nova com `db:migrate`, confira o SQL: o `CHECK` de apelido, o índice único em `lower(nickname)` e os demais `CHECK` da migração inicial são escritos à mão e o Prisma não os conhece. Migrações nunca rodam contra banco remoto a partir de máquina de desenvolvimento. A imagem de produção não traz o CLI `prisma` (devDependency): `db:deploy` roda em passo de release.
+
+Acesso: `src/db/` tem as interfaces `UserRepository` e `MatchRepository` (`types.ts`), a implementação Prisma (`prismaRepositories.ts`) e a implementação em memória para testes de sala (`memoryRepositories.ts`, `createMemoryRepositories()`).
 
 ## Comandos
 

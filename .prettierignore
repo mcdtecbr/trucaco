@@ -5,3 +5,4 @@ coverage
 .expo
 pnpm-lock.yaml
 *.riv
+apps/server/src/generated

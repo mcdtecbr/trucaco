@@ -1,0 +1,449 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createPrisma, type PrismaHandle } from './prisma';
+import { PrismaMatchRepository, PrismaUserRepository } from './prismaRepositories';
+import {
+  InvalidInputError,
+  NicknameTakenError,
+  ProviderSubjectTakenError,
+  type FinishedMatchInput,
+  type UserRecord,
+} from './types';
+
+/**
+ * Integração com Postgres real (`pnpm test:int`). Exige DATABASE_URL de um banco DESCARTÁVEL já
+ * migrado (`pnpm db:deploy`): cada teste começa com as tabelas truncadas.
+ */
+const url = process.env['DATABASE_URL'];
+
+describe.skipIf(url === undefined || url === '')('persistência (Postgres real)', () => {
+  let handle: PrismaHandle;
+  let users: PrismaUserRepository;
+  let matches: PrismaMatchRepository;
+  const db = (): PrismaHandle['prisma'] => handle.prisma;
+  let seq = 0;
+
+  const guest = (nickname: string): Promise<UserRecord> =>
+    users.createGuest({ providerSubject: `g-${++seq}-${nickname}`, nickname });
+
+  const matchInput = (
+    players: readonly (string | null)[],
+    endedAt: Date,
+    overrides: Partial<FinishedMatchInput> = {},
+  ): FinishedMatchInput => ({
+    variant: 'paulista',
+    format: 'single',
+    ironHand: false,
+    visibility: 'public',
+    roomCode: 'ABCD2345',
+    seed: 4294967295,
+    options: { variant: 'paulista', format: 'single', ironHand: false, visibility: 'public' },
+    events: [
+      { seq: 1, at: 1000, event: { type: 'handStarted', hand: 1 } },
+      { seq: 2, at: 2000, event: { type: 'cardPlayed', seat: 0, covered: true } },
+    ],
+    deals: [{ hand: 1, cards: [['4C', '5C', '6C']] }],
+    winnerTeam: 0,
+    games: [[12, 7]],
+    status: 'finished',
+    startedAt: new Date(endedAt.getTime() - 60_000),
+    endedAt,
+    players: players.map((userId, seat) => ({
+      seat,
+      userId,
+      team: seat % 2 === 0 ? 0 : 1,
+      botFrom: userId === null ? 0 : null,
+    })),
+    ...overrides,
+  });
+
+  beforeAll(() => {
+    handle = createPrisma(url ?? '', { maxConnections: 4 });
+    users = new PrismaUserRepository(handle.prisma);
+    matches = new PrismaMatchRepository(handle.prisma);
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  beforeEach(async () => {
+    await db().$executeRawUnsafe(
+      'TRUNCATE TABLE reports, blocks, partner_codes, match_players, matches, avatars, users CASCADE',
+    );
+  });
+
+  describe('users', () => {
+    it('apelido é único sem diferenciar maiúsculas e minúsculas', async () => {
+      await guest('Ana');
+      await expect(guest('ana')).rejects.toBeInstanceOf(NicknameTakenError);
+      await expect(guest('ANA')).rejects.toBeInstanceOf(NicknameTakenError);
+      // O índice em lower(nickname) vale também para SQL direto (sem passar pelo repositório).
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO users (id, provider, provider_subject, nickname)
+           VALUES (gen_random_uuid(), 'guest', 'raw-1', 'aNa')`,
+        ),
+      ).rejects.toThrow(/users_nickname_lower_key/);
+    });
+
+    it('apelido tem de 3 a 16 caracteres (repositório e CHECK)', async () => {
+      await expect(guest('ab')).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(guest('a'.repeat(17))).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(guest(' ana')).rejects.toBeInstanceOf(InvalidInputError);
+      expect((await guest('abc')).nickname).toBe('abc');
+      expect((await guest('a'.repeat(16))).nickname).toHaveLength(16);
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO users (id, provider, provider_subject, nickname)
+           VALUES (gen_random_uuid(), 'guest', 'raw-2', 'ab')`,
+        ),
+      ).rejects.toThrow(/users_nickname_length_check/);
+      // 17 caracteres: recusado pelo VARCHAR(16) antes mesmo do CHECK.
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO users (id, provider, provider_subject, nickname)
+           VALUES (gen_random_uuid(), 'guest', 'raw-3', '${'x'.repeat(17)}')`,
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('UNIQUE(provider, provider_subject); o mesmo subject em outro provedor é outra conta', async () => {
+      await users.createGuest({ providerSubject: 'abc', nickname: 'Beto' });
+      await expect(
+        users.createGuest({ providerSubject: 'abc', nickname: 'Carla' }),
+      ).rejects.toBeInstanceOf(ProviderSubjectTakenError);
+      await db().$executeRawUnsafe(
+        `INSERT INTO users (id, provider, provider_subject, nickname)
+         VALUES (gen_random_uuid(), 'google', 'abc', 'Dora')`,
+      );
+      expect((await users.findByProvider('guest', 'abc'))?.nickname).toBe('Beto');
+      expect(await users.findByProvider('apple', 'abc')).toBeNull();
+    });
+
+    it('id é UUID aleatório e não guarda e-mail nem nome real', async () => {
+      const a = await guest('Eva');
+      const b = await guest('Fabi');
+      expect(a.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(a.id).not.toBe(b.id);
+      const cols = await db().$queryRawUnsafe<{ column_name: string }[]>(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'users'`,
+      );
+      expect(cols.map((c) => c.column_name).sort()).toEqual([
+        'created_at',
+        'id',
+        'last_seen_at',
+        'nickname',
+        'provider',
+        'provider_subject',
+      ]);
+    });
+
+    it('avatar: um por usuário (upsert) e removido junto com o usuário', async () => {
+      const u = await guest('Gil');
+      await users.saveAvatar(u.id, { skin: 1 });
+      await users.saveAvatar(u.id, { skin: 2, hat: 'cap' });
+      expect(await users.getAvatar(u.id)).toEqual({ skin: 2, hat: 'cap' });
+      expect(await db().avatar.count()).toBe(1);
+      await expect(
+        db().$executeRawUnsafe(`UPDATE avatars SET parts = '[]'::jsonb`),
+      ).rejects.toThrow(/avatars_parts_object_check/);
+      await db().user.delete({ where: { id: u.id } });
+      expect(await db().avatar.count()).toBe(0);
+    });
+  });
+
+  describe('blocks', () => {
+    it('auto-bloqueio é recusado (CHECK e repositório) e bloquear é idempotente', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      await expect(users.addBlock(a.id, a.id)).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO blocks (id, blocker_id, blocked_id) VALUES (gen_random_uuid(), '${a.id}', '${a.id}')`,
+        ),
+      ).rejects.toThrow(/blocks_not_self_check/);
+      await users.addBlock(a.id, b.id);
+      await users.addBlock(a.id, b.id);
+      expect(await users.listBlockedIds(a.id)).toEqual([b.id]);
+      expect(await users.listBlockerIds(b.id)).toEqual([a.id]);
+      expect(await users.listBlockerIds(a.id)).toEqual([]);
+      await users.removeBlock(a.id, b.id);
+      expect(await users.listBlockedIds(a.id)).toEqual([]);
+      await expect(
+        users.addBlock(a.id, '00000000-0000-4000-8000-000000000000'),
+      ).rejects.toBeInstanceOf(InvalidInputError);
+    });
+  });
+
+  describe('partner_codes', () => {
+    it('par é ordenado: (a,b) e (b,a) são o mesmo registro', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      await users.savePartnerCodes(a.id, b.id, { s1: 'tenho zap' });
+      await users.savePartnerCodes(b.id, a.id, { s1: 'tenho zap', s2: 'sem manilha' });
+      expect(await db().partnerCodes.count()).toBe(1);
+      expect(await users.getPartnerCodes(a.id, b.id)).toEqual({
+        s1: 'tenho zap',
+        s2: 'sem manilha',
+      });
+      expect(await users.getPartnerCodes(b.id, a.id)).toEqual({
+        s1: 'tenho zap',
+        s2: 'sem manilha',
+      });
+      const row = await db().partnerCodes.findFirstOrThrow();
+      expect(row.userAId < row.userBId).toBe(true);
+    });
+
+    it('CHECK recusa par fora de ordem, par consigo e duplicado', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const [lo, hi] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+      const insert = (x: string, y: string): Promise<number> =>
+        db().$executeRawUnsafe(
+          `INSERT INTO partner_codes (id, user_a_id, user_b_id, codes, updated_at)
+           VALUES (gen_random_uuid(), '${x}', '${y}', '{}'::jsonb, now())`,
+        );
+      await expect(insert(hi, lo)).rejects.toThrow(/partner_codes_ordered_pair_check/);
+      await expect(insert(lo, lo)).rejects.toThrow(/partner_codes_ordered_pair_check/);
+      await insert(lo, hi);
+      await expect(insert(lo, hi)).rejects.toThrow(/partner_codes_user_a_id_user_b_id_key/);
+    });
+
+    it('significado de até 140 caracteres; 141 é recusado', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      await users.savePartnerCodes(a.id, b.id, { s1: 'x'.repeat(140) });
+      await expect(
+        users.savePartnerCodes(a.id, b.id, { s1: 'x'.repeat(141) }),
+      ).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(users.savePartnerCodes(a.id, a.id, {})).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
+    });
+  });
+
+  describe('matches e FK', () => {
+    it('grava e consulta eventos jsonb em visão pública, sem expor deals na listagem', async () => {
+      const [a, b, c, d] = await Promise.all([
+        guest('A1x'),
+        guest('B2x'),
+        guest('C3x'),
+        guest('D4x'),
+      ]);
+      const id = await matches.saveMatch(
+        matchInput([a.id, b.id, c.id, d.id], new Date('2026-11-01T12:00:00Z')),
+      );
+      const rows = await db().$queryRawUnsafe<{ n: bigint; kind: string; seed: bigint }[]>(
+        `SELECT jsonb_array_length(events) AS n, events->1->'event'->>'type' AS kind, seed
+           FROM matches WHERE id = '${id}'::uuid`,
+      );
+      expect(Number(rows[0]?.n)).toBe(2);
+      expect(rows[0]?.kind).toBe('cardPlayed');
+      expect(rows[0]?.seed).toBe(4294967295n);
+      // Consulta por conteúdo (operador @> do jsonb).
+      const hit = await db().$queryRawUnsafe<{ id: string }[]>(
+        `SELECT id FROM matches WHERE events @> '[{"seq": 2}]'::jsonb`,
+      );
+      expect(hit).toHaveLength(1);
+
+      const page = await matches.listForUser(a.id);
+      expect(page.items).toHaveLength(1);
+      const item = page.items[0];
+      expect(item?.players.map((p) => p.nickname)).toEqual(['A1x', 'B2x', 'C3x', 'D4x']);
+      expect(item?.games).toEqual([[12, 7]]);
+      expect(Object.keys(item ?? {})).not.toContain('deals');
+      expect(Object.keys(item ?? {})).not.toContain('events');
+      expect(Object.keys(item ?? {})).not.toContain('seed');
+    });
+
+    it('CHECKs: status x vencedor, assento 0..3, dupla = assento % 2, assento repetido', async () => {
+      const a = await guest('Ana');
+      const t = new Date('2026-11-01T12:00:00Z');
+      await expect(matches.saveMatch(matchInput([a.id], t, { winnerTeam: null }))).rejects.toThrow(
+        /matches_status_winner_check/,
+      );
+      await expect(
+        matches.saveMatch(matchInput([a.id], t, { status: 'cancelled', winnerTeam: 1 })),
+      ).rejects.toThrow(/matches_status_winner_check/);
+      await matches.saveMatch(matchInput([a.id], t, { status: 'cancelled', winnerTeam: null }));
+      await expect(
+        matches.saveMatch(
+          matchInput([a.id], t, { players: [{ seat: 4, userId: a.id, team: 0, botFrom: null }] }),
+        ),
+      ).rejects.toThrow(/match_players_seat_check/);
+      await expect(
+        matches.saveMatch(
+          matchInput([a.id], t, { players: [{ seat: 1, userId: a.id, team: 0, botFrom: null }] }),
+        ),
+      ).rejects.toThrow(/match_players_team_check/);
+      await expect(
+        matches.saveMatch(
+          matchInput([a.id], t, {
+            players: [
+              { seat: 0, userId: a.id, team: 0, botFrom: null },
+              { seat: 0, userId: null, team: 0, botFrom: 0 },
+            ],
+          }),
+        ),
+      ).rejects.toThrow();
+      // Partida que falhou no meio não deixa linha órfã (transação).
+      expect(await db().match.count()).toBe(1);
+    });
+
+    it('remover usuário preserva o histórico (SetNull) e leva só os dados pessoais (Cascade)', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const matchId = await matches.saveMatch(
+        matchInput([a.id, b.id, null, null], new Date('2026-11-01T12:00:00Z')),
+      );
+      await users.saveAvatar(a.id, { skin: 1 });
+      await users.addBlock(a.id, b.id);
+      await users.addBlock(b.id, a.id);
+      await users.savePartnerCodes(a.id, b.id, { s1: 'x' });
+      const report = await users.createReport({
+        reporterId: b.id,
+        reportedId: a.id,
+        matchId,
+        reason: 'abusive_chat',
+        text: 'texto',
+      });
+
+      await db().user.delete({ where: { id: a.id } });
+
+      expect(await db().match.count()).toBe(1);
+      const seats = await db().matchPlayer.findMany({ orderBy: { seat: 'asc' } });
+      expect(seats).toHaveLength(4);
+      expect(seats[0]?.userId).toBeNull();
+      expect(seats[1]?.userId).toBe(b.id);
+      const r = await db().report.findUniqueOrThrow({ where: { id: report.id } });
+      expect(r.reportedId).toBeNull();
+      expect(r.reporterId).toBe(b.id);
+      expect(await db().avatar.count()).toBe(0);
+      expect(await db().block.count()).toBe(0);
+      expect(await db().partnerCodes.count()).toBe(0);
+      // O histórico de B ainda lista a partida, com o assento de A anonimizado.
+      const page = await matches.listForUser(b.id);
+      expect(page.items[0]?.players[0]).toMatchObject({ seat: 0, userId: null, nickname: null });
+
+      // Apagar a partida leva os jogadores (Cascade) e anula a denúncia (SetNull).
+      await db().match.delete({ where: { id: matchId } });
+      expect(await db().matchPlayer.count()).toBe(0);
+      expect(
+        (await db().report.findUniqueOrThrow({ where: { id: report.id } })).matchId,
+      ).toBeNull();
+    });
+  });
+
+  describe('reports', () => {
+    it('texto até 500 caracteres, sem auto-denúncia, entra como open', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const ok = await users.createReport({
+        reporterId: a.id,
+        reportedId: b.id,
+        reason: 'cheating',
+        text: 'y'.repeat(500),
+      });
+      expect(ok.status).toBe('open');
+      await expect(
+        users.createReport({
+          reporterId: a.id,
+          reportedId: b.id,
+          reason: 'other',
+          text: 'y'.repeat(501),
+        }),
+      ).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(
+        users.createReport({ reporterId: a.id, reportedId: a.id, reason: 'other' }),
+      ).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO reports (id, reporter_id, reported_id, reason)
+           VALUES (gen_random_uuid(), '${a.id}', '${a.id}', 'other')`,
+        ),
+      ).rejects.toThrow(/reports_not_self_check/);
+    });
+  });
+
+  describe('GET /matches (paginação)', () => {
+    it('ordem por data decrescente, cursor estável com empate, só partidas do usuário', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const base = new Date('2026-11-01T12:00:00Z').getTime();
+      const expected: string[] = [];
+      // 5 partidas de A; as duas mais antigas terminam no mesmo instante (empate resolvido pelo id).
+      for (const minutes of [0, 0, 10, 20, 30]) {
+        expected.push(
+          await matches.saveMatch(
+            matchInput([a.id, b.id, null, null], new Date(base + minutes * 60_000)),
+          ),
+        );
+      }
+      await matches.saveMatch(matchInput([b.id, null, null, null], new Date(base + 99 * 60_000)));
+      const sorted = (
+        await db().match.findMany({
+          where: { players: { some: { userId: a.id } } },
+          orderBy: [{ endedAt: 'desc' }, { id: 'desc' }],
+          select: { id: true },
+        })
+      ).map((m) => m.id);
+      expect(sorted).toHaveLength(5);
+
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await matches.listForUser(
+          a.id,
+          cursor === undefined ? { limit: 2 } : { limit: 2, cursor },
+        );
+        seen.push(...page.items.map((m) => m.id));
+        cursor = page.nextCursor ?? undefined;
+        pages += 1;
+      } while (cursor !== undefined && pages < 10);
+      expect(pages).toBe(3);
+      expect(seen).toEqual(sorted);
+      expect(new Set(seen).size).toBe(5);
+      expect(new Set(seen)).toEqual(new Set(expected));
+    });
+
+    it('cursor inválido e limite inválido são InvalidInputError; limite é truncado em 50', async () => {
+      const a = await guest('Ana');
+      await expect(matches.listForUser(a.id, { cursor: 'lixo' })).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
+      await expect(matches.listForUser(a.id, { limit: 0 })).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
+      expect((await matches.listForUser(a.id, { limit: 500 })).items).toEqual([]);
+    });
+
+    it('a consulta de GET /matches usa o índice de match_players', async () => {
+      const a = await guest('Ana');
+      await db().$executeRawUnsafe(
+        `INSERT INTO matches (id, variant, format, iron_hand, visibility, seed, options, events, games,
+                              status, winner_team, started_at, ended_at)
+         SELECT gen_random_uuid(), 'paulista', 'single', false, 'public', 1, '{}', '[]', '[]',
+                'finished', 0, now() - make_interval(mins => g + 1), now() - make_interval(mins => g)
+           FROM generate_series(1, 3000) g`,
+      );
+      await db().$executeRawUnsafe(
+        `INSERT INTO match_players (match_id, seat, user_id, team)
+         SELECT id, 0, '${a.id}'::uuid, 0 FROM matches ORDER BY ended_at DESC LIMIT 100`,
+      );
+      await db().$executeRawUnsafe('ANALYZE matches, match_players');
+      // Com tabelas pequenas o planejador prefere Seq Scan; desligá-lo na transação prova que o
+      // índice existe e atende a consulta.
+      const text = await db().$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+        const plan = await tx.$queryRawUnsafe<{ 'QUERY PLAN': string }[]>(
+          `EXPLAIN SELECT m.id FROM match_players p JOIN matches m ON m.id = p.match_id
+            WHERE p.user_id = '${a.id}'::uuid ORDER BY m.ended_at DESC, m.id DESC LIMIT 21`,
+        );
+        return plan.map((r) => r['QUERY PLAN']).join('\n');
+      });
+      expect(text).toContain('match_players_user_id_match_id_idx');
+      expect(text).not.toMatch(/Seq Scan on match_players/);
+    });
+  });
+});
