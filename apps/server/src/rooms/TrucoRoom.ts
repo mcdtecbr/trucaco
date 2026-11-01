@@ -14,16 +14,20 @@
  * `onDrop` (queda sem consentimento) chama `allowReconnection`; `onReconnect` restaura o assento;
  * `onLeave` só roda na saída definitiva (consentida, janela expirada ou sem direito a janela).
  *
- * Fora deste bloco (ver README): sinais/sfx/chat (2F), auth real (2G), lobby e persistência (2H).
+ * Sinais, sfx e chat (2F): ver `social`. Fora deste bloco (ver README): auth real (2G), lobby e
+ * persistência (2H).
  */
 import { randomInt } from 'node:crypto';
 import { CloseCode, Room, ServerError } from '@colyseus/core';
 import type { Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
+  CHAT_COOLDOWN_MS,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
   RECONNECT_SECONDS,
+  SFX_COOLDOWN_MS,
+  SIGNAL_COOLDOWN_MS,
   TURN_TIMEOUT_MS,
   parseClientMessage,
   validateRoomOptions,
@@ -129,6 +133,12 @@ export interface TrucoRoomConfig {
   readonly maxReconnects?: number;
   /** Teto do `eventLog`. Padrão `DEFAULT_EVENT_LOG_MAX`. */
   readonly eventLogMax?: number;
+  /** Intervalo mínimo entre sinais do mesmo assento. Padrão `SIGNAL_COOLDOWN_MS`. */
+  readonly signalCooldownMs?: number;
+  /** Intervalo mínimo entre sfx do mesmo assento. Padrão `SFX_COOLDOWN_MS`. */
+  readonly sfxCooldownMs?: number;
+  /** Intervalo mínimo entre mensagens de chat do mesmo assento. Padrão `CHAT_COOLDOWN_MS`. */
+  readonly chatCooldownMs?: number;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`; futuramente do JWT, bloco 2G). */
@@ -241,6 +251,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private startTimer: Timer | null = null;
   private readonly lastActionAt = new Map<Seat, number>();
   private readonly invalidAt = new Map<Seat, number[]>();
+  /**
+   * Último sinal/sfx/chat aceito por assento. Mapas por ASSENTO que sobrevivem a queda, reconexão e
+   * retomada (sair e voltar não zera o cooldown); nem a saída em `waiting` os limpa (o próximo
+   * ocupante herda no máximo alguns segundos, e quem sai e reentra não burla o limite).
+   */
+  private readonly lastSignalAt = new Map<Seat, number>();
+  private readonly lastSfxAt = new Map<Seat, number>();
+  private readonly lastChatAt = new Map<Seat, number>();
   /**
    * Expirações de turno seguidas por assento. Ao chegar a `IDLE_TIMEOUTS` o assento aparece como
    * `away`; qualquer ação aceita zera.
@@ -721,8 +739,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       case 'signal':
       case 'sfx':
       case 'chat':
-        // Decisão: IGNORADAS até o bloco 2F (sem resposta, sem efeito), só log debug.
-        log.debug('truco: mensagem ignorada (2F)', { seat, type: msg.type });
+        this.social(client, seat, msg);
         return;
       case 'ready':
         // Decisão: a partida começa quando o 4º jogador entra; `ready` é aceito e ignorado.
@@ -757,6 +774,115 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     this.timeouts.set(seat, 0);
     this.refreshPresence(seat);
+  }
+
+  /** Cooldown por assento: se já passou, registra o instante e devolve true. */
+  private cooldownPassed(last: Map<Seat, number>, seat: Seat, ms: number): boolean {
+    const now = Date.now();
+    const prev = last.get(seat);
+    if (prev !== undefined && now - prev < ms) return false;
+    last.set(seat, now);
+    return true;
+  }
+
+  /**
+   * Ponto de extensão para silenciar/bloquear (Fase 3/moderação): decide se o chat de `from` pode
+   * chegar a `to`. Hoje só exige humano com socket vivo (bot e assento caído nunca recebem, e nada é
+   * enfileirado para quando voltarem).
+   */
+  private canReceiveChat(_from: Seat, to: Seat): boolean {
+    return !this.botSeats.has(to) && !this.droppedSeats.has(to);
+  }
+
+  /**
+   * Sinais, sfx e chat (2F). O assento é SEMPRE o do servidor (`seatBySession`); a mensagem de saída
+   * leva `seat` do remetente. Decisões:
+   * - Fora de `playing` (espera, série encerrada/cancelada): `signal`/`sfx` e chat da dupla são
+   *   IGNORADOS em silêncio (sem erro, sem gastar cooldown). Chat da mesa vale em qualquer fase.
+   * - Dentro do cooldown: `RATE_LIMITED` ao remetente, nada é enviado (igual ao rate limit de ações);
+   *   não gera strike.
+   * - `signal`/`sfx`: broadcast PÚBLICO aos 4 (é o design: adversários também veem).
+   * - `chat` `partner`: só ao parceiro `(seat+2)%4` e eco ao remetente; `table`: aos 4. Parceiro bot ou
+   *   com socket caído: descartado em silêncio. Chat NUNCA entra em `eventLog`, estado, replay,
+   *   persistência nem log (só metadados em debug: assento, escopo, tamanho).
+   * - Bot ainda não sinaliza, mas nada aqui impede: um futuro `emitSignal(seat, id)` pode reusar o
+   *   broadcast com o assento do bot.
+   */
+  private social(
+    client: Client,
+    seat: Seat,
+    msg: Extract<ClientMessage, { type: 'signal' | 'sfx' | 'chat' }>,
+  ): void {
+    if (
+      this.closing ||
+      this.expelledSeats.has(seat) ||
+      this.botSeats.has(seat) ||
+      this.droppedSeats.has(seat)
+    ) {
+      return;
+    }
+    const series = this.series;
+    const playing = series !== null && !isSeriesOver(series);
+    const at = Date.now();
+    if (msg.type === 'chat') {
+      if (msg.scope === 'partner' && !playing) return;
+      if (
+        !this.cooldownPassed(this.lastChatAt, seat, this.config.chatCooldownMs ?? CHAT_COOLDOWN_MS)
+      ) {
+        this.reject(client, 'RATE_LIMITED');
+        return;
+      }
+      const base = { scope: msg.scope, seat, at };
+      const payload =
+        'text' in msg ? { ...base, text: msg.text } : { ...base, phraseId: msg.phraseId };
+      const partner = (seat + 2) % TABLE_SEATS;
+      for (const c of this.clients) {
+        const to = this.seatBySession.get(c.sessionId);
+        if (to === undefined) continue;
+        if (msg.scope === 'partner' && to !== seat && to !== partner) continue;
+        if (to !== seat && !this.canReceiveChat(seat, to)) continue;
+        c.send('chat', payload);
+      }
+      log.debug('truco: chat', {
+        room: this.roomId,
+        seat,
+        scope: msg.scope,
+        length: 'text' in msg ? msg.text.length : 0,
+      });
+      return;
+    }
+    if (!playing) return;
+    if (msg.type === 'signal') {
+      if (
+        !this.cooldownPassed(
+          this.lastSignalAt,
+          seat,
+          this.config.signalCooldownMs ?? SIGNAL_COOLDOWN_MS,
+        )
+      ) {
+        this.reject(client, 'RATE_LIMITED');
+        return;
+      }
+      const payload: Omit<Extract<ServerMessage, { type: 'signal' }>, 'type'> = {
+        seat,
+        signalId: msg.signalId,
+        at,
+      };
+      this.broadcast('signal', payload);
+      log.info('truco: sinal', { room: this.roomId, seat, signalId: msg.signalId });
+      return;
+    }
+    if (!this.cooldownPassed(this.lastSfxAt, seat, this.config.sfxCooldownMs ?? SFX_COOLDOWN_MS)) {
+      this.reject(client, 'RATE_LIMITED');
+      return;
+    }
+    const payload: Omit<Extract<ServerMessage, { type: 'sfx' }>, 'type'> = {
+      seat,
+      sfxId: msg.sfxId,
+      at,
+    };
+    this.broadcast('sfx', payload);
+    log.info('truco: sfx', { room: this.roomId, seat, sfxId: msg.sfxId });
   }
 
   /** Rate limit por assento (em memória da sala). */

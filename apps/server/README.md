@@ -1,6 +1,6 @@
 # @trucaco/server
 
-Servidor de jogo em tempo real do Trucaco (Colyseus). **Estado atual (Fase 2, blocos 2D e 2E):** runtime executável (Colyseus + `WebSocketTransport` + express) com `GET /health` e a sala `truco` (`src/rooms/TrucoRoom.ts`). Sinais/sfx/chat (2F), auth e REST (2G), lobby e persistência (2H) entram nos próximos blocos. `src/index.ts` tem os exports puros (`buildHealth`, `createServer`); `src/main.ts` é a entrada que sobe o processo.
+Servidor de jogo em tempo real do Trucaco (Colyseus). **Estado atual (Fase 2, blocos 2D, 2E e 2F):** runtime executável (Colyseus + `WebSocketTransport` + express) com `GET /health` e a sala `truco` (`src/rooms/TrucoRoom.ts`). Auth e REST (2G), lobby e persistência (2H) entram nos próximos blocos. `src/index.ts` tem os exports puros (`buildHealth`, `createServer`); `src/main.ts` é a entrada que sobe o processo.
 
 ## Variáveis de ambiente
 
@@ -26,11 +26,29 @@ Mesa de 4 jogadores, registrada em `createServer` com `server.define('truco', ..
 
 **Entrada** (`static onAuth` TEMPORÁRIO, `TODO(2G)`): a autenticação é o `static onAuth(token, options, context)` da sala, que o matchmaker roda ANTES de criar a sala ou reservar assento (`create`, `join`, `joinById`, `joinOrCreate`); o `onAuth` de instância do core 0.18 só roda depois do `onCreate` e por isso não é usado. O retorno vira `client.auth` e chega ao `onJoin(client, options, auth)`. Sem credencial válida nenhuma sala é criada. Aceita `{ userId, nickname }` das opções de join, SÓ quando `NODE_ENV` é `development` ou `test` EXPLÍCITOS (o `pnpm dev` passa `--dev`, que define `development`). Qualquer outro valor, inclusive `NODE_ENV` ausente e `production` (o que o Dockerfile define), rejeita toda entrada. O bloco 2G troca por JWT. Assento por ordem de chegada (0..3), guardado no servidor (`sessionId -> assento`); o 4º jogador tranca a sala e inicia a série (pé no assento 0). O `userId` fica só em memória do servidor (mapa por assento) e NUNCA vai ao estado compartilhado; a identidade pública na mesa é `seat` + `nickname`. Se alguém sai antes do início, o assento é liberado (sem herdar strikes ou rate limit), a sala destranca e a série só começa com 4 jogadores sentados. Mensagens inválidas (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) contam para a expulsão (5 em 10 s); o log é limitado a 1 `warn` por assento a cada 5 s, com o total suprimido. Cada cliente tem `client.view` própria: só recebe o bloco `privates[seuAssento]`.
 
-**Mensagens do cliente** (todas passam por `parseClientMessage`; falha -> `error { code }`, estado intacto; o assento nunca vem da mensagem): `play`, `playBlind`, `bet` (o servidor escolhe `callBet`/`raiseBet`), `accept`, `run`, `special`, `voteCancel` (unanimidade dos humanos conectados cancela a série). `ready`, `signal`, `sfx` e `chat` são aceitos e IGNORADOS (log debug) até os blocos 2F. Rate limit de ações: `ACTION_MIN_INTERVAL_MS` por assento (`RATE_LIMITED`); 5 `INVALID_PAYLOAD` em 10 s expulsam o cliente (código 1008); tamanho máximo por mensagem `MAX_MESSAGE_BYTES` (limite do transporte, a conexão cai acima disso); 30 mensagens/s por conexão.
+**Mensagens do cliente** (todas passam por `parseClientMessage`; falha -> `error { code }`, estado intacto; o assento nunca vem da mensagem): `play`, `playBlind`, `bet` (o servidor escolhe `callBet`/`raiseBet`), `accept`, `run`, `special`, `voteCancel` (unanimidade dos humanos conectados cancela a série). `signal`, `sfx` e `chat`: ver a seção abaixo. `ready` é aceito e ignorado (log debug). Rate limit de ações: `ACTION_MIN_INTERVAL_MS` por assento (`RATE_LIMITED`); 5 `INVALID_PAYLOAD` em 10 s expulsam o cliente (código 1008); tamanho máximo por mensagem `MAX_MESSAGE_BYTES` (limite do transporte, a conexão cai acima disso); 30 mensagens/s por conexão.
 
 **Servidor -> cliente:** `event { seq, at, event }` (um por cliente, `publicEvent` por assento; carta coberta alheia sem identidade), `turnTimer { seat, deadlineAt }`, `presence { seat, status: 'online'|'away'|'bot' }`, `error { code }`. O estado (`TableState`) segue por patch com visão por assento. O log de eventos em memória (`room.eventLog`, visão pública) é gravado pelo 2H.
 
 **Timer de turno:** `TURN_TIMEOUT_MS` (20 s), reiniciado a cada ação aceita. Ao estourar, `botAction` do motor joga POR ele (nunca pede nem aumenta aposta); 2 expirações seguidas marcam o assento `away` (uma ação aceita volta a `connected`). Ao fim da série (`phase: 'finished'`, `winnerTeam`) o timer é cancelado e a sala fecha após `finishDelayMs` (15 s por padrão).
+
+## Sinais, sfx e chat (bloco 2F)
+
+O assento do remetente vem SEMPRE do servidor (`seatBySession`); `seat` no payload do cliente é rejeitado (`INVALID_PAYLOAD`). Todo texto passa por `parseClientMessage` (limpeza e limite de 140 code points; controle, bidi e ZWJ são rejeitados). Nada disto entra no estado compartilhado (schema), em `eventLog`, no replay de reconexão, no banco ou em log.
+
+| Cliente envia                               | Servidor entrega                                                                          | Cooldown por assento       |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
+| `signal { signalId }`                       | `signal { seat, signalId, at }` a TODOS os 4 (público, adversários veem)                  | `SIGNAL_COOLDOWN_MS` (3 s) |
+| `sfx { sfxId }`                             | `sfx { seat, sfxId, at }` a todos os 4                                                    | `SFX_COOLDOWN_MS` (5 s)    |
+| `chat { scope: 'partner', text\|phraseId }` | `chat { scope, seat, text\|phraseId, at }` SÓ ao parceiro `(seat+2)%4` e eco ao remetente | `CHAT_COOLDOWN_MS` (2 s)   |
+| `chat { scope: 'table', text\|phraseId }`   | o mesmo `chat` aos 4                                                                      | `CHAT_COOLDOWN_MS` (2 s)   |
+
+- **Dentro do cooldown:** `error { code: 'RATE_LIMITED' }` ao remetente, nada é enviado, sem strike. Os contadores são mapas por ASSENTO e sobrevivem a queda, reconexão e retomada do bot (sair e voltar não zera); também não são zerados quando alguém sai na espera. O limite global de mensagens por segundo (`maxMessagesPerSecond`) e os strikes de payload inválido (`INVALID_SIGNAL`, `INVALID_SFX`, `INVALID_PAYLOAD`, 5 em 10 s expulsam) continuam valendo.
+- **Fases:** `signal`, `sfx` e chat da dupla só em `playing` (com série em andamento); fora disso são IGNORADOS em silêncio (sem erro, sem gastar cooldown). Chat da mesa vale em qualquer fase (inclusive na espera antes dos 4 sentarem e após o fim da série).
+- **Quem envia/recebe:** só humano com socket vivo. Assento expulso, caído ou com bot não envia. Parceiro bot ou com socket caído (janela de reconexão) NÃO recebe: a mensagem é descartada em silêncio e NADA é reenviado quando ele volta. Bots não recebem chat (e ainda não sinalizam; o broadcast aceita um assento de bot no futuro).
+- **Logs:** `signal`/`sfx` em `info` (assento e id); chat só metadados em `debug` (assento, escopo, tamanho), nunca o texto.
+- **Moderação (extensão):** `canReceiveChat(from, to)` em `TrucoRoom` é o ponto para silenciar/bloquear entre jogadores (Fase 3).
+- **Config só do servidor:** `signalCooldownMs`, `sfxCooldownMs`, `chatCooldownMs` em `TrucoRoomConfig` (padrões vêm de `@trucaco/protocol`). Sem variável de ambiente nova.
 
 ## Reconexão e bot de ausência (bloco 2E)
 

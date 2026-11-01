@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
 import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
-import { MAX_MESSAGE_BYTES } from '@trucaco/protocol';
+import { MAX_MESSAGE_BYTES, QUICK_PHRASE_IDS, SFX_IDS } from '@trucaco/protocol';
 import type { ErrorCode, RoomOptions } from '@trucaco/protocol';
 import { mulberry32, pendingSeat } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
@@ -91,6 +91,35 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     reconnectSeconds: 5,
     botThinkMs: 20,
     turnTimeoutMs: 60_000,
+  },
+  // 2F: sinais, sfx e chat. Cooldowns curtos para testar a expiração; o "long" nunca espera expirar.
+  'truco-soc': {
+    ...FAST,
+    rngSeed: 41,
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    signalCooldownMs: 400,
+    sfxCooldownMs: 400,
+    chatCooldownMs: 400,
+  },
+  'truco-soc-short': {
+    ...FAST,
+    rngSeed: 42,
+    reconnectSeconds: 0.4,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    chatCooldownMs: 50,
+  },
+  'truco-soc-long': {
+    ...FAST,
+    rngSeed: 43,
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    signalCooldownMs: 30_000,
+    sfxCooldownMs: 30_000,
+    chatCooldownMs: 30_000,
   },
   'truco-rec-onze': {
     ...FAST,
@@ -192,9 +221,25 @@ function recordSeries(server: TrucoRoom, log: TruthLog): void {
   });
 }
 
+/** O que cada socket recebeu de sinal/sfx/chat (chave: o room do SDK; reconexão cria outro). */
+interface Inbox {
+  signals: { seat: number; signalId: string; at: number }[];
+  sfxs: { seat: number; sfxId: string; at: number }[];
+  chats: { scope: string; seat: number; text?: string; phraseId?: string; at: number }[];
+}
+const inboxes = new WeakMap<object, Inbox>();
+const inboxOf = (p: Player): Inbox => inboxes.get(p.room) as Inbox;
+/** Textos de chat que NUNCA podem aparecer em estado/patch/refs de nenhum cliente. */
+const SECRETS: string[] = [];
+
 /** Liga handlers e o detector de vazamento a um cliente (entrada normal ou reconexão). */
 function wirePlayer(game: Game, p: Player): void {
   const { room, seat } = p;
+  const inbox: Inbox = { signals: [], sfxs: [], chats: [] };
+  inboxes.set(room, inbox);
+  room.onMessage('signal', (m: Inbox['signals'][number]) => inbox.signals.push(m));
+  room.onMessage('sfx', (m: Inbox['sfxs'][number]) => inbox.sfxs.push(m));
+  room.onMessage('chat', (m: Inbox['chats'][number]) => inbox.chats.push(m));
   room.onMessage('event', (m: Received) => {
     p.events.push(m);
     game.leaks.push(...eventViolations(m.event, seat, `evento seq ${m.seq} assento ${seat}`));
@@ -204,6 +249,21 @@ function wirePlayer(game: Game, p: Player): void {
   room.onMessage('presence', (m: { seat: number; status: string }) => p.presences.push(m));
   room.onStateChange(() => {
     game.patches++;
+    if (SECRETS.length > 0) {
+      const dump = JSON.stringify(json(p));
+      const refs = JSON.stringify(
+        [...decoderOf(p).root.refs.values()].map((r) =>
+          typeof (r as { toJSON?: () => unknown }).toJSON === 'function'
+            ? (r as { toJSON: () => unknown }).toJSON()
+            : r,
+        ),
+      );
+      for (const secret of SECRETS) {
+        if (dump.includes(secret) || refs.includes(secret)) {
+          game.leaks.push(`texto de chat no estado do assento ${seat}`);
+        }
+      }
+    }
     if (game.log.size === 0) return;
     // A CADA patch recebido por ESTE cliente: nada proibido (árvore, strings e todos os refs do
     // decoder), só o bloco privado dele, tudo contra a verdade da ÉPOCA do patch.
@@ -215,11 +275,11 @@ function wirePlayer(game: Game, p: Player): void {
   });
 }
 
-async function createGame(name: string, options: RoomOptions): Promise<Game> {
+async function createGame(name: string, options: RoomOptions, count = 4): Promise<Game> {
   const server = await t.createRoom<TrucoRoom>(name, options);
   const game: Game = { server, players: [], leaks: [], patches: 0, log: new TruthLog() };
   recordSeries(server, game.log);
-  for (let seat = 0; seat < 4; seat++) {
+  for (let seat = 0; seat < count; seat++) {
     const room = await t.connectTo<Room>(server as unknown as Room, {
       userId: `user-${seat}`,
       nickname: `Jogador ${seat}`,
@@ -1558,5 +1618,276 @@ describe('TrucoRoom: reconexão e bot de ausência (2E)', () => {
       await drive(game, () => logCount(game, 'handDecided') > 0, 'mão de onze decidida');
       assertNoLeaks(game);
     });
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// 2F: sinais, sfx e chat
+// ------------------------------------------------------------------------------------------------
+
+const QUIET_MS = 700;
+const SFX_FIRST = SFX_IDS[0] as string;
+
+describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
+  it('(a) signal público chega aos 4 com o assento do servidor; seat forjado é rejeitado', async () => {
+    const game = await startedRec('truco-soc');
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    p1.room.send('signal', { signalId: 'wink', seat: 0 });
+    await until(() => p1.errors.includes('INVALID_PAYLOAD'), 'seat forjado rejeitado');
+    await sleep(100);
+    for (const p of game.players) expect(inboxOf(p).signals).toEqual([]);
+    p1.room.send('signal', { signalId: 'wink' });
+    await until(() => game.players.every((p) => inboxOf(p).signals.length === 1), 'signal nos 4');
+    for (const p of [p0, p1, p2, p3]) {
+      const m = inboxOf(p).signals[0] as { seat: number; signalId: string; at: number };
+      expect(m.seat).toBe(1);
+      expect(m.signalId).toBe('wink');
+      expect(Math.abs(m.at - Date.now())).toBeLessThan(60_000);
+    }
+    expect(game.server.eventLog.some((e) => JSON.stringify(e).includes('wink'))).toBe(false);
+    assertNoLeaks(game);
+  });
+
+  it('(b) cooldown de signal, sfx e chat: RATE_LIMITED, sem entrega, e libera depois', async () => {
+    const game = await startedRec('truco-soc');
+    const p0 = game.players[0] as Player;
+    const p1 = game.players[1] as Player;
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('sfx', { sfxId: SFX_FIRST });
+    p0.room.send('sfx', { sfxId: SFX_FIRST });
+    p0.room.send('chat', { scope: 'table', text: 'oi mesa' });
+    p0.room.send('chat', { scope: 'table', text: 'oi de novo' });
+    await until(() => p0.errors.length === 3, 'três RATE_LIMITED');
+    expect(p0.errors).toEqual(['RATE_LIMITED', 'RATE_LIMITED', 'RATE_LIMITED']);
+    await sleep(100);
+    expect(inboxOf(p1).signals).toHaveLength(1);
+    expect(inboxOf(p1).sfxs).toHaveLength(1);
+    expect(inboxOf(p1).chats.map((c) => c.text)).toEqual(['oi mesa']);
+    // cooldown de um assento não afeta outro, e expira
+    p1.room.send('signal', { signalId: 'wink' });
+    await until(() => inboxOf(p0).signals.length === 2, 'assento 1 não é limitado pelo 0');
+    await sleep(450);
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('sfx', { sfxId: SFX_FIRST });
+    p0.room.send('chat', { scope: 'table', text: 'depois do cooldown' });
+    await until(
+      () =>
+        inboxOf(p1).signals.length === 3 &&
+        inboxOf(p1).sfxs.length === 2 &&
+        inboxOf(p1).chats.length === 2,
+      'liberado após o cooldown',
+    );
+    expect(p0.errors).toHaveLength(3);
+  });
+
+  it('(b2) cooldowns padrão do protocolo valem quando a config não os troca', async () => {
+    const game = await startedRec('truco-rec');
+    const p0 = game.players[0] as Player;
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('signal', { signalId: 'wink' });
+    await until(() => p0.errors.includes('RATE_LIMITED'), 'RATE_LIMITED padrão');
+    await sleep(100);
+    expect(inboxOf(game.players[1] as Player).signals).toHaveLength(1);
+  });
+
+  it('(c) chat da dupla só vai ao parceiro (e eco); adversários nunca, nem em reconexão ou replay', async () => {
+    const game = await startedRec('truco-soc');
+    const secret = 'segredo-azul-42';
+    SECRETS.push(secret);
+    try {
+      const p0 = game.players[0] as Player;
+      p0.room.send('chat', { scope: 'partner', text: secret });
+      await until(
+        () =>
+          inboxOf(p0).chats.length === 1 && inboxOf(game.players[2] as Player).chats.length === 1,
+        'eco e parceiro',
+      );
+      const got = inboxOf(game.players[2] as Player).chats[0];
+      expect(got).toMatchObject({ scope: 'partner', seat: 0, text: secret });
+      await sleep(QUIET_MS);
+      expect(inboxOf(game.players[1] as Player).chats).toEqual([]);
+      expect(inboxOf(game.players[3] as Player).chats).toEqual([]);
+      // adversários caem e voltam: nada de replay
+      for (const s of [1, 3]) await dropSeat(game, s);
+      const r1 = await rejoin(game, 1);
+      const r3 = await rejoin(game, 3);
+      await until(
+        () => statusOf(game, 1) === 'connected' && statusOf(game, 3) === 'connected',
+        'voltaram',
+      );
+      // quem reconecta (parceiro) também não recebe o chat velho
+      await dropSeat(game, 2);
+      const r2 = await rejoin(game, 2);
+      await until(() => statusOf(game, 2) === 'connected', 'parceiro voltou');
+      await sleep(QUIET_MS);
+      for (const p of [r1, r3, r2]) expect(inboxOf(p).chats).toEqual([]);
+      // nem em eventLog, estado do servidor ou logs
+      expect(JSON.stringify(game.server.eventLog)).not.toContain(secret);
+      expect(JSON.stringify(game.server.state.toJSON())).not.toContain(secret);
+      expect(logLines.some((l) => l.includes(secret))).toBe(false);
+      for (const p of live(game)) expect(JSON.stringify(json(p))).not.toContain(secret);
+      assertNoLeaks(game);
+    } finally {
+      SECRETS.length = 0;
+    }
+  });
+
+  it('(c2) frase rápida da dupla segue a mesma privacidade', async () => {
+    const game = await startedRec('truco-soc');
+    const phraseId = QUICK_PHRASE_IDS[0] as string;
+    (game.players[1] as Player).room.send('chat', { scope: 'partner', phraseId });
+    await until(() => inboxOf(game.players[3] as Player).chats.length === 1, 'parceiro do 1');
+    expect(inboxOf(game.players[3] as Player).chats[0]).toMatchObject({ seat: 1, phraseId });
+    await sleep(QUIET_MS);
+    expect(inboxOf(game.players[0] as Player).chats).toEqual([]);
+    expect(inboxOf(game.players[2] as Player).chats).toEqual([]);
+  });
+
+  it('(d) chat da mesa chega aos 4, com o assento do remetente', async () => {
+    const game = await startedRec('truco-soc');
+    (game.players[3] as Player).room.send('chat', { scope: 'table', text: 'boa mesa' });
+    await until(() => game.players.every((p) => inboxOf(p).chats.length === 1), 'chat nos 4');
+    for (const p of game.players) {
+      expect(inboxOf(p).chats[0]).toMatchObject({ scope: 'table', seat: 3, text: 'boa mesa' });
+    }
+  });
+
+  it('(e) parceiro com socket caído ou bot não recebe, e nada é entregue na volta', async () => {
+    // away: janela aberta
+    const a = await startedRec('truco-soc');
+    await dropSeat(a, 2);
+    (a.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o ausente' });
+    await until(() => inboxOf(a.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    const back = await rejoin(a, 2);
+    await until(() => statusOf(a, 2) === 'connected', 'voltou');
+    await sleep(QUIET_MS);
+    expect(inboxOf(back).chats).toEqual([]);
+    expect(inboxOf(a.players[1] as Player).chats).toEqual([]);
+    await t.cleanup();
+    // bot: janela expirou
+    const b = await startedRec('truco-soc-short');
+    await dropSeat(b, 2);
+    await until(() => (b.server.state.players[2] as { isBot: boolean }).isBot, 'bot assumiu');
+    (b.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o bot' });
+    await until(() => inboxOf(b.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    const owner = await joinAgain(b, 2);
+    await until(() => statusOf(b, 2) === 'connected', 'dono retomou');
+    await sleep(QUIET_MS);
+    expect(inboxOf(owner).chats).toEqual([]);
+    expect(logLines.some((l) => l.includes('para o bot'))).toBe(false);
+  });
+
+  it('(f) o texto do chat não aparece em estado, patches nem refs de nenhum cliente', async () => {
+    const game = await startedRec('truco-soc');
+    SECRETS.push('texto-privado-77', 'texto-mesa-88');
+    try {
+      (game.players[0] as Player).room.send('chat', { scope: 'partner', text: 'texto-privado-77' });
+      (game.players[1] as Player).room.send('chat', { scope: 'table', text: 'texto-mesa-88' });
+      await until(() => game.players.every((p) => inboxOf(p).chats.length >= 1), 'entregues');
+      // gera patches depois do chat
+      await drive(game, () => logCount(game, 'cardPlayed') >= 2, 'jogadas');
+      expect(game.leaks).toEqual([]);
+      for (const p of game.players) {
+        const dump = JSON.stringify(json(p));
+        expect(dump).not.toContain('texto-privado-77');
+        expect(dump).not.toContain('texto-mesa-88');
+      }
+    } finally {
+      SECRETS.length = 0;
+    }
+  });
+
+  it('(g) cooldown sobrevive à queda e à reconexão', async () => {
+    const game = await startedRec('truco-soc-long');
+    const p0 = game.players[0] as Player;
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('sfx', { sfxId: SFX_FIRST });
+    p0.room.send('chat', { scope: 'table', text: 'primeiro' });
+    await until(() => inboxOf(game.players[1] as Player).chats.length === 1, 'primeiros entregues');
+    await dropSeat(game, 0);
+    const back = await rejoin(game, 0);
+    await until(() => statusOf(game, 0) === 'connected', 'voltou');
+    back.room.send('signal', { signalId: 'wink' });
+    back.room.send('sfx', { sfxId: SFX_FIRST });
+    back.room.send('chat', { scope: 'table', text: 'segundo' });
+    await until(() => back.errors.length === 3, 'três RATE_LIMITED após reconectar');
+    expect(back.errors).toEqual(['RATE_LIMITED', 'RATE_LIMITED', 'RATE_LIMITED']);
+    await sleep(100);
+    expect(inboxOf(game.players[1] as Player).signals).toHaveLength(1);
+    expect(inboxOf(game.players[1] as Player).chats).toHaveLength(1);
+  });
+
+  it('(h) fora de playing: signal/sfx/chat da dupla ignorados; chat da mesa vale na espera e depois', async () => {
+    const game = await createGame('truco-soc', OPTS, 2);
+    const [p0, p1] = game.players as [Player, Player];
+    expect(game.server.series).toBeNull();
+    p0.room.send('signal', { signalId: 'wink' });
+    p0.room.send('sfx', { sfxId: SFX_FIRST });
+    p0.room.send('chat', { scope: 'partner', text: 'na espera' });
+    p0.room.send('chat', { scope: 'table', text: 'oi sala' });
+    await until(() => inboxOf(p1).chats.length === 1, 'chat da mesa na espera');
+    await sleep(QUIET_MS);
+    expect(inboxOf(p1).chats.map((c) => c.text)).toEqual(['oi sala']);
+    expect(inboxOf(p1).signals).toEqual([]);
+    expect(inboxOf(p1).sfxs).toEqual([]);
+    expect(p0.errors).toEqual([]);
+    // série cancelada: signal/sfx também são ignorados
+    await t.cleanup();
+    const g = await startedRec('truco-soc');
+    for (const p of g.players) p.room.send('voteCancel');
+    await until(
+      () => (g.server.state as { phase: string }).phase === 'finished',
+      'série encerrada',
+    );
+    const q = g.players[0] as Player;
+    q.room.send('signal', { signalId: 'wink' });
+    q.room.send('sfx', { sfxId: SFX_FIRST });
+    q.room.send('chat', { scope: 'partner', text: 'acabou' });
+    await sleep(QUIET_MS);
+    for (const p of g.players) {
+      expect(inboxOf(p).signals).toEqual([]);
+      expect(inboxOf(p).sfxs).toEqual([]);
+      expect(inboxOf(p).chats).toEqual([]);
+    }
+  });
+
+  it('(i)(j) INVALID_SIGNAL/INVALID_SFX/chat inválido contam strike; controle, bidi e ZWJ são rejeitados', async () => {
+    const game = await startedRec('truco-soc');
+    const v = game.players[1] as Player;
+    v.room.send('signal', { signalId: 'nao-existe' });
+    v.room.send('sfx', { sfxId: 'nao-existe' });
+    v.room.send('chat', { scope: 'table', text: 'ab\u202ecd' });
+    v.room.send('chat', { scope: 'table', text: 'a\u200db' });
+    v.room.send('chat', { scope: 'table', text: 'a\u0007b' });
+    await until(() => v.errors.length === 5, 'cinco erros');
+    expect(v.errors).toEqual([
+      'INVALID_SIGNAL',
+      'INVALID_SFX',
+      'INVALID_PAYLOAD',
+      'INVALID_PAYLOAD',
+      'INVALID_PAYLOAD',
+    ]);
+    await sleep(100);
+    for (const p of game.players) {
+      expect(inboxOf(p).chats).toEqual([]);
+      expect(inboxOf(p).signals).toEqual([]);
+    }
+    expect(logLines.some((l) => l.includes('ab\u202ecd'))).toBe(false);
+  });
+
+  it('(k) expulso por abuso não consegue enviar sinal, sfx nem chat', async () => {
+    const game = await startedRec('truco-soc');
+    const v = game.players[1] as Player;
+    for (let i = 0; i < 5; i++) v.room.send('signal', { signalId: 'nao-existe' });
+    v.room.send('signal', { signalId: 'wink' });
+    v.room.send('sfx', { sfxId: SFX_FIRST });
+    v.room.send('chat', { scope: 'table', text: 'sou o expulso' });
+    await sleep(QUIET_MS);
+    for (const p of game.players) {
+      expect(inboxOf(p).signals).toEqual([]);
+      expect(inboxOf(p).sfxs).toEqual([]);
+      expect(inboxOf(p).chats).toEqual([]);
+    }
   });
 });
