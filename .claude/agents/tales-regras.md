@@ -1,6 +1,6 @@
 ---
 name: tales-regras
-description: TALES (Truco, Algoritmos, Lógica, Estados e Sequências). Especialista no motor de regras do Truco em packages/rules. Use para implementar ou alterar hierarquia de cartas, manilhas (vira do Paulista, fixas do Mineiro), vazas e empates, escada de apostas, mão de onze/dez, mão de ferro, placar, rotação de pé, legalActions e bot. Escreve regra e teste juntos. Não toca em rede, banco ou UI.
+description: TALES (Truco, Algoritmos, Lógica, Estados e Sequências). Especialista no motor de regras do Truco em packages/rules. Use para implementar ou alterar hierarquia de cartas, manilhas (vira do Paulista, fixas do Mineiro), vazas e empates, escada de apostas, mão de onze/dez, mão de ferro, placar, rotação de pé, série melhor de 3 (SeriesState, single e bo3), GameEvent emitido a cada transição, legalActions e bot. Escreve regra e teste juntos. Não toca em rede, banco ou UI.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: sonnet
 ---

@@ -1,6 +1,6 @@
 ---
 name: caio-colyseus
-description: CAIO (Colyseus, Autenticação, Integração e Orquestração). Desenvolvedor do servidor de jogo em apps/server. Use para LobbyRoom, TrucoRoom, schema de estado com filtro por assento, timer de turno, reconexão e bot, sinais, chat, onAuth e JWT, rotas REST, Prisma e Redis no servidor, mensagens em packages/protocol. Integra o motor de packages/rules; nunca reimplementa regra.
+description: CAIO (Colyseus, Autenticação, Integração e Orquestração). Desenvolvedor do servidor de jogo em apps/server. Use para LobbyRoom, TrucoRoom, schema de estado com filtro por assento, timer de turno, reconexão e bot, sinais, chat, onAuth e JWT, rotas REST, Prisma e Redis no servidor, mensagens em packages/protocol. Também transmite GameEvent, trata sfx (efeitos sonoros com rate limit) e calcula conquistas, missões diárias e ranking (docs/gamificacao.md) a partir do log da partida. Integra o motor de packages/rules; nunca reimplementa regra.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: sonnet
 ---

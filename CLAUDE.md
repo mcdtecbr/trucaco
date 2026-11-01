@@ -2,29 +2,33 @@
 
 Truco online (Paulista e Mineiro) para web, iOS e Android. Mesa de 4 jogadores (6 na fase 8), avatar animado em Rive que faz sinais de truco visíveis a toda a mesa, chat privado da dupla para combinar sinais, balões de conversa na mesa.
 
+**Memória do projeto**: leia `.claude/memory/MEMORY.md` no início da sessão (estado das fases, ambiente, regras de Git). Grave ali o que for aprendido e não estiver no código.
+
 Documentos de referência, leia antes de qualquer tarefa não trivial:
 
 - `docs/specs/2026-11-01-trucaco-design.md`: arquitetura, componentes, fluxo de dados, decisões.
 - `docs/plano-desenvolvimento.md`: fases, entregas e agente responsável por etapa.
 - `docs/regras-truco.md`: regras de Paulista e Mineiro no detalhe que o motor implementa.
 - `docs/sinais.md`: catálogo de sinais e gatilhos Rive.
+- `docs/audio.md`: vozes dos avatares, gritos por tipo de aposta, efeitos engraçados, licenças.
+- `docs/gamificacao.md`: conquistas, missões diárias (Fase 6) e ranking competitivo (Fase 9).
 
 ## Time de agentes
 
-| Agente            | Papel                                                                                                       | Escreve código? |
-| ----------------- | ----------------------------------------------------------------------------------------------------------- | --------------- |
-| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                       | Não             |
-| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista e Mineiro) + testes                                  | Sim             |
-| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, schema de estado, reconexão, sinais, chat, `onAuth`, REST | Sim             |
-| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, cartas, estado, cliente Colyseus             | Sim             |
-| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, integração RN/web        | Sim             |
-| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                | Sim             |
-| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                        | Sim (só testes) |
-| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                           | Sim             |
-| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                      | Não             |
-| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                           | Não             |
-| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                         | Sim             |
-| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                            | Sim (só docs)   |
+| Agente            | Papel                                                                                                                                                            | Escreve código? |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                                                                            | Não             |
+| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista, Mineiro, série `bo3`, `GameEvent`) + testes                                                              | Sim             |
+| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, série, schema de estado, reconexão, sinais, efeitos `sfx`, chat, `onAuth`, REST, conquistas, missões e ranking | Sim             |
+| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, placar em camadas, cartas, estado, cliente Colyseus, player de áudio, perfil                      | Sim             |
+| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, vozes e efeitos sonoros (`assets/audio`), integração RN/web                   | Sim             |
+| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                                                                     | Sim             |
+| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                                                                             | Sim (só testes) |
+| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                                                                                | Sim             |
+| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                                                                           | Não             |
+| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                                                                                | Não             |
+| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                                                                              | Sim             |
+| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                                                                                 | Sim (só docs)   |
 
 ## Fluxo padrão para uma funcionalidade nova
 
@@ -70,6 +74,6 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 - **Pastas**: ver `README.md`. `packages/rules` não importa nada de rede, banco ou UI. `packages/protocol` só tipos, schemas e constantes.
 - **Nomes**: código em inglês (`playCard`, `callTruco`), termos do jogo mantidos em português quando não há tradução natural (`manilha`, `vira`, `zap`, `maoDeOnze`). Docs e commits em português.
 - **Commits**: `tipo(escopo): descrição` em pt-BR (`feat`, `fix`, `chore`, `docs`, `test`, `build`, `ci`). Escopos: `rules`, `server`, `mobile`, `avatar`, `protocol`, `ui`, `infra`, `docs`, `agents`.
-- **Git**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs via `gh pr create`, não via API do Azure DevOps.
+- **Git**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs pela API REST do GitHub (o `gh` não está instalado; ver `.claude/memory/trucaco-ambiente-dev.md`), não pela API do Azure DevOps.
 - **Variáveis de ambiente**: toda variável nova entra em `.env.example` com valor de exemplo seguro e na seção de ambiente do `apps/server/README.md`. `.env` nunca versionado.
 - **Dependência nova**: só com justificativa no relatório do agente.

@@ -6,7 +6,7 @@ Referência normativa para `packages/rules`. Quando o código e este documento d
 
 - **Baralho**: 40 cartas (sem 8, 9, 10 e sem coringa). Naipes: paus ♣, copas ♥, espadas ♠, ouros ♦.
 - **Mesa de 4**: duas duplas, parceiros em assentos opostos (0–2 e 1–3). Sentido anti-horário.
-- **Jogo**: vence a dupla que chega a **12 pontos**.
+- **Jogo**: vence a dupla que chega a **12 pontos**. A mesa pode ser criada como jogo único ou como **série melhor de 3** (seção "Série" abaixo).
 - **Mão**: cada jogador recebe 3 cartas. Uma mão tem até 3 **vazas** (rodadas de uma carta por jogador). Vence a mão quem faz 2 vazas, com as regras de empate abaixo.
 - **Pé e mão**: o **pé** é quem embaralha e distribui (gira a cada mão, anti-horário). O **mão** é quem está à direita do pé e começa a primeira vaza. Nas vazas seguintes, começa quem venceu a vaza anterior.
 - **Carta coberta (encoberta)**: a partir da 2ª vaza, o jogador pode jogar uma carta virada para baixo, que perde de qualquer carta. Permitido nas duas variantes exceto quando a carta coberta é proibida (mão de ferro: todas as cartas são cobertas por regra).
@@ -35,6 +35,17 @@ Referência normativa para `packages/rules`. Quando o código e este documento d
 - **Mão de dez**: dupla com 10 pontos. Decide jogar (vale 4) ou correr (adversária ganha 2).
 - **Mão de ferro**: 10 × 10. Cartas cobertas, vale 2, sem truco.
 
+## Série (melhor de 3 jogos)
+
+Opção definida por quem cria a mesa, nas duas variantes:
+
+- **`single`** (padrão): um jogo de 12 pontos. É o formato da fila pública rápida.
+- **`bo3`**: vence a série a dupla que ganhar **2 jogos**. O terceiro jogo só acontece se a série estiver 1 × 1. Disponível em mesas privadas e amistosas.
+- **Entre jogos**: os pontos voltam a 0, as duplas e os assentos permanecem. O pé do jogo seguinte é o assento que vem depois do pé que deu a última mão do jogo anterior (o rodízio continua). _Interpretação adotada; confirmar na revisão das regras._
+- **Mão de onze/dez e mão de ferro** valem por jogo: reiniciam junto com o placar de pontos.
+- **Mesa encerrada por voto durante a série**: a série é cancelada, sem vencedor e sem estatística de vitória.
+- Não confundir com o "melhor de 3" da **mão**, que já é a regra das vazas: vence a mão quem faz 2 das 3 vazas.
+
 ## Fora do escopo do MVP (decidido para fase 8)
 
 - **Mesa de 6** (3 × 3): ordem de assentos, distribuição de 18 cartas e regras de empate serão especificadas em ADR próprio na fase 8, antes de implementar. O motor deve ser escrito com `seats` parametrizado para não bloquear isso.
@@ -56,3 +67,11 @@ interface Variant {
 ```
 
 Tudo o que não está nesta tabela é comportamento comum e não deve virar `if (variant === ...)` espalhado pelo código.
+
+O formato da série é independente da variante:
+
+```ts
+interface SeriesConfig {
+  format: 'single' | 'bo3'; // single = um jogo de 12 pontos
+}
+```
