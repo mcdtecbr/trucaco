@@ -4,20 +4,20 @@ Fonte para `packages/avatar/src/signals.ts` e para a state machine do `assets/ri
 
 Os sinais são **públicos**: todo mundo na mesa vê a animação. Blefar e ler o adversário faz parte do jogo.
 
-| id | Nome | Gatilho Rive | Significado tradicional |
-|---|---|---|---|
-| `wink` | Piscar um olho | `trig_wink` | Tenho o zap (4♣ / manilha de paus) |
-| `eyebrow` | Levantar sobrancelhas | `trig_eyebrow` | Tenho o sete copas / manilha de copas |
-| `lip_bite` | Morder o lábio | `trig_lip_bite` | Tenho o espadão / manilha de espadas |
-| `cheek_puff` | Inflar a bochecha | `trig_cheek_puff` | Tenho o sete ouros / manilha de ouros |
-| `tongue` | Mostrar a língua | `trig_tongue` | Tenho um 3 |
-| `nose_twitch` | Mexer o nariz | `trig_nose_twitch` | Tenho um 2 |
-| `shrug` | Encolher os ombros | `trig_shrug` | Não tenho nada |
-| `nod` | Acenar com a cabeça | `trig_nod` | Pede truco / aceita |
-| `head_shake` | Balançar a cabeça | `trig_head_shake` | Não peça / corre |
-| `chin_up` | Levantar o queixo | `trig_chin_up` | Pode aumentar |
-| `look_away` | Olhar para o lado | `trig_look_away` | Joga a carta mais fraca |
-| `smile` | Sorriso contido | `trig_smile` | Blefe / livre |
+| id            | Nome                  | Gatilho Rive       | Significado tradicional               |
+| ------------- | --------------------- | ------------------ | ------------------------------------- |
+| `wink`        | Piscar um olho        | `trig_wink`        | Tenho o zap (4♣ / manilha de paus)   |
+| `eyebrow`     | Levantar sobrancelhas | `trig_eyebrow`     | Tenho o sete copas / manilha de copas |
+| `lip_bite`    | Morder o lábio        | `trig_lip_bite`    | Tenho o espadão / manilha de espadas  |
+| `cheek_puff`  | Inflar a bochecha     | `trig_cheek_puff`  | Tenho o sete ouros / manilha de ouros |
+| `tongue`      | Mostrar a língua      | `trig_tongue`      | Tenho um 3                            |
+| `nose_twitch` | Mexer o nariz         | `trig_nose_twitch` | Tenho um 2                            |
+| `shrug`       | Encolher os ombros    | `trig_shrug`       | Não tenho nada                        |
+| `nod`         | Acenar com a cabeça   | `trig_nod`         | Pede truco / aceita                   |
+| `head_shake`  | Balançar a cabeça     | `trig_head_shake`  | Não peça / corre                      |
+| `chin_up`     | Levantar o queixo     | `trig_chin_up`     | Pode aumentar                         |
+| `look_away`   | Olhar para o lado     | `trig_look_away`   | Joga a carta mais fraca               |
+| `smile`       | Sorriso contido       | `trig_smile`       | Blefe / livre                         |
 
 ## Regras de uso na mesa
 

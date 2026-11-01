@@ -4,7 +4,7 @@ Truco online, Paulista e Mineiro, para web, iOS e Android. Mesas de 4 (e depois 
 
 ## Estado
 
-Fase 0: levantamento, especificação e preparação do time de agentes. Ainda sem código.
+Fase 0 (fundação) concluída: monorepo, CI e Docker local prontos. Os pacotes são esqueletos com um teste cada; o motor de regras começa na Fase 1.
 
 - Especificação: [docs/specs/2026-11-01-trucaco-design.md](docs/specs/2026-11-01-trucaco-design.md)
 - Plano de desenvolvimento: [docs/plano-desenvolvimento.md](docs/plano-desenvolvimento.md)
@@ -13,15 +13,29 @@ Fase 0: levantamento, especificação e preparação do time de agentes. Ainda s
 
 ## Stack decidida
 
-| Camada | Tecnologia |
-|---|---|
-| Cliente (web, iOS, Android) | React Native + Expo, TypeScript |
-| Avatares e animações de sinais | Rive (`rive-react-native` / `@rive-app/react-canvas`) |
-| Servidor de jogo em tempo real | Node.js + TypeScript + Colyseus |
-| Persistência | PostgreSQL (Prisma) e Redis |
-| Autenticação | Google, Apple e convidado (JWT próprio) |
-| Monorepo | pnpm workspaces + Turborepo |
-| Hospedagem | Fly.io (servidor), Expo EAS (builds mobile), GitHub Actions (CI) |
+| Camada                         | Tecnologia                                                       |
+| ------------------------------ | ---------------------------------------------------------------- |
+| Cliente (web, iOS, Android)    | React Native + Expo, TypeScript                                  |
+| Avatares e animações de sinais | Rive (`rive-react-native` / `@rive-app/react-canvas`)            |
+| Servidor de jogo em tempo real | Node.js + TypeScript + Colyseus                                  |
+| Persistência                   | PostgreSQL (Prisma) e Redis                                      |
+| Autenticação                   | Google, Apple e convidado (JWT próprio)                          |
+| Monorepo                       | pnpm workspaces + Turborepo                                      |
+| Hospedagem                     | Fly.io (servidor), Expo EAS (builds mobile), GitHub Actions (CI) |
+
+## Rodando em 5 minutos
+
+Pré-requisitos: Node 22+ (`.nvmrc`), pnpm 9.15.9 (via `corepack enable`) e Docker.
+
+```bash
+pnpm install
+cp .env.example .env     # valores de desenvolvimento local
+pnpm db:up               # Postgres 16 (5432) e Redis 7 (6380) em Docker
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
+pnpm db:down
+```
+
+Scripts da raiz: `dev`, `build`, `lint`, `typecheck`, `test`, `format`, `format:check`, `db:up`, `db:down`. O CI (`.github/workflows/ci.yml`) roda `format:check`, `lint`, `typecheck`, `test` e `build` em todo PR para `develop`/`master`.
 
 ## Estrutura planejada
 
