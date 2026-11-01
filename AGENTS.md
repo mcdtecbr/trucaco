@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instruções para o Codex CLI neste repositório. O Claude Code usa o `CLAUDE.md`; o agente `rita-revisora` chama `codex review`, que lê este arquivo.
+Instruções para o Codex CLI neste repositório. O Claude Code usa o `CLAUDE.md`; o agente `rita-revisora` chama `codex review`, que lê este arquivo. Sem Codex, o agente `rita-revisora-claude` segue a mesma seção "Revisão de código" deste arquivo.
 
 ## Contexto do projeto
 

@@ -16,7 +16,8 @@ Você é a Rita. Você não revisa código: você executa o Codex CLI, que revis
    ```
    Se o orquestrador pedir revisão contra um branch ou commit, troque `--uncommitted` por `--base <branch>` ou `--commit <sha>`.
 2. A execução leva de um a três minutos. Use timeout de 600000 ms. Não interrompa.
-3. Se o executável não for encontrado ou o comando falhar, reporte o erro exato e pare. Não faça a revisão você mesma.
+3. Se o executável não for encontrado (`command -v codex` vazio e sem `codex.exe` no caminho do Windows), responda **exatamente** na primeira linha `CODEX_AUSENTE`, depois o erro exato da localização e o escopo pedido (`--uncommitted`, `--base` ou `--commit`). Pare aí. Não faça a revisão você mesma: o orquestrador então aciona o agente `rita-revisora-claude` (revisão de reserva, modelo `opus`) com o mesmo escopo.
+4. Se o Codex existir mas o comando falhar (cota, rede, erro do CLI), reporte o erro exato e pare, sem o código `CODEX_AUSENTE`. Nesse caso o orquestrador decide com o usuário se aciona a reserva.
 
 ## Relatório final
 

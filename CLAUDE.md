@@ -22,20 +22,21 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 
 ## Time de agentes
 
-| Agente            | Papel                                                                                                                                                            | Escreve código? |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                                                                            | Não             |
-| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista, Mineiro, série `bo3`, `GameEvent`) + testes                                                              | Sim             |
-| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, série, schema de estado, reconexão, sinais, efeitos `sfx`, chat, `onAuth`, REST, conquistas, missões e ranking | Sim             |
-| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, placar em camadas, cartas, estado, cliente Colyseus, player de áudio, perfil                      | Sim             |
-| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, vozes e efeitos sonoros (`assets/audio`), integração RN/web                   | Sim             |
-| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                                                                     | Sim             |
-| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                                                                             | Sim (só testes) |
-| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                                                                                | Sim             |
-| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                                                                           | Não             |
-| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                                                                                | Não             |
-| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                                                                              | Sim             |
-| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                                                                                 | Sim (só docs)   |
+| Agente                 | Papel                                                                                                                                                            | Escreve código? |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `artur-arquiteto`      | Arquitetura, contratos entre pacotes, plano por etapa                                                                                                            | Não             |
+| `tales-regras`         | Motor de regras do Truco em `packages/rules` (Paulista, Mineiro, série `bo3`, `GameEvent`) + testes                                                              | Sim             |
+| `caio-colyseus`        | Servidor Colyseus em `apps/server`: lobby, salas, série, schema de estado, reconexão, sinais, efeitos `sfx`, chat, `onAuth`, REST, conquistas, missões e ranking | Sim             |
+| `fabio-frontend`       | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, placar em camadas, cartas, estado, cliente Colyseus, player de áudio, perfil                      | Sim             |
+| `rai-avatar`           | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, vozes e efeitos sonoros (`assets/audio`), integração RN/web                   | Sim             |
+| `dalva-dba`            | Postgres (Prisma), Redis, migrações, índices                                                                                                                     | Sim             |
+| `catia-qa`             | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                                                                             | Sim (só testes) |
+| `duda-debugger`        | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                                                                                | Sim             |
+| `rita-revisora`        | Revisão de diff via Codex CLI, uma vez antes do commit                                                                                                           | Não             |
+| `rita-revisora-claude` | Reserva da Rita: revisão de diff em `opus` quando o Codex não existe (ex.: sessão na nuvem)                                                                      | Não             |
+| `vitor-seguranca`      | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                                                                                | Não             |
+| `diego-devops`         | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                                                                              | Sim             |
+| `teo-docs`             | README, ADRs, changelog, docs de regras e sinais                                                                                                                 | Sim (só docs)   |
 
 ## Fluxo padrão para uma funcionalidade nova
 
@@ -57,6 +58,7 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 - Ao delegar, passe contexto suficiente: objetivo, arquivos exatos, o que já foi decidido, critério de pronto. O agente só sabe o que estiver no prompt.
 - Etapas independentes podem rodar em paralelo (cliente e servidor após contrato definido; rita-revisora e vitor-seguranca sobre o mesmo diff).
 - Nunca considere uma tarefa concluída sem a suíte passando e sem revisão da **rita-revisora**.
+- **Reserva da Rita**: se a `rita-revisora` responder `CODEX_AUSENTE`, acione a `rita-revisora-claude` (modelo `opus`) com o mesmo escopo de diff. Se o Codex existir mas falhar (cota, rede), pergunte ao usuário antes de acionar a reserva. Registre no relatório da fase qual das duas revisou.
 - Agentes somente leitura (artur-arquiteto, rita-revisora, vitor-seguranca) reportam. A correção é delegada ao agente da área.
 - **O servidor é a única fonte de verdade.** Nenhuma regra de jogo no cliente além de validação de UX. Nenhum cliente recebe carta de outro jogador.
 - Responda em português do Brasil.
