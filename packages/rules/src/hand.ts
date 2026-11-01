@@ -291,6 +291,9 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
       return ok({
         ...state,
         lastRaiserTeam: team,
+        // aumentar equivale a aceitar o pedido anterior: ele vira o valor vigente
+        level: pending.toLevel,
+        value: state.variant.betLadder[pending.toLevel] ?? state.value,
         pending: { fromSeat: seat, fromTeam: team, toLevel: pending.toLevel + 1 },
       });
     }

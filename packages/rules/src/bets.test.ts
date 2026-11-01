@@ -1,5 +1,6 @@
 import type { Rank } from './cards';
 import { describe, expect, it } from 'vitest';
+import { handEvents } from './events';
 import { applyHandAction } from './hand';
 import type { HandAction, HandState } from './hand';
 import { firstCard, handFromTricks, must, playFirstCards } from './testing';
@@ -59,7 +60,7 @@ describe.each([
     let s = must(hand(variant), { type: 'callBet', seat: 0 });
     s = must(s, { type: 'raiseBet', seat: 3 });
     expect(s.pending).toMatchObject({ fromTeam: 1, toLevel: 1 });
-    expect(s.value).toBe(base); // nada aceito ainda
+    expect(s.value).toBe(ladder[0]); // aumentar aceita o pedido anterior
     expect(code(s, { type: 'acceptBet', seat: 3 })).toBe('NOT_YOUR_TURN');
     const done = must(s, { type: 'acceptBet', seat: 2 });
     expect(done.value).toBe(ladder[1]);
@@ -68,11 +69,46 @@ describe.each([
     expect(code(done, { type: 'callBet', seat: 0 })).toBe('OK');
   });
 
-  it('correr após aumento paga o valor da última aposta aceita (a base)', () => {
+  it('correr do aumento paga o degrau aceito implicitamente; do primeiro pedido, a base', () => {
+    const first = must(hand(variant), { type: 'callBet', seat: 0 });
+    expect(must(first, { type: 'runBet', seat: 1 }).result?.points).toBe(base);
+    const s = must(first, { type: 'raiseBet', seat: 1 });
+    expect(s.value).toBe(ladder[0]);
+    const ran = must(s, { type: 'runBet', seat: 0 });
+    expect(ran.result).toEqual({ winnerTeam: 1, points: ladder[0], reason: 'betRun' });
+  });
+
+  it('cadeia de aumentos: correr em cada degrau paga o degrau anterior', () => {
+    for (let k = 0; k < ladder.length; k++) {
+      let s = must(hand(variant), { type: 'callBet', seat: 0 });
+      let from = 1;
+      for (let i = 0; i < k; i++) {
+        s = must(s, { type: 'raiseBet', seat: from });
+        from = 1 - from;
+      }
+      // pedido pendente no degrau k, feito pela dupla de `1 - from`; responde `from`
+      const ran = must(s, { type: 'runBet', seat: from });
+      expect(ran.result).toEqual({
+        winnerTeam: 1 - from,
+        points: k === 0 ? base : ladder[k - 1],
+        reason: 'betRun',
+      });
+    }
+  });
+
+  it('aumento aceito vale o novo degrau, e handEvents é coerente', () => {
     let s = must(hand(variant), { type: 'callBet', seat: 0 });
     s = must(s, { type: 'raiseBet', seat: 1 });
-    const ran = must(s, { type: 'runBet', seat: 0 });
-    expect(ran.result).toEqual({ winnerTeam: 1, points: base, reason: 'betRun' });
+    const acc = must(s, { type: 'acceptBet', seat: 0 });
+    expect(acc.value).toBe(ladder[1]);
+    const played = playFirstCards(acc, 8);
+    expect(played.result).toEqual({ winnerTeam: 0, points: ladder[1], reason: 'tricks' });
+    const raise = handEvents(
+      must(hand(variant), { type: 'callBet', seat: 0 }),
+      { type: 'raiseBet', seat: 1 },
+      s,
+    );
+    expect(raise[0]).toMatchObject({ type: 'betRaised', toLevel: 1, value: ladder[1] });
   });
 
   it('a mão vence com o valor aceito', () => {

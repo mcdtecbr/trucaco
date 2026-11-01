@@ -347,13 +347,13 @@ describe('limites de placar e escada', () => {
         expect(legalActions(acc, seat).some((a) => a.type === 'callBet')).toBe(false);
     });
 
-    it('correr no topo paga à dupla que pediu o valor atual (última aposta aceita), não o pedido', () => {
+    it('correr no topo paga à dupla que pediu o degrau anterior (aceito ao aumentar), não o pedido', () => {
       const s = climb();
       const responder = s.pending?.fromTeam === 0 ? 1 : 0;
       const r = must(s, { type: 'runBet', seat: responder });
       expect(r.result).toEqual({
         winnerTeam: s.pending?.fromTeam,
-        points: variant.baseHandValue,
+        points: variant.betLadder[top - 1],
         reason: 'betRun',
       });
     });
