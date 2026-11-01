@@ -32,3 +32,6 @@ export const CHAT_MAX_LENGTH = 140;
 export const VARIANT_IDS = ['paulista', 'mineiro'] as const;
 
 export type VariantId = (typeof VARIANT_IDS)[number];
+
+export { RANKS, SUITS } from './cards';
+export type { Card, Rank, Suit } from './cards';
