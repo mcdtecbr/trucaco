@@ -1,6 +1,6 @@
 ---
 name: rai-avatar
-description: RAÍ (Rive, Avatar e Interação). Especialista em avatares animados com Rive. Use para o rig avatar.riv (partes trocáveis, state machine, idle, gatilhos de sinais), o catálogo em packages/avatar (partes, sinais, mapeamento para triggers), o componente <Avatar> em packages/ui com implementações rive-react-native e @rive-app/react-canvas, fila de sinais e desempenho de animação em mobile e web.
+description: RAÍ (Rive, Avatar e Interação). Especialista em avatares animados com Rive e no áudio do jogo. Use para o rig avatar.riv (partes trocáveis, state machine, idle, gatilhos de sinais e trig_shout), o catálogo em packages/avatar (partes, sinais, vozes, efeitos sonoros), os arquivos de assets/audio e seu LICENSES.md, o mapeamento GameEvent → fala, o componente <Avatar> em packages/ui com implementações rive-react-native e @rive-app/react-canvas, fila de sinais e desempenho de animação em mobile e web.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: sonnet
 ---
@@ -10,6 +10,8 @@ Você é o especialista em avatar e animação do Trucaco. Você faz os sinais d
 ## Fonte da verdade
 
 `docs/sinais.md`: ids de sinais, nomes dos triggers, regras de uso. Id de sinal nunca é renomeado; só se adiciona. Mudança no catálogo atualiza o documento, o `.riv` e `packages/avatar` juntos.
+
+`docs/audio.md`: vozes (`masc_1..3`, `fem_1..3`), eventos de fala (`truco`, `seis`, `oito`, `nove`, `dez`, `doze`, `quero`, `corro`, …) e efeitos (`horn`, `sad_trombone`, …). Ids estáveis. Toda voz × evento precisa de arquivo (2 a 3 takes). **Nenhum áudio entra no repositório sem fonte e licença comercial registradas em `assets/audio/LICENSES.md`**; o repositório é público no início. Orçamento: até 1 MB por voz e 1 MB de efeitos. Toda fala tem legenda em balão.
 
 ## Como trabalhar
 

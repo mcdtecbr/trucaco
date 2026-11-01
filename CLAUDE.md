@@ -10,23 +10,25 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 - `docs/plano-desenvolvimento.md`: fases, entregas e agente responsável por etapa.
 - `docs/regras-truco.md`: regras de Paulista e Mineiro no detalhe que o motor implementa.
 - `docs/sinais.md`: catálogo de sinais e gatilhos Rive.
+- `docs/audio.md`: vozes dos avatares, gritos por tipo de aposta, efeitos engraçados, licenças.
+- `docs/gamificacao.md`: conquistas, missões diárias (Fase 6) e ranking competitivo (Fase 9).
 
 ## Time de agentes
 
-| Agente            | Papel                                                                                                       | Escreve código? |
-| ----------------- | ----------------------------------------------------------------------------------------------------------- | --------------- |
-| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                       | Não             |
-| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista e Mineiro) + testes                                  | Sim             |
-| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, schema de estado, reconexão, sinais, chat, `onAuth`, REST | Sim             |
-| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, cartas, estado, cliente Colyseus             | Sim             |
-| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, integração RN/web        | Sim             |
-| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                | Sim             |
-| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                        | Sim (só testes) |
-| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                           | Sim             |
-| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                      | Não             |
-| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                           | Não             |
-| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                         | Sim             |
-| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                            | Sim (só docs)   |
+| Agente            | Papel                                                                                                                                                            | Escreve código? |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `artur-arquiteto` | Arquitetura, contratos entre pacotes, plano por etapa                                                                                                            | Não             |
+| `tales-regras`    | Motor de regras do Truco em `packages/rules` (Paulista, Mineiro, série `bo3`, `GameEvent`) + testes                                                              | Sim             |
+| `caio-colyseus`   | Servidor Colyseus em `apps/server`: lobby, salas, série, schema de estado, reconexão, sinais, efeitos `sfx`, chat, `onAuth`, REST, conquistas, missões e ranking | Sim             |
+| `fabio-frontend`  | Cliente Expo/RN em `apps/mobile` e `packages/ui`: telas, mesa, placar em camadas, cartas, estado, cliente Colyseus, player de áudio, perfil                      | Sim             |
+| `rai-avatar`      | Rive em `packages/avatar` e `assets/rive`: rig, state machine, catálogo de sinais, vozes e efeitos sonoros (`assets/audio`), integração RN/web                   | Sim             |
+| `dalva-dba`       | Postgres (Prisma), Redis, migrações, índices                                                                                                                     | Sim             |
+| `catia-qa`        | Testes unitários (Vitest), de sala (`@colyseus/testing`) e E2E (Maestro, Playwright)                                                                             | Sim (só testes) |
+| `duda-debugger`   | Reproduz bugs, causa raiz, correção mínima com teste de regressão                                                                                                | Sim             |
+| `rita-revisora`   | Revisão de diff via Codex CLI, uma vez antes do commit                                                                                                           | Não             |
+| `vitor-seguranca` | Auth, anti-trapaça, rate limit, moderação, segredos, dependências                                                                                                | Não             |
+| `diego-devops`    | Docker, GitHub Actions, Fly.io, Expo EAS, ambientes                                                                                                              | Sim             |
+| `teo-docs`        | README, ADRs, changelog, docs de regras e sinais                                                                                                                 | Sim (só docs)   |
 
 ## Fluxo padrão para uma funcionalidade nova
 

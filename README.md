@@ -10,6 +10,8 @@ Fase 0 (fundação) concluída: monorepo, CI e Docker local prontos. Os pacotes 
 - Plano de desenvolvimento: [docs/plano-desenvolvimento.md](docs/plano-desenvolvimento.md)
 - Regras do jogo (referência para o motor): [docs/regras-truco.md](docs/regras-truco.md)
 - Catálogo de sinais: [docs/sinais.md](docs/sinais.md)
+- Vozes, gritos de truco e efeitos sonoros: [docs/audio.md](docs/audio.md)
+- Conquistas, missões e ranking: [docs/gamificacao.md](docs/gamificacao.md)
 
 ## Stack decidida
 
