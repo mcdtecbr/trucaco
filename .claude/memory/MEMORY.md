@@ -1,3 +1,4 @@
-- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0, 1 e 2 concluídas (servidor); próxima Fase 3 (cliente jogável)
+- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0, 1 e 2 concluídas (servidor); Fase 3 (cliente) em andamento, 3A a 3H1 prontos
 - [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
 - [Git: modo atual](feedback_git_convencao.md) — commit e push DIRETO na develop, sem PR, até o usuário avisar; nunca mexer na master
+- [Handoff Fase 3](handoff-fase-3.md) — estado completo, pendências (3H2), decisões, o que não foi validado, riscos e armadilhas para retomar em outra máquina
