@@ -77,10 +77,16 @@ export const MAX_MESSAGE_BYTES = 1024;
 
 /**
  * Intervalo mínimo entre duas ações de jogo do mesmo jogador (`play`, `playBlind`, `bet`, `accept`,
- * `run`, `special`, `ready`, `voteCancel`). 150 ms barra rajadas/automação sem atrapalhar jogo
+ * `run`, `special`, `ready`, `voteCancel`, `voteRematch`). 150 ms barra rajadas/automação sem atrapalhar jogo
  * humano (toque mais rápido leva ~200 ms). Aplicado pelo servidor; aqui só a constante.
  */
 export const ACTION_MIN_INTERVAL_MS = 150;
 
 /** Máximo de acentos combinantes consecutivos aceitos no chat (barra "zalgo"). */
 export const CHAT_MAX_COMBINING_RUN = 3;
+
+/** Janela padrão (ms) para a mesa votar "Jogar de novo" depois que a série termina com vencedor. */
+export const DEFAULT_REMATCH_WINDOW_MS = 30_000;
+
+/** Mínimo de humanos conectados para a revanche valer (abaixo disso o voto é recusado). */
+export const REMATCH_MIN_HUMANS = 2;

@@ -23,6 +23,8 @@ import type { AuthContext, Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
   CHAT_COOLDOWN_MS,
+  DEFAULT_REMATCH_WINDOW_MS,
+  REMATCH_MIN_HUMANS,
   RECONNECT_SECONDS,
   SFX_COOLDOWN_MS,
   SIGNAL_COOLDOWN_MS,
@@ -44,6 +46,7 @@ import {
   isSeriesOver,
   legalActions,
   mulberry32,
+  nextSeat,
   pendingSeat,
   publicEvent,
   startHand,
@@ -66,6 +69,7 @@ import {
   createTableState,
   setCancelVotes,
   setPlayer,
+  setRematchVotes,
 } from '../game/schema';
 import type { TableState } from '../game/schema';
 import { log } from '../logger';
@@ -130,6 +134,11 @@ export interface TrucoRoomConfig {
   readonly actionMinIntervalMs?: number;
   /** Atraso para fechar a sala após o fim da série. Padrão `DEFAULT_FINISH_DELAY_MS`. */
   readonly finishDelayMs?: number;
+  /**
+   * Janela de "Jogar de novo" depois de uma série COM vencedor; expirando sem revanche a sala fecha.
+   * Padrão `DEFAULT_REMATCH_WINDOW_MS`. Série cancelada/abandonada não abre janela (usa `finishDelayMs`).
+   */
+  readonly rematchWindowMs?: number;
   /** Intervalo de patch do estado em ms (padrão do Colyseus: 50). */
   readonly patchRateMs?: number;
   /** Teto de mensagens por segundo por conexão (acima disso o Colyseus desconecta). Padrão 30. */
@@ -294,6 +303,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly pendingReservations = new Map<string, number>();
   private recorder: MatchRecorder | null = null;
   private endReason: EndReason | null = null;
+  /** Assentos que votaram por revanche na janela atual. */
+  private readonly rematchVotes = new Set<Seat>();
+  /** Fim da janela de revanche (epoch ms); 0 = sem janela. */
+  private rematchDeadlineAt = 0;
+  /** 1 na primeira partida da sala, +1 por revanche. */
+  private matchNumber = 1;
+  /** Gravações de todas as partidas da sala (o `onDispose` espera por todas). */
+  private readonly pendingSaves: Promise<boolean>[] = [];
 
   constructor(private readonly config: TrucoRoomConfig = {}) {
     super();
@@ -612,8 +629,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     // Sala fechada com a série em andamento (desligamento do servidor): grava como abandonada.
     const series = this.series;
     if (series !== null && !isSeriesOver(series)) this.persistMatch(series, 'abandoned');
-    const pending = this.recorder?.pending ?? null;
-    if (pending !== null) return flushWithin(pending, DISPOSE_FLUSH_MS);
+    if (this.pendingSaves.length > 0) {
+      const all = Promise.all(this.pendingSaves.map((p) => p.catch(() => false))).then(() => true);
+      return flushWithin(all, DISPOSE_FLUSH_MS);
+    }
     return undefined;
   }
 
@@ -733,7 +752,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   /** Efeitos de mudar quem está presente: votos, abandono. */
   private afterRosterChange(): void {
     this.pruneVotes();
+    this.pruneRematchVotes();
     this.checkVotes();
+    this.checkRematch();
     this.checkAbandon();
   }
 
@@ -907,7 +928,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return null;
   }
 
-  private startGame(): void {
+  private startGame(pe: Seat = 0): void {
     this.startTimer = null;
     const options = this.options;
     if (options === null || this.series !== null || this.userBySeat.size !== TABLE_SEATS) return;
@@ -916,15 +937,16 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const started = startSeries({
       variant,
       config: { format: options.format, ironHand },
-      pe: 0,
+      pe,
       rng: this.rng,
     });
     let series = started.state;
     let events: readonly GameEvent[] = started.events;
     const scores = this.config.initialScores;
-    if (scores !== undefined && (scores[0] !== 0 || scores[1] !== 0)) {
+    // Placar forçado vale só na 1ª partida da sala (a revanche começa sempre do zero).
+    if (this.matchNumber === 1 && scores !== undefined && (scores[0] !== 0 || scores[1] !== 0)) {
       // Só teste/servidor: refaz a 1ª mão já com o placar forçado (onze, dez, ferro).
-      const hand = startHand({ variant, pe: 0, scores, ironHand, rng: this.rng });
+      const hand = startHand({ variant, pe, scores, ironHand, rng: this.rng });
       series = { ...series, match: { ...series.match, scores, hand } };
       events = events.map((e) =>
         e.type === 'handStarted' ? { ...e, scores, special: hand.special } : e,
@@ -936,7 +958,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       roomCode: this.state.roomCode,
       seed: this.seed,
       startedAt: new Date(),
+      matchNumber: this.matchNumber,
     });
+    // Quem já é bot ao começar (inclusive na revanche) conta como bot desde o início da partida.
+    for (const s of this.botSeats) this.recorder.noteBot(s, this.seq);
     this.waitTimer?.clear();
     this.waitTimer = null;
     // Em série a sala não pode voltar à lista pública (o `unlock` do bot a reexporia a estranhos para
@@ -1008,6 +1033,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     if (msg.type === 'voteCancel') {
       const code = this.voteCancel(seat);
+      if (code !== null) this.reject(client, code);
+      return;
+    }
+    if (msg.type === 'voteRematch') {
+      const code = this.voteRematch(seat);
       if (code !== null) this.reject(client, code);
       return;
     }
@@ -1280,6 +1310,112 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return this.cancelNow(series);
   }
 
+  // ---------------------------------------------------------------- revanche
+
+  private rematchWindowOpen(): boolean {
+    const s = this.series;
+    return (
+      s !== null &&
+      s.winner !== null &&
+      !s.cancelled &&
+      this.rematchDeadlineAt > 0 &&
+      Date.now() < this.rematchDeadlineAt &&
+      !this.closing
+    );
+  }
+
+  /** Abre a janela de "Jogar de novo": o fechamento da sala passa a ser o fim da janela. */
+  private openRematchWindow(): void {
+    if (this.rematchDeadlineAt > 0 || this.closeTimer !== null) return;
+    const ms = this.config.rematchWindowMs ?? DEFAULT_REMATCH_WINDOW_MS;
+    this.rematchDeadlineAt = Date.now() + ms;
+    this.state.rematchDeadlineAt = this.rematchDeadlineAt;
+    this.scheduleClose(ms);
+  }
+
+  /**
+   * Voto de revanche: só com a janela aberta (série com vencedor) e pelo menos `REMATCH_MIN_HUMANS`
+   * humanos conectados. Idempotente, sem "desvoto". Unanimidade dos humanos conectados inicia a revanche.
+   */
+  private voteRematch(seat: Seat): ErrorCode | null {
+    if (!this.rematchWindowOpen()) return 'REMATCH_NOT_AVAILABLE';
+    const voters = this.connectedHumans();
+    if (voters.length < REMATCH_MIN_HUMANS || !voters.includes(seat)) {
+      return 'REMATCH_NOT_AVAILABLE';
+    }
+    if (!this.rematchVotes.has(seat)) {
+      this.rematchVotes.add(seat);
+      this.publishRematchVotes();
+    }
+    this.checkRematch();
+    return null;
+  }
+
+  private publishRematchVotes(): void {
+    setRematchVotes(
+      this.state,
+      [...this.rematchVotes].sort((a, b) => a - b),
+    );
+  }
+
+  /** Descarta voto de quem não é humano conectado (caiu, virou bot). */
+  private pruneRematchVotes(): void {
+    if (this.rematchVotes.size === 0) return;
+    const voters = new Set(this.connectedHumans());
+    let changed = false;
+    for (const s of [...this.rematchVotes]) {
+      if (!voters.has(s)) {
+        this.rematchVotes.delete(s);
+        changed = true;
+      }
+    }
+    if (changed) this.publishRematchVotes();
+  }
+
+  private checkRematch(): void {
+    if (this.rematchVotes.size === 0 || !this.rematchWindowOpen()) return;
+    const voters = this.connectedHumans();
+    if (voters.length < REMATCH_MIN_HUMANS) return;
+    if (!voters.every((s) => this.rematchVotes.has(s))) return;
+    this.startRematch();
+  }
+
+  /**
+   * Nova partida na mesma sala, assentos e duplas. Semente nova, placares zerados, `seq`/`eventLog`
+   * contínuos e o pé gira (`nextSeat` do pé da última mão). A partida anterior já foi gravada.
+   */
+  private startRematch(): void {
+    const prev = this.series;
+    if (prev === null || prev.winner === null || this.closing) return;
+    const pe = nextSeat(prev.match.hand.pe, prev.seats);
+    this.closeTimer?.clear();
+    this.closeTimer = null;
+    this.rematchVotes.clear();
+    this.publishRematchVotes();
+    this.rematchDeadlineAt = 0;
+    this.state.rematchDeadlineAt = 0;
+    this.endReason = null;
+    this.series = null;
+    this.matchNumber += 1;
+    this.state.matchNumber = this.matchNumber;
+    this.seed =
+      this.config.rngSeed !== undefined
+        ? this.config.rngSeed + this.matchNumber - 1
+        : randomInt(0, 2 ** 32);
+    this.rng = mulberry32(this.seed);
+    this.timeouts.clear();
+    this.reconnectCount.clear(); // cada partida tem o seu teto de reconexões
+    for (const s of this.userBySeat.keys()) this.refreshPresence(s);
+    // Quem virou bot na janela segue com a cadeira reservada: o dono só reentra em sala destrancada.
+    if (this.botSeats.size > 0 && this.locked) {
+      this.unlock().catch((err: unknown) =>
+        log.error('truco: unlock falhou', { err: String(err) }),
+      );
+    }
+    log.info('truco: revanche iniciada', { room: this.roomId, matchNumber: this.matchNumber });
+    this.startGame(pe);
+  }
+
   // ---------------------------------------------------------------- eventos
 
   /** Um `event` por cliente (não `broadcast`): a carta coberta é vista só pelo dono. */
@@ -1352,7 +1488,12 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     });
     const repo = this.config.matches;
     if (input === null || repo === undefined) return;
-    void recorder.save(repo, input, this.roomId);
+    const saving = recorder.save(repo, input, this.roomId);
+    this.pendingSaves.push(saving);
+    void saving.finally(() => {
+      const i = this.pendingSaves.indexOf(saving);
+      if (i >= 0) this.pendingSaves.splice(i, 1);
+    });
   }
 
   // ---------------------------------------------------------------- timer e projeção
@@ -1371,7 +1512,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       projectState(series, this.state);
       if (isSeriesOver(series)) {
         this.persistMatch(series);
-        this.scheduleClose();
+        if (series.winner !== null && !series.cancelled) this.openRematchWindow();
+        else this.scheduleClose();
       } else log.error('truco: série em andamento sem assento pendente', { room: this.roomId });
       return;
     }
@@ -1435,9 +1577,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     else if (!isBot) this.refreshPresence(seat);
   }
 
-  private scheduleClose(): void {
+  private scheduleClose(delayMs?: number): void {
     if (this.closeTimer !== null) return;
-    const delay = this.config.finishDelayMs ?? DEFAULT_FINISH_DELAY_MS;
+    const delay = delayMs ?? this.config.finishDelayMs ?? DEFAULT_FINISH_DELAY_MS;
     this.closeTimer = this.clock.setTimeout(() => {
       this.disconnect().catch((err: unknown) =>
         log.error('truco: disconnect falhou', { err: String(err) }),

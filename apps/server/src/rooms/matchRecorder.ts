@@ -49,6 +49,8 @@ export interface RecorderInit {
   readonly roomCode: string;
   readonly seed: number;
   readonly startedAt: Date;
+  /** 1 na primeira partida da sala, +1 por revanche (vai em `options.matchNumber`). */
+  readonly matchNumber: number;
 }
 
 export interface BuildArgs {
@@ -123,6 +125,7 @@ export class MatchRecorder {
     this.finalized = true;
     const options: JsonObject = {
       ...this.init.options,
+      matchNumber: this.init.matchNumber,
       endReason: args.endReason,
       ...(this.dropped > 0 ? { logTruncated: true, eventsDropped: this.dropped } : {}),
     };

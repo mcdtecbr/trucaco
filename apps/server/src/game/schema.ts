@@ -144,6 +144,12 @@ export const TableStateSchema = schema(
     turnDeadlineAt: t.float64().default(0),
     /** Assentos que votaram para cancelar a mesa. */
     cancelVotes: t.array('uint8'),
+    /** Assentos que votaram por "Jogar de novo" (janela de revanche). */
+    rematchVotes: t.array('uint8'),
+    /** Epoch ms em que a janela de revanche fecha; 0 = sem janela. */
+    rematchDeadlineAt: t.float64().default(0),
+    /** 1 na primeira partida da sala, +1 por revanche. */
+    matchNumber: t.uint16().default(1),
     /** Privado por assento (chave = número do assento como string). `.view()`: nunca vai a todos. */
     privates: t.map(SeatPrivateSchema).view(),
   },
@@ -238,4 +244,10 @@ export function createSeatView(state: TableState, seat: Seat): StateView {
   if (priv === undefined) throw new Error(`assento inexistente: ${seat}`);
   view.add(priv);
   return view;
+}
+
+/** Assentos que votaram por revanche (substitui a lista). */
+export function setRematchVotes(state: TableState, seats: readonly Seat[]): void {
+  state.rematchVotes.clear();
+  for (const s of seats) state.rematchVotes.push(s);
 }

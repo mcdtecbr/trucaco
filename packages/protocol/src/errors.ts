@@ -31,6 +31,8 @@ export const ERROR_CODES = [
   'INVALID_SFX',
   'CHAT_BLOCKED',
   'UNAUTHORIZED',
+  // Revanche indisponível: série sem vencedor, janela fechada ou humanos conectados insuficientes.
+  'REMATCH_NOT_AVAILABLE',
   // Reservado ao cliente: o servidor nunca o emite; o cliente o sintetiza (401 na reconexão).
   'TOKEN_EXPIRED',
 ] as const;

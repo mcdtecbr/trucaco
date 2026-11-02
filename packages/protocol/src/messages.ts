@@ -29,6 +29,7 @@ export type ClientMessage =
   | { readonly type: 'chat'; readonly scope: ChatScope; readonly text: string }
   | { readonly type: 'chat'; readonly scope: ChatScope; readonly phraseId: QuickPhraseId }
   | { readonly type: 'voteCancel' }
+  | { readonly type: 'voteRematch' }
   | { readonly type: 'ready' };
 
 export type PresenceStatus = 'online' | 'away' | 'bot';
@@ -201,6 +202,7 @@ function parseUnsafe(input: unknown): ParseResult {
     case 'accept':
     case 'run':
     case 'voteCancel':
+    case 'voteRematch':
     case 'ready':
       return onlyKeys(raw, ['type']) ? good({ type }) : BAD;
     case 'special': {

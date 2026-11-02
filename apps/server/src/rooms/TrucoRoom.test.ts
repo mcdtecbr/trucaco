@@ -10,9 +10,10 @@ import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
 import { MAX_MESSAGE_BYTES, QUICK_PHRASE_IDS, SFX_IDS } from '@trucaco/protocol';
 import type { ErrorCode, RoomOptions } from '@trucaco/protocol';
-import { mulberry32, pendingSeat } from '@trucaco/rules';
+import { mulberry32, nextSeat, pendingSeat } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { FinishedMatchInput, MatchRepository } from '../db/types';
 import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
@@ -29,7 +30,55 @@ const FAST: TrucoRoomConfig = {
   maxMessagesPerSecond: 10_000,
 };
 
+/** Repositório falso: guarda o que a sala gravar (testes de revanche). */
+const savedMatches: FinishedMatchInput[] = [];
+const fakeRepo: MatchRepository = {
+  saveMatch: (input) => {
+    savedMatches.push(input);
+    return Promise.resolve(String(savedMatches.length));
+  },
+  listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
+};
+
+/** Repositório cuja gravação só termina quando o teste manda (prova que o dispose espera). */
+const gateCalls: { input: FinishedMatchInput; release: () => void }[] = [];
+const gateRepo: MatchRepository = {
+  saveMatch: (input) =>
+    new Promise<string>((resolve) => {
+      gateCalls.push({ input, release: () => resolve('id') });
+    }),
+  listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
+};
+
 const VARIANTS: Record<string, TrucoRoomConfig> = {
+  'truco-rematch-gate': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: gateRepo,
+  },
+  // Revanche: 11x11 com mão de ferro decide o jogo numa mão. Bot rápido, turno longo.
+  'truco-rematch': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: fakeRepo,
+  },
+  'truco-rematch-short': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    rematchWindowMs: 400,
+  },
   'truco-onze': { ...FAST, rngSeed: 11, initialScores: [11, 3] },
   'truco-onze-mineiro': { ...FAST, rngSeed: 12, initialScores: [4, 10] },
   'truco-ferro': { ...FAST, rngSeed: 13, initialScores: [11, 11] },
@@ -1943,5 +1992,204 @@ describe('isChatRecipient (destinatários do chat)', () => {
         expect(isChatRecipient('partner', from, to)).toBe(to === from || to === (from + 2) % 4);
       }
     }
+  });
+});
+
+describe('TrucoRoom: revanche ("Jogar de novo")', () => {
+  const hasWinner = (game: Game): boolean => (game.server.series?.winner ?? null) !== null;
+  const votes = (game: Game): string =>
+    (game.server.state.rematchVotes.toJSON() as number[]).join();
+
+  async function finished(name = 'truco-rematch'): Promise<Game> {
+    const game = await startedRec(name);
+    await drive(game, () => hasWinner(game), 'fim da série');
+    await settle(game, 'fim');
+    return game;
+  }
+
+  it('publica a janela no fim com vencedor e NÃO na série cancelada', async () => {
+    const game = await finished();
+    const st = game.server.state;
+    expect(st.phase).toBe('finished');
+    expect(st.matchNumber).toBe(1);
+    expect(st.rematchDeadlineAt).toBeGreaterThan(Date.now());
+    expect(st.rematchVotes.length).toBe(0);
+    (game.players[0] as Player).room.send('voteRematch');
+    await until(() => votes(game) === '0', 'voto de 0');
+    const c = (game.players[1] as Player).room.state as {
+      rematchVotes: number[];
+      rematchDeadlineAt: number;
+      matchNumber: number;
+    };
+    await until(() => c.rematchVotes.length === 1, 'voto no cliente');
+    expect(c.rematchDeadlineAt).toBe(st.rematchDeadlineAt);
+    expect(c.matchNumber).toBe(1);
+  });
+
+  it('série cancelada não abre janela e a revanche é recusada', async () => {
+    const other = await startedRec('truco-rematch');
+    for (const p of other.players) p.room.send('voteCancel');
+    await until(() => other.server.series?.cancelled === true, 'cancelada');
+    expect(other.server.state.rematchDeadlineAt).toBe(0);
+    (other.players[0] as Player).room.send('voteRematch');
+    await until(() => (other.players[0] as Player).errors.length === 1, 'erro');
+    expect((other.players[0] as Player).errors).toEqual(['REMATCH_NOT_AVAILABLE']);
+  });
+
+  it('voto antes do fim: erro sem strike nem expulsão; chave extra é payload inválido', async () => {
+    const game = await startedRec('truco-rematch');
+    const p = game.players[0] as Player;
+    for (let i = 0; i < 7; i++) p.room.send('voteRematch');
+    await until(() => p.errors.length === 7, '7 erros');
+    expect(new Set(p.errors)).toEqual(new Set(['REMATCH_NOT_AVAILABLE']));
+    expect(statusOf(game, 0)).toBe('connected');
+    expect(game.server.series?.winner).toBeNull();
+    p.room.send('voteRematch', { x: 1 });
+    await until(() => p.errors.length === 8, 'payload inválido');
+    expect(p.errors[7]).toBe('INVALID_PAYLOAD');
+  });
+
+  it('4 votos iniciam a partida 2: placar zerado, pé girado, seq contínuo, duas gravações', async () => {
+    savedMatches.length = 0;
+    const game = await finished();
+    const before = game.server.series as SeriesState;
+    const lastSeq = game.server.eventLog.length;
+    const pe = nextSeat(before.match.hand.pe, before.seats);
+    for (const p of game.players) {
+      p.room.send('voteRematch');
+      p.room.send('voteRematch'); // idempotente
+    }
+    await until(() => game.server.state.matchNumber === 2, 'partida 2');
+    await settle(game, 'revanche');
+    const series = game.server.series as SeriesState;
+    expect(series.winner).toBeNull();
+    expect(series.gameNumber).toBe(1);
+    expect(series.games).toEqual([0, 0]);
+    expect(series.match.hand.pe).toBe(pe);
+    expect(series.match.scores).toEqual([0, 0]);
+    const st = game.server.state;
+    expect(st.phase).toBe('playing');
+    expect(st.rematchDeadlineAt).toBe(0);
+    expect(st.rematchVotes.length).toBe(0);
+    expect(st.game.pe).toBe(pe);
+    expect(plain<number>(st.game.scores)).toEqual([0, 0]);
+    expect(plain<number>(st.series.games)).toEqual([0, 0]);
+    expect(st.series.winnerTeam).toBe(-1);
+    expect(game.server.eventLog.length).toBeGreaterThan(lastSeq);
+    expect(game.server.eventLog[lastSeq]?.event.type).toBe('gameStarted');
+    assertEventStream(game);
+    // a partida 2 também é gravada (aqui, cancelada por voto), com semente própria
+    for (const p of game.players) p.room.send('voteCancel');
+    await until(() => savedMatches.length === 2, 'duas gravações');
+    expect(savedMatches.map((m) => m.seed)).toEqual([13, 14]);
+    expect(savedMatches.map((m) => m.options['matchNumber'])).toEqual([1, 2]);
+    expect(savedMatches.map((m) => m.status)).toEqual(['finished', 'cancelled']);
+    expect(savedMatches[0]?.roomCode).toBe(savedMatches[1]?.roomCode);
+    assertNoLeaks(game);
+  });
+
+  it('saída de votante poda o voto e os 3 que restam, unânimes, começam com bot', async () => {
+    savedMatches.length = 0;
+    const game = await finished();
+    const seqAtEnd = (game.server.eventLog.at(-1) as { seq: number }).seq;
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    p3.room.send('voteRematch');
+    p0.room.send('voteRematch');
+    await until(() => votes(game) === '0,3', 'votos 0 e 3');
+    p3.gone = true;
+    await p3.room.leave();
+    await until(() => votes(game) === '0', 'voto de 3 podado');
+    expect(game.server.state.matchNumber).toBe(1);
+    p1.room.send('voteRematch');
+    p2.room.send('voteRematch');
+    await until(() => game.server.state.matchNumber === 2, 'partida 2');
+    expect(statusOf(game, 3)).toBe('bot');
+    expect(game.server.series?.winner).toBeNull();
+    await settle(game, 'revanche com bot');
+    // o bot da partida 2 conta como bot desde o início dela; a partida 1 não tem bot
+    for (const p of [p0, p1, p2]) p.room.send('voteCancel');
+    await until(() => savedMatches.length === 2, 'duas gravações');
+    expect(savedMatches[0]?.players.map((p) => p.botFrom)).toEqual([null, null, null, null]);
+    expect(savedMatches[1]?.players.map((p) => p.botFrom)).toEqual([null, null, null, seqAtEnd]);
+    assertNoLeaks(game);
+  });
+
+  it('com menos de 2 humanos conectados a revanche não está disponível', async () => {
+    const game = await finished();
+    for (const s of [1, 2, 3]) {
+      const p = game.players[s] as Player;
+      p.gone = true;
+      await p.room.leave();
+    }
+    await until(() => statusOf(game, 3) === 'bot', 'bots');
+    const p0 = game.players[0] as Player;
+    p0.room.send('voteRematch');
+    await until(() => p0.errors.length === 1, 'erro');
+    expect(p0.errors).toEqual(['REMATCH_NOT_AVAILABLE']);
+    expect(game.server.state.matchNumber).toBe(1);
+  });
+
+  it('janela expirada sem revanche fecha a sala', async () => {
+    const game = await finished('truco-rematch-short');
+    const roomId = game.server.roomId;
+    (game.players[0] as Player).room.send('voteRematch');
+    await until(() => votes(game) === '0', 'voto');
+    await until(() => t.getRoomById(roomId) === undefined, 'sala encerrada', 3000);
+  });
+
+  it('reconexão na janela recebe votos e prazo no estado completo', async () => {
+    const game = await finished();
+    (game.players[0] as Player).room.send('voteRematch');
+    await until(() => votes(game) === '0', 'voto');
+    await dropSeat(game, 2);
+    const p = await rejoin(game, 2);
+    const c = p.room.state as { rematchVotes: number[]; rematchDeadlineAt: number };
+    await until(() => (c.rematchVotes?.length ?? 0) === 1, 'estado completo');
+    expect(c.rematchVotes[0]).toBe(0);
+    expect(c.rematchDeadlineAt).toBe(game.server.state.rematchDeadlineAt);
+  });
+
+  it('onDispose espera as gravações de todas as partidas (a 1ª ainda pendente)', async () => {
+    gateCalls.length = 0;
+    const game = await finished('truco-rematch-gate');
+    for (const p of game.players) p.room.send('voteRematch');
+    await until(() => game.server.state.matchNumber === 2, 'partida 2');
+    for (const p of game.players) p.room.send('voteCancel');
+    await until(() => gateCalls.length === 2, 'duas gravações iniciadas');
+    expect(gateCalls.map((c) => c.input.options['matchNumber'])).toEqual([1, 2]);
+    // só a 2ª termina; a 1ª segue pendente: o dispose não pode terminar antes dela
+    (gateCalls[1] as { release: () => void }).release();
+    let done = false;
+    const disposing = Promise.resolve(game.server.onDispose()).then(() => {
+      done = true;
+    });
+    await sleep(300);
+    expect(done).toBe(false);
+    (gateCalls[0] as { release: () => void }).release();
+    await disposing;
+    expect(done).toBe(true);
+  });
+
+  it('assento caído não bloqueia: volta na partida 2 com estado e replay corretos; teto de reconexões zera', async () => {
+    const game = await finished();
+    const priv = game.server as unknown as { reconnectCount: Map<number, number> };
+    await dropSeat(game, 3);
+    await rejoin(game, 3);
+    expect(priv.reconnectCount.get(3)).toBe(1);
+    await dropSeat(game, 3);
+    for (const s of [0, 1, 2]) (game.players[s] as Player).room.send('voteRematch');
+    await until(() => game.server.state.matchNumber === 2, 'partida 2 sem o caído');
+    expect(priv.reconnectCount.size).toBe(0);
+    const p = await rejoin(game, 3);
+    const c = p.room.state as { matchNumber: number; phase: string };
+    await until(() => c.matchNumber === 2, 'estado completo da partida 2');
+    expect(c.phase).toBe('playing');
+    expect(priv.reconnectCount.get(3)).toBe(1);
+    const lastSeq = (game.server.eventLog.at(-1) as { seq: number }).seq;
+    await until(() => p.events.at(-1)?.seq === lastSeq, 'replay até o último seq');
+    p.events.forEach((e, k) => {
+      if (k > 0) expect(e.seq).toBe((p.events[k - 1] as Received).seq + 1);
+    });
+    expect(p.events.some((e) => e.event.type === 'gameStarted')).toBe(true);
   });
 });

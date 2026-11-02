@@ -138,6 +138,12 @@ export interface TableStateSnapshot {
   readonly turnDeadlineAt: number;
   /** Assentos que votaram para cancelar a mesa. */
   readonly cancelVotes: readonly number[];
+  /** Assentos (ordenados) que votaram por "Jogar de novo" na janela de revanche. */
+  readonly rematchVotes: readonly number[];
+  /** Epoch ms em que a janela de revanche fecha; 0 = sem janela. */
+  readonly rematchDeadlineAt: number;
+  /** Número da partida na sala: 1 na primeira, +1 a cada revanche. */
+  readonly matchNumber: number;
   /** Chave = assento como string. O cliente recebe só a própria entrada. */
   readonly privates: { readonly [seat: string]: SeatPrivateSnapshot };
 }

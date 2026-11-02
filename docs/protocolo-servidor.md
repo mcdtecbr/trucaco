@@ -80,19 +80,20 @@ Quem não é o dono de um assento não o recupera: o servidor recusa antes de ga
 
 Enviadas com `room.send(tipo, payload)`. O payload NUNCA leva `seat`: o servidor deriva o assento da sessão, e um campo extra (inclusive `seat`) resulta em `error INVALID_PAYLOAD`.
 
-| Tipo         | Payload                                                          | Observação                                                                                   |
-| ------------ | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `play`       | `{ card: { rank, suit }, covered? }`                             | `covered: true` joga carta coberta (a partir da 2ª vaza)                                     |
-| `playBlind`  | `{ index }` (0 a 2)                                              | Mão de ferro: carta escolhida às cegas, por posição                                          |
-| `bet`        | `{}`                                                             | O servidor escolhe `callBet` ou `raiseBet` pelo estado. Quem pede ou aumenta é sempre humano |
-| `accept`     | `{}`                                                             | Aceita o truco pendente                                                                      |
-| `run`        | `{}`                                                             | Corre do truco pendente (a decisão da mão de onze/dez é `special`)                           |
-| `special`    | `{ decision: 'play' \| 'run' }`                                  | Decisão da mão de onze/dez                                                                   |
-| `signal`     | `{ signalId }`                                                   | Sinal de truco, público na mesa. Id de `SIGNAL_IDS`                                          |
-| `sfx`        | `{ sfxId }`                                                      | Efeito sonoro. Id de `SFX_IDS`                                                               |
-| `chat`       | `{ scope: 'partner' \| 'table', text }` ou `{ scope, phraseId }` | Texto OU frase rápida, nunca os dois. Ver seção 9                                            |
-| `voteCancel` | `{}`                                                             | Voto para cancelar a série (unanimidade dos humanos conectados)                              |
-| `ready`      | `{}`                                                             | Aceito e ignorado pelo servidor (reservado)                                                  |
+| Tipo          | Payload                                                          | Observação                                                                                   |
+| ------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `play`        | `{ card: { rank, suit }, covered? }`                             | `covered: true` joga carta coberta (a partir da 2ª vaza)                                     |
+| `playBlind`   | `{ index }` (0 a 2)                                              | Mão de ferro: carta escolhida às cegas, por posição                                          |
+| `bet`         | `{}`                                                             | O servidor escolhe `callBet` ou `raiseBet` pelo estado. Quem pede ou aumenta é sempre humano |
+| `accept`      | `{}`                                                             | Aceita o truco pendente                                                                      |
+| `run`         | `{}`                                                             | Corre do truco pendente (a decisão da mão de onze/dez é `special`)                           |
+| `special`     | `{ decision: 'play' \| 'run' }`                                  | Decisão da mão de onze/dez                                                                   |
+| `signal`      | `{ signalId }`                                                   | Sinal de truco, público na mesa. Id de `SIGNAL_IDS`                                          |
+| `sfx`         | `{ sfxId }`                                                      | Efeito sonoro. Id de `SFX_IDS`                                                               |
+| `chat`        | `{ scope: 'partner' \| 'table', text }` ou `{ scope, phraseId }` | Texto OU frase rápida, nunca os dois. Ver seção 9                                            |
+| `voteCancel`  | `{}`                                                             | Voto para cancelar a série (unanimidade dos humanos conectados)                              |
+| `voteRematch` | `{}`                                                             | Voto por "Jogar de novo" na janela de revanche (ver abaixo). Chave extra: `INVALID_PAYLOAD`  |
+| `ready`       | `{}`                                                             | Aceito e ignorado pelo servidor (reservado)                                                  |
 
 Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (seção 8). Id fora do catálogo: `INVALID_SIGNAL` ou `INVALID_SFX`.
 
@@ -112,7 +113,20 @@ Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (se
 
 ### Estado (schema da mesa)
 
-`TableState` vai por patch. Cada cliente recebe o estado compartilhado (`roomCode`, `options`, `phase`, `players[4]`, `series`, `game`, `hand`, `turnDeadlineAt`, `cancelVotes`) e, no bloco `privates`, só o do próprio assento (`StateView`): `hand` (cartas), `legalActions` (ids como `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`), `partnerCards` (decisão de onze/dez) e `ownCovered` (identidade das próprias cartas cobertas). Na mão de ferro, `hand` fica vazio e vale só `handSize`. `userId` não está no estado.
+`TableState` vai por patch. Cada cliente recebe o estado compartilhado (`roomCode`, `options`, `phase`, `players[4]`, `series`, `game`, `hand`, `turnDeadlineAt`, `cancelVotes`, `rematchVotes`, `rematchDeadlineAt`, `matchNumber`) e, no bloco `privates`, só o do próprio assento (`StateView`): `hand` (cartas), `legalActions` (ids como `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`), `partnerCards` (decisão de onze/dez) e `ownCovered` (identidade das próprias cartas cobertas). Na mão de ferro, `hand` fica vazio e vale só `handSize`. `userId` não está no estado.
+
+### Revanche ("Jogar de novo")
+
+Contrato aditivo (`PROTOCOL_VERSION` segue 2). Quando a série termina COM vencedor (`seriesDecided`), a sala abre uma janela de `rematchWindowMs` (padrão `DEFAULT_REMATCH_WINDOW_MS` = 30 s) e publica `rematchDeadlineAt` (epoch ms; 0 = sem janela). Série cancelada ou abandonada não abre janela: a sala fecha após `finishDelayMs` como antes.
+
+- `voteRematch` vale da abertura da janela até `rematchDeadlineAt`; `rematchVotes` lista os assentos votantes (ordenados). Votam os humanos conectados; bot e assento em reconexão não votam nem bloqueiam. Voto idempotente, sem "desvoto". Mínimo `REMATCH_MIN_HUMANS` = 2 humanos conectados; fora disso: `error { code: 'REMATCH_NOT_AVAILABLE' }`.
+- Quem sai na janela vira bot e o voto dele é descartado; a unanimidade dos que restam (mínimo 2) inicia a revanche. Vale também em mesa da fila pública (formato segue `single`). Sem teto de revanches.
+- Unanimidade: mesma sala, assentos e duplas; placares e `series` zerados; `matchNumber` +1 (1 na primeira partida); `rematchVotes` limpo e `rematchDeadlineAt = 0`; nova semente (nunca vai ao cliente); o pé da 1ª mão é `nextSeat` do pé da última mão da partida anterior (rodízio). `seq` e `eventLog` continuam; a nova partida começa com `gameStarted`, `handStarted` etc. como a primeira, e `phase` volta a `playing`.
+- Expirando sem unanimidade, a sala fecha.
+- Persistência: cada partida vira uma linha em `matches` (mesmo `roomCode`, semente própria, `options.matchNumber`). Sem migração.
+- Reconexão na janela: o estado completo traz `rematchVotes` e `rematchDeadlineAt`.
+- Assento em reconexão (socket caído) NÃO bloqueia nem vota: o humano caído pode voltar numa partida para a qual não votou (estado completo com `matchNumber` 2 e replay dos eventos perdidos). Quem já era bot ao começar a partida grava `botFrom` desde o início dela.
+- O teto de reconexões por assento (`maxReconnects`) zera a cada partida. Não há teto de `matchNumber`.
 
 ## 7. Presença, replay e salto de `seq`
 
@@ -148,7 +162,7 @@ Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora di
 **`ErrorCode` do protocol** (`packages/protocol/src/errors.ts`):
 
 - Espelho do motor (`RuleErrorCode`): `INVALID_SEAT`, `HAND_FINISHED`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `COVERED_NOT_ALLOWED`, `BLIND_ONLY`, `NOT_BLIND_HAND`, `BET_NOT_ALLOWED`, `BET_PENDING`, `NO_PENDING_BET`, `SPECIAL_DECISION_PENDING`, `NO_SPECIAL_DECISION`, `GAME_FINISHED`, `SERIES_FINISHED`.
-- Do servidor: `NOT_SEATED`, `ROOM_FULL`, `INVALID_PAYLOAD`, `RATE_LIMITED`, `INVALID_SIGNAL`, `INVALID_SFX`, `CHAT_BLOCKED`.
+- Do servidor: `NOT_SEATED`, `ROOM_FULL`, `INVALID_PAYLOAD`, `RATE_LIMITED`, `INVALID_SIGNAL`, `INVALID_SFX`, `CHAT_BLOCKED`, `REMATCH_NOT_AVAILABLE` (voto de revanche com a série sem vencedor, janela fechada ou menos de 2 humanos conectados; não conta strike).
 - Declarados mas NÃO emitidos pela sala hoje: `ROOM_NOT_FOUND` e `TOKEN_EXPIRED`. **a confirmar**: se ficam, são reservados para o cliente. `UNAUTHORIZED` e `INVALID_CODE` também estão nesse tipo, mas só saem em respostas REST.
 
 **Só do servidor, em respostas HTTP** (não estão no `ErrorCode` do WebSocket): `USE_LOBBY`, `ALREADY_IN_TABLE`, `TABLE_UNAVAILABLE`, `QUEUE_COOLDOWN`, `QUEUE_FULL`, `UNAVAILABLE`, `INVALID_OPTIONS`, `BO3_REQUIRES_PRIVATE`, `INVALID_REFRESH_TOKEN`, `NICKNAME_TAKEN`, `INVALID_NICKNAME`, `INVALID_AVATAR`, `INVALID_PARTNER`, `INVALID_CODES`, `NOT_PARTNERS`, `INVALID_BODY`, `INVALID_JSON`, `INVALID_INPUT`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE` (415), `PAYLOAD_TOO_LARGE` (413), `CORS_FORBIDDEN` (403), `FORBIDDEN`, `BANNED`, `ALREADY_SEATED`, `INTERNAL` (500, genérico).

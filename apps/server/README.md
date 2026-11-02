@@ -108,7 +108,9 @@ API real do `@colyseus/core` 0.18 (confirmada nos fontes): `onDrop(client, code)
 
 **`voteCancel`.** Vale a unanimidade dos humanos CONECTADOS (bot não vota; ausente não conta). O voto zera a cada `handStarted` e é descartado quando o votante cai ou vira bot; se a queda deixa só votantes entre os conectados, a série cancela.
 
-**Config só do servidor** (`TrucoRoomConfig`, nada vem do cliente): `reconnectSeconds` (padrão `RECONNECT_SECONDS` = 60; aceita fração em teste), `botThinkMs` (600), `abandonMs` (= janela), `maxReconnects` (20), `eventLogMax` (5000). Sem variável de ambiente nova.
+**Revanche.** Série com vencedor abre a janela `rematchWindowMs`; `voteRematch` (unanimidade dos humanos conectados, mínimo 2) reinicia a partida na mesma sala (`matchNumber` +1, semente nova, pé girado com `nextSeat`). A partida anterior já foi gravada; cada revanche grava a sua (`options.matchNumber`) e o `onDispose` espera todas as gravações.
+
+**Config só do servidor** (`TrucoRoomConfig`, nada vem do cliente): `reconnectSeconds` (padrão `RECONNECT_SECONDS` = 60; aceita fração em teste), `botThinkMs` (600), `abandonMs` (= janela), `maxReconnects` (20), `eventLogMax` (5000), `rematchWindowMs` (30000; janela de "Jogar de novo" depois de série com vencedor, ver `docs/protocolo-servidor.md`; expirando, a sala fecha). Sem variável de ambiente nova (`.env.example` inalterado).
 
 ## Limite por IP no matchmaking
 

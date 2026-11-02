@@ -79,6 +79,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   INVALID_SIGNAL: GENERIC,
   INVALID_SFX: GENERIC,
   CHAT_BLOCKED: 'Mensagem não enviada.',
+  REMATCH_NOT_AVAILABLE: 'A revanche não está disponível.',
   ROOM_NOT_FOUND: 'A mesa não existe mais.',
   TOKEN_EXPIRED: 'Sua sessão expirou. Entre de novo.',
   // Só do cliente

@@ -12,8 +12,9 @@ describe('parseClientMessage válidas', () => {
     ok({ type: 'play', card }, { type: 'play', card });
     ok({ type: 'play', card, covered: true }, { type: 'play', card, covered: true });
     ok({ type: 'playBlind', index: 0 }, { type: 'playBlind', index: 0 });
-    for (const type of ['bet', 'accept', 'run', 'voteCancel', 'ready'] as const) {
+    for (const type of ['bet', 'accept', 'run', 'voteCancel', 'voteRematch', 'ready'] as const) {
       ok({ type }, { type });
+      bad({ type, extra: 1 });
     }
     ok({ type: 'special', decision: 'run' }, { type: 'special', decision: 'run' });
     ok({ type: 'signal', signalId: 'wink' }, { type: 'signal', signalId: 'wink' });

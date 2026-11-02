@@ -36,7 +36,13 @@ const USERS = new Map([
   [3, '44444444-4444-4444-8444-444444444444'],
 ]);
 const mk = (): MatchRecorder =>
-  new MatchRecorder({ options: OPTIONS, roomCode: 'ABCDEFGH', seed: 5, startedAt: new Date(1000) });
+  new MatchRecorder({
+    options: OPTIONS,
+    roomCode: 'ABCDEFGH',
+    seed: 5,
+    startedAt: new Date(1000),
+    matchNumber: 1,
+  });
 const ev = (seq: number): { seq: number; at: number; event: PublicGameEvent } => ({
   seq,
   at: 1000 + seq,

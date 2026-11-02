@@ -78,3 +78,5 @@ Sem XP e nível, a recompensa de conquistas e missões precisa ser outra coisa. 
 1. Recompensa de conquistas e missões (proposta cosmética acima).
 2. Valores de K, limiares de liga e tamanho das temporadas: calibrar no beta.
 3. Se o ranking de **duplas fixas** (opção não escolhida agora) entra numa fase futura. Os dados de `partner_codes` e o histórico por par já deixam isso possível.
+
+> Nota (revanche): as Fases 6 e 9 não contam partida com `botFrom != null` em algum jogador e exigem 4 `userId` distintos. Revanches com bots não valem para conquistas, missões nem ranking.
