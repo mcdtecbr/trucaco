@@ -88,6 +88,23 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
   'truco-resp-timeout': { ...FAST, rngSeed: 52, turnTimeoutMs: 900 },
   'truco-onze-dupla': { ...FAST, rngSeed: 11, initialScores: [11, 3], turnTimeoutMs: 60_000 },
   'truco-onze-timeout': { ...FAST, rngSeed: 11, initialScores: [11, 3], turnTimeoutMs: 300 },
+  // Onze/dez com bot de ausência: janela curta; bot lento para dar tempo de reconectar o outro.
+  'truco-onze-bot': {
+    ...FAST,
+    rngSeed: 11,
+    initialScores: [11, 3],
+    reconnectSeconds: 0.4,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+  },
+  'truco-onze-bot-slow': {
+    ...FAST,
+    rngSeed: 11,
+    initialScores: [11, 3],
+    reconnectSeconds: 0.4,
+    botThinkMs: 1500,
+    turnTimeoutMs: 60_000,
+  },
   'truco-timeout': { ...FAST, rngSeed: 21, turnTimeoutMs: 150 },
   'truco-rate': { patchRateMs: 5, rngSeed: 22, finishDelayMs: 60_000 },
   // 2E: reconexão e bot de ausência. Turno longo: só o bot ou o teste movem o jogo.
@@ -2342,15 +2359,55 @@ describe('TrucoRoom: onze/dez decidido pela dupla', () => {
     assertNoLeaks(game);
   });
 
-  it('timeout: os dois decisores pendentes jogam pelo motor (aceitar)', async () => {
+  it('timeout: os dois decisores pendentes jogam pelo motor (aceitar) no MESMO disparo do prazo', async () => {
     const game = await startedRec('truco-onze-timeout');
-    await until(() => logCount(game, 'specialDecided') === 2, 'timeout dos dois decisores', 3000);
-    const decisions = game.server.eventLog
-      .filter((e) => e.event.type === 'specialDecided')
+    // Prazo de 300 ms. Se só um assento jogasse por disparo, o 2º viria ~300 ms depois (novo prazo):
+    // no primeiro instante em que o 1º aparece o contador seria 1. A leitura seguinte é síncrona.
+    await until(() => logCount(game, 'specialDecided') >= 1, 'primeiro aceite por prazo', 3000);
+    expect(logCount(game, 'specialDecided')).toBe(2);
+    const decided = game.server.eventLog.filter((e) => e.event.type === 'specialDecided');
+    expect(decided[1]?.seq).toBe((decided[0]?.seq ?? -2) + 1);
+    const decisions = decided
       .map((e) => (e.event.type === 'specialDecided' ? `${e.event.seat}:${e.event.decision}` : ''))
       .sort();
     expect(decisions).toEqual(['0:play', '2:play']);
     expect(game.server.series?.match.hand.phase).toBe('playing');
     assertNoLeaks(game);
+  });
+
+  it('bot de ausência: o assento 2 vira bot e aceita sozinho enquanto o humano 0 ainda decide', async () => {
+    const game = await startedRec('truco-onze-bot');
+    await dropSeat(game, 2);
+    await until(
+      () => (game.server.state.players[2] as { isBot: boolean }).isBot,
+      'bot assumiu o 2',
+      3000,
+    );
+    await until(() => logCount(game, 'specialDecided') === 1, 'bot do 2 aceitou', 3000);
+    expect(lastEventOf(game, 'specialDecided')?.seat).toBe(2);
+    await settle(game, 'bot aceitou');
+    expect(game.server.series?.match.hand.phase).toBe('specialDecision');
+    expect(handOf(game.players[0] as Player).specialAccepted).toEqual([2]);
+    (game.players[0] as Player).room.send('special', { decision: 'play' });
+    await until(() => game.server.series?.match.hand.phase === 'playing', 'mão começa', 3000);
+    expect(logCount(game, 'specialDecided')).toBe(2);
+  });
+
+  it('reconexão do assento 0 com o 2 já bot (onze/dez) não cancela o bot do 2', async () => {
+    const game = await startedRec('truco-onze-bot-slow');
+    await dropSeat(game, 2);
+    await until(
+      () => (game.server.state.players[2] as { isBot: boolean }).isBot,
+      'bot assumiu o 2',
+      3000,
+    );
+    // o bot do 2 pensa 1,5 s; o 0 cai e volta no meio da espera
+    await dropSeat(game, 0);
+    await rejoin(game, 0);
+    await until(() => statusOf(game, 0) === 'connected', 'assento 0 reconectado');
+    expect(logCount(game, 'specialDecided')).toBe(0);
+    await until(() => logCount(game, 'specialDecided') === 1, 'bot do 2 ainda aceita', 4000);
+    expect(lastEventOf(game, 'specialDecided')?.seat).toBe(2);
+    expect(game.server.series?.match.hand.phase).toBe('specialDecision');
   });
 });
