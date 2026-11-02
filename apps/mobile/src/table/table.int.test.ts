@@ -144,12 +144,8 @@ async function newPlayer(): Promise<Player> {
         const h = state.hand;
         // Em decisão especial os DOIS da dupla que decide têm ação; fora disso só o actingSeat (ou a dupla dele).
         const okSpecial = h?.phase === 'specialDecision' && mine.seat % 2 === h.specialTeam;
-        // Aposta pendente: os dois da dupla que responde têm ação; actingSeat é o menor assento.
-        const okPending =
-          h?.phase === 'betPending' &&
-          h.actingSeat !== undefined &&
-          mine.seat % 2 === h.actingSeat % 2;
-        if (h?.actingSeat !== mine.seat && !okSpecial && !okPending) {
+        // Aposta pendente: só o respondedor (= actingSeat) tem ação; onze/dez: os dois da dupla.
+        if (h?.actingSeat !== mine.seat && !okSpecial) {
           p.actionsOutOfTurn.push(
             `seat ${mine.seat} acting ${String(h?.actingSeat)} ${String(h?.phase)} ${(mine.legalActions ?? []).join(',')}`,
           );

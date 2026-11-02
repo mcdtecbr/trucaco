@@ -56,6 +56,8 @@ export interface PendingView {
   readonly toLevel: number;
   /** A aposta pendente é da minha dupla (eu aguardo a resposta). */
   readonly fromMyTeam: boolean;
+  /** Único assento que responde (`pending.responderSeat`); `-1` se o servidor não publicou. */
+  readonly responderSeat: number;
 }
 
 export interface TableViewModel {
@@ -94,13 +96,17 @@ export interface TableViewModel {
   readonly ownCoveredByTrick: readonly (CardSnapshot & { readonly trick: number })[];
   /**
    * Assento cuja decisão é esperada (`hand.actingSeat`, o mesmo do timer). NÃO é `hand.turn`: em aposta
-   * pendente e em decisão de onze/dez/ferro quem age é outro. Em decisão especial é o MENOR assento da
-   * dupla que decide, e os DOIS da dupla têm ação legal: use `canAct`/`legalActions`. `-1` = ninguém.
+   * pendente é o `pending.responderSeat`. Em decisão de onze/dez os DOIS da dupla decidem e vale `-1`:
+   * use `canAct`/`legalActions` e `specialAccepted`. `-1` = ninguém.
    */
   readonly actingSeat: number;
   /** Decisão de onze/dez em curso: a dupla que decide (`-1` fora disso). */
   readonly decidingTeam: number;
-  /** Há ação legal para mim (o servidor decide; vale também para o parceiro em decisão especial). */
+  /** Onze/dez sem ferro: assentos que já aceitaram jogar (`hand.specialAccepted`). */
+  readonly specialAccepted: readonly number[];
+  /** Já aceitei jogar a mão de onze/dez. */
+  readonly iAccepted: boolean;
+  /** Há ação legal para mim (o servidor decide; em decisão especial os dois da dupla têm ação). */
   readonly canAct: boolean;
   readonly turnDeadlineAt: number;
   readonly pending: PendingView | null;
@@ -264,8 +270,12 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
           fromTeam: num(rec(pendingRaw)['fromTeam'], ABSENT),
           toLevel: num(rec(pendingRaw)['toLevel']),
           fromMyTeam: num(rec(pendingRaw)['fromTeam'], ABSENT) === myTeam,
+          responderSeat: num(rec(pendingRaw)['responderSeat'], ABSENT),
         };
 
+  const specialAccepted = list(hand['specialAccepted']).filter(
+    (x): x is number => typeof x === 'number',
+  );
   const cancelVotes = list(s['cancelVotes']).filter((x): x is number => typeof x === 'number');
   const series = rec(s['series']);
   const game = rec(s['game']);
@@ -313,6 +323,8 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
       .filter((c) => c.trick >= 0),
     actingSeat,
     decidingTeam: handPhase === 'specialDecision' ? num(hand['specialTeam'], ABSENT) : ABSENT,
+    specialAccepted,
+    iAccepted: me >= 0 && specialAccepted.includes(me),
     canAct: legalActions.length > 0,
     turnDeadlineAt: Math.max(0, num(s['turnDeadlineAt'])),
     pending,
@@ -345,6 +357,7 @@ export function actionSignature(vm: TableViewModel): string {
     vm.current.length,
     vm.tricks.length,
     vm.pending?.toLevel ?? 0,
+    vm.specialAccepted.length,
     vm.myHand.length,
   ].join('|');
 }

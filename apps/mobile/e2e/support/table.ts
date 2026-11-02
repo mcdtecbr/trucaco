@@ -249,10 +249,8 @@ export async function drive(p: Player, opts: DriveOptions): Promise<number> {
     }
 
     const probe = snap.raw === null ? null : parseProbe(snap.raw);
-    // Aposta pendente e decisão de onze/dez: os DOIS da dupla têm ação legal, mas quem responde é o
-    // `actingSeat` (como um humano combinaria); o parceiro que agisse junto tomaria `NOT_YOUR_TURN`.
-    const shared = /^Sua dupla/.test(snap.turnText);
-    const mayAct = probe !== null && probe.act && (!shared || probe.turn === probe.me);
+    // O servidor só dá ação legal a quem pode agir (respondedor da aposta; os dois da dupla no onze/dez).
+    const mayAct = probe !== null && probe.act;
     if (pending === null && mayAct && (await performAction(p.page, opts.strategy))) {
       pending = key;
       continue;

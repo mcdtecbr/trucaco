@@ -68,7 +68,7 @@ Sem UI; as telas consomem estes módulos.
   - `playing`: `TableView`, com leque de cartas, mesa, placar em camadas, histórico das mãos, botões de aposta por `legalActions`, mão de ferro às cegas (`playBlind`), carta coberta (modo "Cobrir"), voto de cancelar e "Sair da mesa" (com diálogo de confirmação).
   - `finished`: `FinishedView`, com o resultado e o botão "Jogar de novo".
 - Chat (`ChatPanel.tsx`): abas "Mesa" e "Dupla". Texto sempre como `<Text>`, validado com `parseClientMessage` de `@trucaco/protocol` (a validação é só UX; o servidor decide de novo). Balão sobre o avatar por 4 s.
-- Dupla que decide em aposta pendente ou em mão de onze/dez: a UI mostra "Sua dupla decide" (`actingSeat` no protocolo: `docs/protocolo-servidor.md`).
+- Aposta pendente: só o `pending.responderSeat` tem botões ("Sua vez"); o parceiro vê "Seu parceiro responde" e a dupla de quem pediu, "Aguardando resposta de <nome>". Onze/dez: os dois da dupla decidem (`actingSeat` = -1), veem as cartas um do outro e mostram "Você e seu parceiro decidem"; quem já aceitou (`specialAccepted`) vê "Aguardando o parceiro" (`docs/protocolo-servidor.md`).
 - **Revanche**: o botão "Jogar de novo" aparece quando a série termina com vencedor e a janela de `rematchDeadlineAt` está aberta. Mostra "Aguardando a mesa (N votaram)" depois do voto, e "O tempo para jogar de novo acabou." quando a janela fecha. A mudança de `matchNumber` reinicia o placar e a mesa na partida nova.
 - Deep link `trucaco://table/CODE`: sem mesa ativa, leva a `/home` com o código preenchido; entrar na mesa é sempre ação do usuário.
 

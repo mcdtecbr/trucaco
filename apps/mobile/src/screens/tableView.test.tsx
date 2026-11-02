@@ -89,7 +89,7 @@ describe('TableView', () => {
         phase: 'betPending',
         turn: 0,
         actingSeat: 1,
-        pending: { fromSeat: 0, fromTeam: 0, toLevel: 1 },
+        pending: { fromSeat: 0, fromTeam: 0, toLevel: 1, responderSeat: 1 },
         pendingValue: 3,
         nextBetValue: 6,
       },
@@ -184,38 +184,31 @@ describe('TableView: 3H2', () => {
         phase: 'betPending',
         turn: 0,
         actingSeat: 1,
-        pending: { fromSeat: 0, fromTeam: 0, toLevel: 1 },
+        pending: { fromSeat: 0, fromTeam: 0, toLevel: 1, responderSeat: 1 },
         pendingValue: 3,
         nextBetValue: 6,
       },
       privates: priv(seat, { legalActions: seat === 1 ? ['accept', 'run', 'bet'] : [] }),
     });
 
-  it('aposta pendente: a vez é de actingSeat, não de hand.turn', () => {
-    expect(html(pendingState(1))).toContain('Sua dupla responde');
+  it('aposta pendente: só o respondedor age; pedinte e seu parceiro aguardam', () => {
+    const responder = html(pendingState(1));
+    expect(responder).toContain('Sua vez');
+    expect(responder).toContain('Aceitar');
     const caller = html(pendingState(0));
-    expect(caller).toContain('Vez de Bia');
-    expect(caller).not.toContain('Sua vez');
+    expect(caller).toContain('Aguardando resposta de Bia');
+    expect(caller).not.toContain('Aceitar');
+    expect(html(pendingState(2))).toContain('Aguardando resposta de Bia');
   });
 
-  it('aposta pendente: o parceiro de quem responde também pode agir', () => {
-    const out = html(
-      snapshot({
-        hand: {
-          phase: 'betPending',
-          turn: 0,
-          actingSeat: 1,
-          pending: { fromSeat: 0, fromTeam: 0, toLevel: 1 },
-          pendingValue: 3,
-        },
-        privates: priv(3, { legalActions: ['accept', 'run'] }),
-      }),
-    );
-    expect(out).toContain('Sua dupla responde');
-    expect(out).toContain('Aceitar');
+  it('aposta pendente: o parceiro do respondedor não tem botões', () => {
+    const out = html(pendingState(3));
+    expect(out).toContain('Seu parceiro responde');
+    expect(out).not.toContain('Aceitar');
+    expect(out).not.toContain('Correr');
   });
 
-  const special = (seat: number, legal: boolean) =>
+  const special = (seat: number, legal: boolean, accepted: number[] = []) =>
     snapshot({
       game: { scores: [11, 3] },
       hand: {
@@ -223,7 +216,8 @@ describe('TableView: 3H2', () => {
         specialTeam: 0,
         phase: 'specialDecision',
         turn: 0,
-        actingSeat: 0,
+        actingSeat: -1,
+        specialAccepted: accepted,
       },
       privates: priv(seat, {
         hand: [{ rank: '4', suit: 'paus' }],
@@ -235,9 +229,18 @@ describe('TableView: 3H2', () => {
       }),
     });
 
-  it('onze/dez: o parceiro (assento 2) também decide e vê "Sua dupla decide" e as cartas do parceiro', () => {
+  it('onze/dez: quem já aceitou aguarda o parceiro, sem botões, e ainda vê as cartas dele', () => {
+    const out = html(special(0, false, [0]));
+    expect(out).toContain('Aguardando o parceiro');
+    expect(out).not.toContain('Jogar a mão');
+    expect(out).toContain('partner-cards');
+    expect(html(special(2, true, [0]))).toContain('Você e seu parceiro decidem');
+  });
+
+  it('onze/dez: os dois da dupla decidem e veem as cartas do parceiro', () => {
     const out = html(special(2, true));
-    expect(out).toContain('Sua dupla decide');
+    expect(html(special(0, true))).toContain('Você e seu parceiro decidem');
+    expect(out).toContain('Você e seu parceiro decidem');
     expect(out).toContain('Jogar a mão');
     expect(out).toContain('Correr da mão');
     expect(out).toContain('partner-cards');

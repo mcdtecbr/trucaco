@@ -143,7 +143,7 @@ describe('projectTable: aposta pendente', () => {
       phase: 'betPending',
       turn: 0,
       actingSeat: 1,
-      pending: { fromSeat: 0, fromTeam: 0, toLevel: 1 },
+      pending: { fromSeat: 0, fromTeam: 0, toLevel: 1, responderSeat: 1 },
       pendingValue: 3,
       nextBetValue: 6,
     },
@@ -157,7 +157,13 @@ describe('projectTable: aposta pendente', () => {
     expect(vm.actingSeat).toBe(1);
     expect(vm.seats[1]?.isTurn).toBe(true);
     expect(vm.seats[0]?.isTurn).toBe(false);
-    expect(vm.pending).toEqual({ fromSeat: 0, fromTeam: 0, toLevel: 1, fromMyTeam: false });
+    expect(vm.pending).toEqual({
+      fromSeat: 0,
+      fromTeam: 0,
+      toLevel: 1,
+      fromMyTeam: false,
+      responderSeat: 1,
+    });
     expect(vm.pendingValue).toBe(3);
     expect(vm.nextBetValue).toBe(6);
     expect(vm.legalActions).toEqual(['accept', 'run', 'bet']);
@@ -199,7 +205,7 @@ describe('projectTable: mão de onze/dez', () => {
     expect(vm.seats[0]?.isTurn).toBe(false);
   });
 
-  it('os dois da dupla têm ação legal, mas actingSeat é só o menor assento', () => {
+  it('os dois da dupla decidem: actingSeat -1, specialAccepted lido e sem destaque de vez', () => {
     const state = (seat: number) =>
       snapshot({
         hand: {
@@ -207,12 +213,16 @@ describe('projectTable: mão de onze/dez', () => {
           specialTeam: 0,
           phase: 'specialDecision',
           turn: 0,
-          actingSeat: 0,
+          actingSeat: -1,
+          specialAccepted: [0],
         },
         privates: priv(seat, { legalActions: ['specialPlay', 'specialRun'] }),
       });
     const partner = projectTable(state(2));
-    expect(partner.actingSeat).toBe(0);
+    expect(partner.actingSeat).toBe(-1);
+    expect(partner.specialAccepted).toEqual([0]);
+    expect(partner.iAccepted).toBe(false);
+    expect(projectTable(state(0), 0).iAccepted).toBe(true);
     expect(partner.canAct).toBe(true);
     expect(partner.seats.some((x) => x.isTurn)).toBe(false);
   });

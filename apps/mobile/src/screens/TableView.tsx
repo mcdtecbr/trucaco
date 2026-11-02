@@ -150,11 +150,20 @@ export function turnText(vm: TableViewModel): string | null {
   if (vm.phase !== 'playing') return null;
   if (vm.handPhase === 'finished' || vm.handPhase === '') return null;
   if (vm.handPhase === 'specialDecision') {
-    if (vm.canAct) return 'Sua dupla decide';
-    return vm.decidingTeam >= 0 ? 'A dupla adversária decide' : null;
+    // Os dois da dupla decidem (`actingSeat` = -1); quem já aceitou espera o parceiro.
+    if (vm.decidingTeam >= 0 && vm.decidingTeam !== vm.myTeam) return 'A dupla adversária decide';
+    if (vm.iAccepted) return 'Aguardando o parceiro';
+    return vm.canAct || vm.decidingTeam === vm.myTeam ? 'Você e seu parceiro decidem' : null;
   }
-  // Aposta pendente: os dois da dupla que responde têm ação legal (actingSeat é o menor assento).
-  if (vm.handPhase === 'betPending' && vm.canAct) return 'Sua dupla responde';
+  // Aposta pendente: só o `responderSeat` (= actingSeat) responde; parceiro e pedinte não têm ação.
+  if (vm.handPhase === 'betPending') {
+    const responder = vm.pending?.responderSeat ?? vm.actingSeat;
+    const who = responder >= 0 ? responder : vm.actingSeat;
+    if (vm.canAct || who === vm.mySeat) return 'Sua vez';
+    if (who >= 0 && who % 2 === vm.myTeam) return 'Seu parceiro responde';
+    const n = who >= 0 ? vm.seats[who]?.nickname : undefined;
+    return `Aguardando resposta de ${n !== undefined && n !== '' ? n : 'outro jogador'}`;
+  }
   if (vm.actingSeat === vm.mySeat || vm.canAct) return 'Sua vez';
   if (vm.actingSeat < 0) return null;
   const n = vm.seats[vm.actingSeat]?.nickname;
@@ -292,7 +301,11 @@ export function TableView(p: TableViewProps) {
     <View style={styles.controls}>
       <View style={styles.statusRow}>
         {turn !== null ? (
-          <Text style={[styles.turn, vm.canAct && styles.turnMine]} testID="turn-text">
+          <Text
+            style={[styles.turn, vm.canAct && styles.turnMine]}
+            testID="turn-text"
+            accessibilityLiveRegion="polite"
+          >
             {turn}
           </Text>
         ) : null}
