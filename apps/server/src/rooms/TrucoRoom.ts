@@ -62,7 +62,7 @@ import type {
   Seat,
   SeriesState,
 } from '@trucaco/rules';
-import { projectState } from '../game/projection';
+import { pendingSeats, projectState } from '../game/projection';
 import {
   TABLE_SEATS,
   createSeatView,
@@ -778,7 +778,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.afterRosterChange();
     const now = this.series;
     // Só agenda o bot: o prazo do turno em andamento NÃO é reiniciado.
-    if (now !== null && !isSeriesOver(now) && pendingSeat(now) === seat) this.armBot(seat, now);
+    if (now !== null && !isSeriesOver(now) && pendingSeats(now).includes(seat)) this.rearmBot(now);
   }
 
   /** Dono do assento que o bot ocupa voltando por um novo join (mesmo `userId`). */
@@ -821,9 +821,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     // Cancela o bot agendado SEM reiniciar o prazo: o `turnTimer` e o `deadlineAt` originais seguem
     // valendo (reconectar não estende o turno). Ele já está armado para qualquer dono do turno.
     const series = this.series;
-    if (series !== null && !isSeriesOver(series) && pendingSeat(series) === seat) {
+    if (series !== null && !isSeriesOver(series) && pendingSeats(series).includes(seat)) {
       this.botTimer?.clear();
       this.botTimer = null;
+      // Onze/dez: o outro decisor pode ser bot e seguir esperando.
+      this.rearmBot(series);
     }
     if (this.currentTurn !== null) client.send('turnTimer', this.currentTurn);
     this.afterRosterChange();
@@ -1520,11 +1522,17 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const timeoutMs = this.config.turnTimeoutMs ?? TURN_TIMEOUT_MS;
     const deadlineAt = Date.now() + timeoutMs;
     this.turnTimer = this.clock.setTimeout(() => this.onTurnTimeout(seat), timeoutMs);
-    this.armBot(seat, series);
+    this.rearmBot(series);
     projectState(series, this.state, { turnDeadlineAt: deadlineAt });
     this.currentTurn = { seat, deadlineAt };
     const msg: Omit<Extract<ServerMessage, { type: 'turnTimer' }>, 'type'> = { seat, deadlineAt };
     this.broadcast('turnTimer', msg);
+  }
+
+  /** Arma o bot do primeiro decisor-bot pendente (na decisão de onze/dez podem ser dois). */
+  private rearmBot(series: SeriesState): void {
+    const botSeat = pendingSeats(series).find((s) => this.botSeats.has(s));
+    if (botSeat !== undefined) this.armBot(botSeat, series);
   }
 
   /** Bot de ausência: age logo (com um pequeno "pensar"); o `turnTimer` é só a rede de segurança. */
@@ -1543,7 +1551,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.botTimer = null;
     const series = this.series;
     if (this.closing || series === null || series !== scheduled || isSeriesOver(series)) return;
-    if (!this.botSeats.has(seat) || pendingSeat(series) !== seat) return;
+    if (!this.botSeats.has(seat) || !pendingSeats(series).includes(seat)) return;
     const action = botAction(series, seat, this.rng);
     if (action === null) {
       log.error('truco: bot sem ação', { room: this.roomId, seat });
@@ -1558,6 +1566,16 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.turnTimer = null;
     const series = this.series;
     if (series === null || isSeriesOver(series) || pendingSeat(series) !== seat) return;
+    // Onze/dez: o prazo vale para os dois decisores; quem ainda não decidiu é jogado pelo motor (jogar).
+    // Aposta pendente: só o respondedor (`pendingSeat`) tem ação. Vez normal: um só.
+    const seats = series.match.hand.phase === 'specialDecision' ? pendingSeats(series) : [seat];
+    for (const s of seats) this.autoPlay(s);
+  }
+
+  /** Jogada automática por prazo estourado para `seat` (re-lê o estado: a anterior pode ter mudado). */
+  private autoPlay(seat: Seat): void {
+    const series = this.series;
+    if (series === null || isSeriesOver(series)) return;
     const action = botAction(series, seat, this.rng);
     if (action === null) {
       log.error('truco: bot sem ação no timeout', { room: this.roomId, seat });

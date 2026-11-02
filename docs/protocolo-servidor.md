@@ -119,22 +119,29 @@ Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (se
 
 Vêm no estado compartilhado, para os 4 assentos. Fonte: `apps/server/src/game/projection.ts` e `schema.ts`; tipo em `packages/protocol/src/state.ts`.
 
-| Campo               | Valor                                                                                                                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hand.manilhaRank`  | Paulista: rank da manilha, derivada da vira (vira + 1). `''` no Mineiro e antes da primeira mão.                                                                                                                                                |
-| `hand.manilhaCards` | Mineiro: as 4 manilhas fixas em `<rank><suit>`, da mais forte para a mais fraca (ex.: `4paus`). Vazio no Paulista.                                                                                                                              |
-| `hand.nextBetValue` | Valor que a dupla de quem age ganha ao pedir ou aumentar agora (degrau da escada da variante). `0` = indisponível (escada esgotada, ou a mão não aceita aposta neste momento). Em aposta pendente, é o degrau seguinte ao pendente (o aumento). |
-| `hand.pendingValue` | Valor da aposta pendente (degrau de `pending.toLevel`). `0` se não há aposta pendente.                                                                                                                                                          |
-| `hand.actingSeat`   | Assento cuja decisão é esperada agora. É o mesmo do timer de turno. `-1` se ninguém age.                                                                                                                                                        |
+| Campo                        | Valor                                                                                                                                                                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hand.manilhaRank`           | Paulista: rank da manilha, derivada da vira (vira + 1). `''` no Mineiro e antes da primeira mão.                                                                                                                                                         |
+| `hand.manilhaCards`          | Mineiro: as 4 manilhas fixas em `<rank><suit>`, da mais forte para a mais fraca (ex.: `4paus`). Vazio no Paulista.                                                                                                                                       |
+| `hand.nextBetValue`          | Valor que a dupla de quem age ganha ao pedir ou aumentar agora (degrau da escada da variante). `0` = indisponível (escada esgotada, ou a mão não aceita aposta neste momento). Em aposta pendente, é o degrau seguinte ao pendente (o aumento).          |
+| `hand.pendingValue`          | Valor da aposta pendente (degrau de `pending.toLevel`). `0` se não há aposta pendente.                                                                                                                                                                   |
+| `hand.actingSeat`            | Assento cuja decisão é esperada agora. Em aposta pendente é `pending.responderSeat`. `-1` na decisão de onze/dez (dois decidem) e se ninguém age.                                                                                                        |
+| `hand.pending.responderSeat` | Único assento que responde (aceita, corre ou aumenta) a aposta pendente. Truco: o assento seguinte ao de quem pediu; aumento (retruco etc.): quem fez o pedido anterior. O parceiro dele e a dupla de quem pediu só assistem (`NOT_YOUR_TURN`). Aditivo. |
+| `hand.specialAccepted`       | Onze/dez: assentos da dupla que já aceitaram jogar (público). Vazio fora de `phase === 'specialDecision'`. Aditivo.                                                                                                                                      |
 
 Semântica de `actingSeat`:
 
 - No turno normal, `actingSeat` é igual a `hand.turn`.
-- **Aposta pendente** e **decisão de onze/dez/ferro** (`special` em `maoDeOnze`/`maoDeFerro` com `phase` `specialDecision`): `actingSeat` NÃO é `turn`. Os DOIS assentos da dupla que decide têm ação legal (aceitar, correr ou aumentar; jogar ou correr na mão de onze/dez). `actingSeat` é o **menor** deles (`pendingSeat` do motor).
-- Por isso o cliente habilita botões pelo `legalActions` do próprio assento, não por `turn` nem por `actingSeat`. Em decisão especial, a UI deve deixar claro que a dupla decide (o app mostra "Sua dupla decide").
-- Consequência: os dois da dupla podem agir ao mesmo tempo. Vale a primeira ação aceita pelo servidor; a segunda recebe `error` com o código do motor (`NO_PENDING_BET` ou `NO_SPECIAL_DECISION`).
+- **Aposta pendente**: `actingSeat === pending.responderSeat` (NÃO é `turn`). Só esse assento tem `accept`, `run` e `bet` (aumento) em `legalActions`; os demais recebem `error NOT_YOUR_TURN` e o estado não muda. A UI não mostra botões de resposta ao parceiro do respondedor (texto sugerido: "Seu parceiro responde") nem a quem pediu.
+- **Decisão de onze/dez** (`phase === 'specialDecision'`, `special === 'maoDeOnze'`): os DOIS da dupla (`specialTeam`) decidem, em qualquer ordem. `actingSeat` é `-1`. Cada um tem `specialPlay` e `specialRun` até aceitar; `specialAccepted` lista quem já aceitou (quem aceitou fica sem ações e vê "Aguardando o parceiro"). A mão só vira `playing` quando os dois aceitam. `specialRun` de quem ainda não aceitou encerra a mão na hora (a dupla corre). Cada aceite emite `specialDecided { decision: 'play' }`; o primeiro NÃO muda `phase`.
+- **Mão de ferro** (`special === 'maoDeFerro'`) não tem decisão: `phase` é `playing`, `actingSeat` é `turn` e as cartas são às cegas.
+- O cliente habilita botões pelo `legalActions` do próprio assento, não por `turn` nem por `actingSeat`.
+- **Prazo**: o `turnTimer` da decisão de onze/dez traz o menor assento que ainda não decidiu, mas o prazo vale para os dois; ao estourar, o motor joga (`playSpecial`) por todos os que faltam. Em aposta pendente o prazo é do respondedor (estourar = correr). Cada ação aceita reinicia o prazo.
+- **Bot de ausência**: age pelo respondedor da aposta e por cada decisor-bot pendente do onze/dez (`botAction`: correr da aposta, aceitar o onze/dez; nunca pede nem aumenta).
 
-`partnerCards` (privado, só em decisão de onze/dez) segue o descrito acima.
+`partnerCards` (privado): só na decisão de onze/dez sem ferro, e os DOIS da dupla que decide veem as cartas um do outro (inclusive depois de o primeiro aceitar, até o segundo aceitar). Fora da decisão fica vazio; na mão de ferro nunca há cartas visíveis. Adversários nunca recebem cartas alheias.
+
+Compatibilidade: `pending.responderSeat` e `hand.specialAccepted` são aditivos; `PROTOCOL_VERSION` segue 2. O que mudou é só a semântica de `actingSeat` na decisão de onze/dez (agora `-1`) e de quem tem ação legal (um respondedor em vez de dois).
 
 ### Revanche ("Jogar de novo")
 

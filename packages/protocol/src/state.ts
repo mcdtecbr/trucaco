@@ -49,6 +49,8 @@ export interface PendingBetSnapshot {
   readonly fromSeat: number;
   readonly fromTeam: number;
   readonly toLevel: number;
+  /** Único assento que responde (aceitar, correr ou aumentar); o parceiro dele só assiste. */
+  readonly responderSeat: number;
 }
 
 export interface HandSnapshot {
@@ -70,10 +72,14 @@ export interface HandSnapshot {
   readonly phase: string;
   readonly turn: number;
   /**
-   * Assento cuja decisão é esperada agora (o mesmo do timer de turno). Em aposta pendente e em decisão
-   * de onze/dez/ferro NÃO é `turn`. `-1` (ABSENT) se ninguém age.
+   * Assento cuja decisão é esperada agora. Em aposta pendente é `pending.responderSeat` (NÃO é `turn`).
+   * Na decisão de onze/dez (`phase === 'specialDecision'`) os dois da dupla decidem, em qualquer ordem:
+   * vale `-1` (ABSENT); use `specialAccepted` e as `legalActions` do próprio assento.
+   * `-1` também se ninguém age.
    */
   readonly actingSeat: number;
+  /** Onze/dez: assentos da dupla que já aceitaram jogar (público; vazio fora da decisão). */
+  readonly specialAccepted: readonly number[];
   readonly value: number;
   readonly level: number;
   readonly pending?: PendingBetSnapshot | undefined;

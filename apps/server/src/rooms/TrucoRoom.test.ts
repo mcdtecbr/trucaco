@@ -83,6 +83,11 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
   'truco-onze-mineiro': { ...FAST, rngSeed: 12, initialScores: [4, 10] },
   'truco-ferro': { ...FAST, rngSeed: 13, initialScores: [11, 11] },
   'truco-ferro-mineiro': { ...FAST, rngSeed: 14, initialScores: [10, 10] },
+  // Respondedor único e decisão da dupla no onze/dez (motor 3968e85)
+  'truco-resp': { ...FAST, rngSeed: 51, turnTimeoutMs: 60_000 },
+  'truco-resp-timeout': { ...FAST, rngSeed: 52, turnTimeoutMs: 900 },
+  'truco-onze-dupla': { ...FAST, rngSeed: 11, initialScores: [11, 3], turnTimeoutMs: 60_000 },
+  'truco-onze-timeout': { ...FAST, rngSeed: 11, initialScores: [11, 3], turnTimeoutMs: 300 },
   'truco-timeout': { ...FAST, rngSeed: 21, turnTimeoutMs: 150 },
   'truco-rate': { patchRateMs: 5, rngSeed: 22, finishDelayMs: 60_000 },
   // 2E: reconexão e bot de ausência. Turno longo: só o bot ou o teste movem o jogo.
@@ -2191,5 +2196,161 @@ describe('TrucoRoom: revanche ("Jogar de novo")', () => {
       if (k > 0) expect(e.seq).toBe((p.events[k - 1] as Received).seq + 1);
     });
     expect(p.events.some((e) => e.event.type === 'gameStarted')).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// Aposta respondida por UM jogador e decisão da dupla no onze/dez
+// ------------------------------------------------------------------------------------------------
+
+interface HandJson {
+  hand: {
+    phase: string;
+    actingSeat: number;
+    specialAccepted: number[];
+    pending?: { fromSeat: number; responderSeat: number; toLevel: number };
+  };
+  privates: Record<string, { partnerCards: unknown[]; legalActions: string[] }>;
+}
+
+const handOf = (p: Player): HandJson['hand'] => (json(p) as HandJson).hand;
+const legalOf = (p: Player): string[] =>
+  (json(p) as HandJson).privates[String(p.seat)]?.legalActions ?? [];
+const partnerCardsOf = (p: Player): number =>
+  (json(p) as HandJson).privates[String(p.seat)]?.partnerCards.length ?? -1;
+const lastEventOf = (game: Game, type: string): Record<string, unknown> | undefined =>
+  game.server.eventLog.filter((e) => e.event.type === type).at(-1)?.event as
+    | Record<string, unknown>
+    | undefined;
+
+describe('TrucoRoom: respondedor único da aposta', () => {
+  it('truco e retruco: só o respondedor age; o parceiro dele é rejeitado e o estado não muda', async () => {
+    const game = await startedRec('truco-resp');
+    const caller = pending(game) as number;
+    const responder = (caller + 1) % 4;
+    const mate = (caller + 3) % 4;
+    const callerP = game.players[caller] as Player;
+    const responderP = game.players[responder] as Player;
+    const mateP = game.players[mate] as Player;
+    callerP.room.send('bet');
+    await until(() => logCount(game, 'betCalled') === 1, 'truco pedido');
+    await settle(game, 'truco pendente');
+    for (const p of game.players) {
+      const h = handOf(p);
+      expect(h.phase).toBe('betPending');
+      expect(h.pending?.responderSeat).toBe(responder);
+      expect(h.actingSeat).toBe(responder);
+    }
+    const before = game.server.eventLog.length;
+    // parceiro do respondedor e o próprio pedinte: nenhum tem ação nem consegue agir
+    for (const p of [mateP, callerP]) {
+      expect(legalOf(p)).toEqual([]);
+      p.room.send('accept');
+      p.room.send('run');
+      p.room.send('bet');
+    }
+    await until(() => mateP.errors.length >= 3 && callerP.errors.length >= 3, 'rejeições');
+    expect(new Set([...mateP.errors, ...callerP.errors])).toEqual(new Set(['NOT_YOUR_TURN']));
+    expect(game.server.eventLog.length).toBe(before);
+    expect(handOf(responderP).phase).toBe('betPending');
+    // o respondedor aumenta: quem responde agora é quem pediu o truco (nunca o parceiro dele)
+    responderP.room.send('bet');
+    await until(() => logCount(game, 'betRaised') === 1, 'retruco pedido');
+    await settle(game, 'retruco pendente');
+    for (const p of game.players) {
+      const h = handOf(p);
+      expect(h.pending?.fromSeat).toBe(responder);
+      expect(h.pending?.responderSeat).toBe(caller);
+      expect(h.actingSeat).toBe(caller);
+    }
+    const pc = game.players[(caller + 2) % 4] as Player;
+    pc.room.send('accept');
+    await until(() => pc.errors.includes('NOT_YOUR_TURN'), 'parceiro do pedinte rejeitado');
+    expect(handOf(callerP).phase).toBe('betPending');
+    callerP.room.send('accept');
+    await until(() => handOf(callerP).phase === 'playing', 'retruco aceito');
+    await settle(game, 'aceito');
+    assertNoLeaks(game);
+  });
+
+  it('timeout de aposta pendente: o respondedor corre (o parceiro dele nunca age)', async () => {
+    const game = await startedRec('truco-resp-timeout');
+    const caller = pending(game) as number;
+    (game.players[caller] as Player).room.send('bet');
+    await until(() => logCount(game, 'betCalled') === 1, 'truco pedido');
+    await until(() => logCount(game, 'betRun') === 1, 'timeout do respondedor', 3000);
+    expect(lastEventOf(game, 'betRun')?.seat).toBe((caller + 1) % 4);
+    expect(logCount(game, 'handDecided')).toBeGreaterThanOrEqual(1);
+    assertNoLeaks(game);
+  });
+});
+
+describe('TrucoRoom: onze/dez decidido pela dupla', () => {
+  // seed 11, placar 11x3: assentos 0 e 2 decidem; 1 e 3 são adversários.
+  it('os dois aceitam em ordem invertida; só a dupla vê as cartas um do outro; depois some', async () => {
+    const game = await startedRec('truco-onze-dupla');
+    const p = game.players as [Player, Player, Player, Player];
+    expect(game.server.series?.match.hand.phase).toBe('specialDecision');
+    for (const x of p) {
+      expect(handOf(x).actingSeat).toBe(-1);
+      expect(handOf(x).specialAccepted).toEqual([]);
+    }
+    for (const s of [0, 2] as const) expect(legalOf(p[s])).toEqual(['specialPlay', 'specialRun']);
+    for (const s of [1, 3] as const) {
+      expect(legalOf(p[s])).toEqual([]);
+      p[s].room.send('special', { decision: 'play' });
+    }
+    await until(() => p[1].errors.length > 0 && p[3].errors.length > 0, 'adversários rejeitados');
+    expect(new Set([...p[1].errors, ...p[3].errors])).toEqual(new Set(['NOT_YOUR_TURN']));
+    // ordem invertida: o assento 2 aceita antes do 0
+    p[2].room.send('special', { decision: 'play' });
+    await until(() => handOf(p[0]).specialAccepted.length === 1, 'primeiro aceite');
+    await settle(game, 'um aceitou');
+    for (const x of p) {
+      const h = handOf(x);
+      expect(h.phase).toBe('specialDecision');
+      expect(h.specialAccepted).toEqual([2]);
+      expect(h.actingSeat).toBe(-1);
+    }
+    // os DOIS da dupla ainda veem as cartas um do outro; os adversários não veem nada
+    expect(p.map(partnerCardsOf)).toEqual([3, 0, 3, 0]);
+    expect(legalOf(p[2])).toEqual([]);
+    p[2].room.send('special', { decision: 'run' });
+    await until(() => p[2].errors.length > 0, 'quem já aceitou não age mais');
+    expect(p[2].errors).toEqual(['NOT_YOUR_TURN']);
+    expect(logCount(game, 'specialDecided')).toBe(1);
+    p[0].room.send('special', { decision: 'play' });
+    await until(() => handOf(p[0]).phase === 'playing', 'mão começa');
+    await settle(game, 'todos aceitaram');
+    expect(logCount(game, 'specialDecided')).toBe(2);
+    for (const x of p) expect(handOf(x).specialAccepted).toEqual([]);
+    expect(p.map(partnerCardsOf)).toEqual([0, 0, 0, 0]);
+    assertNoLeaks(game);
+  });
+
+  it('um corre depois de o parceiro aceitar: a dupla corre e a mão acaba na hora', async () => {
+    const game = await startedRec('truco-onze-dupla');
+    const p = game.players as [Player, Player, Player, Player];
+    p[0].room.send('special', { decision: 'play' });
+    await until(() => handOf(p[2]).specialAccepted.length === 1, 'aceite do 0');
+    p[2].room.send('special', { decision: 'run' });
+    await until(() => logCount(game, 'handDecided') === 1, 'corrida encerra a mão');
+    const decided = lastEventOf(game, 'handDecided');
+    expect(decided?.reason).toBe('specialRun');
+    expect(decided?.winnerTeam).toBe(1);
+    await settle(game, 'após corrida');
+    assertNoLeaks(game);
+  });
+
+  it('timeout: os dois decisores pendentes jogam pelo motor (aceitar)', async () => {
+    const game = await startedRec('truco-onze-timeout');
+    await until(() => logCount(game, 'specialDecided') === 2, 'timeout dos dois decisores', 3000);
+    const decisions = game.server.eventLog
+      .filter((e) => e.event.type === 'specialDecided')
+      .map((e) => (e.event.type === 'specialDecided' ? `${e.event.seat}:${e.event.decision}` : ''))
+      .sort();
+    expect(decisions).toEqual(['0:play', '2:play']);
+    expect(game.server.series?.match.hand.phase).toBe('playing');
+    assertNoLeaks(game);
   });
 });

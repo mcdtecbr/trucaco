@@ -255,7 +255,7 @@ describe('projeção: nenhum cliente recebe carta que não deve', () => {
     }
   });
 
-  it('mão de onze: partnerCards só para a dupla que decide, e some depois da decisão', () => {
+  it('mão de onze: partnerCards só para a dupla que decide, até os DOIS aceitarem', () => {
     const { series, rng } = startScenario({
       variant: 'paulista',
       ironHand: true,
@@ -287,6 +287,18 @@ describe('projeção: nenhum cliente recebe carta que não deve', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     projectState(r.state, state);
+    // o primeiro aceite NÃO encerra a decisão: os dois da dupla ainda veem as cartas um do outro
+    expect(r.state.match.hand.phase).toBe('specialDecision');
+    expect(partner(0)).toEqual((hands[2] ?? []).map(key).sort());
+    expect(partner(2)).toEqual((hands[0] ?? []).map(key).sort());
+    expect(partner(1)).toEqual([]);
+    expect(partner(3)).toEqual([]);
+    expect(priv(0).legalActions.toJSON()).toEqual([]);
+    expect(priv(2).legalActions.toJSON()).toEqual(['specialPlay', 'specialRun']);
+    const r2 = applySeriesAction(r.state, { type: 'playSpecial', seat: 2 }, rng);
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    projectState(r2.state, state);
     for (const s of SEATS) expect(partner(s)).toEqual([]);
   });
 

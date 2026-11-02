@@ -32,7 +32,13 @@ export const TrickSchema = schema(
 );
 
 export const PendingBetSchema = schema(
-  { fromSeat: t.int8(), fromTeam: t.int8(), toLevel: t.int8() },
+  {
+    fromSeat: t.int8(),
+    fromTeam: t.int8(),
+    toLevel: t.int8(),
+    /** Único assento que responde à aposta pendente. */
+    responderSeat: t.int8(),
+  },
   'PendingBet',
 );
 
@@ -58,8 +64,13 @@ export const HandSchema = schema(
     /** '' antes da primeira mão. */
     phase: t.string().default(''),
     turn: t.int8(),
-    /** Assento cuja decisão é esperada agora (`pendingSeat` do motor); -1 se ninguém age. */
+    /**
+     * Assento cuja decisão é esperada agora: em aposta pendente, `pending.responderSeat`; na decisão de
+     * onze/dez, -1 (os dois decidem, em qualquer ordem); -1 se ninguém age.
+     */
     actingSeat: t.int8().default(-1),
+    /** Onze/dez: assentos da dupla que já aceitaram jogar (público). */
+    specialAccepted: t.array('int8'),
     value: t.uint8().default(0),
     level: t.int8(),
     pending: t.ref(PendingBetSchema).optional(),

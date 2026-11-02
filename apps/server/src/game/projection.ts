@@ -95,14 +95,16 @@ export interface SharedSnapshot {
     readonly specialTeam: number;
     readonly phase: string;
     readonly turn: Seat;
-    /** `pendingSeat` do motor (o mesmo do timer de turno); -1 se ninguém age. */
+    /** Respondedor da aposta pendente; -1 na decisão de onze/dez (dois decidem) ou se ninguém age. */
     readonly actingSeat: number;
+    readonly specialAccepted: readonly Seat[];
     readonly value: number;
     readonly level: number;
     readonly pending: {
       readonly fromSeat: Seat;
       readonly fromTeam: Team;
       readonly toLevel: number;
+      readonly responderSeat: Seat;
     } | null;
     readonly tricks: readonly TrickSnapshot[];
     readonly current: readonly PlaySnapshot[];
@@ -178,7 +180,8 @@ export function sharedSnapshot(series: SeriesState): SharedSnapshot {
       specialTeam: v.specialTeam ?? -1,
       phase: v.phase,
       turn: v.turn,
-      actingSeat: isSeriesOver(series) ? -1 : (pendingSeat(series) ?? -1),
+      actingSeat: actingSeatOf(series),
+      specialAccepted: v.phase === 'specialDecision' ? [...v.specialAccepted] : [],
       value: v.value,
       level: v.level,
       pending: v.pending === null ? null : { ...v.pending },
@@ -192,6 +195,21 @@ export function sharedSnapshot(series: SeriesState): SharedSnapshot {
     },
     handSizes: [...v.handSizes],
   };
+}
+
+/** `actingSeat` público: respondedor da aposta; -1 na decisão de onze/dez (ambígua) ou sem ação. */
+function actingSeatOf(series: SeriesState): number {
+  if (isSeriesOver(series)) return -1;
+  if (series.match.hand.phase === 'specialDecision') return -1;
+  return pendingSeat(series) ?? -1;
+}
+
+/** Assentos com ação legal agora: um só, exceto na decisão de onze/dez (os decisores que faltam). */
+export function pendingSeats(series: SeriesState): Seat[] {
+  if (isSeriesOver(series)) return [];
+  const out: Seat[] = [];
+  for (let s = 0; s < series.seats; s++) if (legalActions(series, s).length > 0) out.push(s);
+  return out;
 }
 
 /** O que só o assento `seat` pode ver: mão, ações legais, mão do parceiro (onze/dez), próprias cobertas. */
@@ -341,6 +359,7 @@ export function projectState(
   setIf(hand, 'phase', h.phase);
   setIf(hand, 'turn', h.turn);
   setIf(hand, 'actingSeat', h.actingSeat);
+  syncNumbers(hand.specialAccepted, h.specialAccepted);
   setIf(hand, 'value', h.value);
   setIf(hand, 'level', h.level);
   if (h.pending === null) {
@@ -350,6 +369,7 @@ export function projectState(
     setIf(pending, 'fromSeat', h.pending.fromSeat);
     setIf(pending, 'fromTeam', h.pending.fromTeam);
     setIf(pending, 'toLevel', h.pending.toLevel);
+    setIf(pending, 'responderSeat', h.pending.responderSeat);
     if (hand.pending === undefined) hand.pending = pending;
   }
   syncList(

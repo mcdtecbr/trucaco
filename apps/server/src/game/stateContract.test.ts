@@ -179,11 +179,20 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
     if (!r.ok) return;
     projectState(r.state, state, { turnDeadlineAt: 1234 });
     const snaps = checkAllSeats(state);
-    const responders = [0, 1, 2, 3].filter((s) => (s - caller) % 2 !== 0);
-    for (const seat of responders) {
+    // truco: só o próximo assento após o pedinte responde; o parceiro dele só assiste
+    const responder = (caller + 1) % 4;
+    for (const seat of [0, 1, 2, 3]) {
       const snap = snaps[seat];
       expect(snap?.hand.phase).toBe('betPending');
-      expect(snap?.hand.pending).toMatchObject({ fromSeat: caller, toLevel: expect.any(Number) });
+      expect(snap?.hand.pending).toMatchObject({
+        fromSeat: caller,
+        responderSeat: responder,
+        toLevel: expect.any(Number),
+      });
+      if (seat !== responder) {
+        expect(snap?.privates[String(seat)]?.legalActions ?? []).not.toContain('accept');
+        continue;
+      }
       const kinds = (snap?.privates[String(seat)]?.legalActions ?? []).map(
         (id) => parseLegalAction(id)?.kind,
       );
@@ -192,7 +201,7 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
     }
   });
 
-  it('actingSeat: jogada normal = turn; aposta pendente = quem responde; onze/ferro = quem decide; waiting = -1', () => {
+  it('actingSeat: jogada normal = turn; aposta pendente = quem responde; onze/dez = ausente (dois decidem); ferro = quem joga; waiting = -1', () => {
     const normal = build({ name: 'n', variant: 'paulista', ironHand: false, scores: [0, 0] });
     const n = checkAllSeats(normal.state)[0]?.hand;
     expect(n?.actingSeat).toBe(n?.turn);
@@ -208,13 +217,15 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
     expect(pend?.turn).toBe(caller);
     expect(pend?.actingSeat).not.toBe(caller);
     expect(pend?.actingSeat).toBe(pendingSeat(r.state));
+    expect(pend?.actingSeat).toBe(pend?.pending?.responderSeat);
     expect((pend?.actingSeat ?? 0) % 2).not.toBe(caller % 2);
 
     const onze = build({ name: 'o', variant: 'paulista', ironHand: true, scores: [11, 3] });
     const o = checkAllSeats(onze.state)[0]?.hand;
     expect(o?.phase).toBe('specialDecision');
-    expect(o?.actingSeat).toBe(pendingSeat(onze.series));
-    expect(o?.actingSeat).toBe(0);
+    // dois decidem: sem assento único
+    expect(o?.actingSeat).toBe(ABSENT);
+    expect(o?.specialAccepted).toEqual([]);
 
     const ferro = build({ name: 'f', variant: 'paulista', ironHand: true, scores: [11, 11] });
     const f = checkAllSeats(ferro.state)[0]?.hand;

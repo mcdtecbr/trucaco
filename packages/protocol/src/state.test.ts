@@ -79,6 +79,7 @@ describe('HandSnapshot: campos de manilha e aposta (aditivos)', () => {
       phase: 'playing',
       turn: 0,
       actingSeat: 0,
+      specialAccepted: [],
       value: 1,
       level: -1,
       tricks: [],
