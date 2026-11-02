@@ -3,6 +3,7 @@
  * Sem HTTP aqui. Refresh token: 32 bytes aleatórios em base64url (opaco); só o SHA-256 vai ao store.
  */
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import { log } from '../logger';
 import {
   NicknameTakenError,
@@ -165,8 +166,8 @@ export function bearerFromHeader(value: string | null | undefined): string | und
   return token.length > 0 && !/\s/.test(token) ? token : undefined;
 }
 
-/** Subprotocolo WebSocket: `Sec-WebSocket-Protocol: trucaco.bearer, <jwt>` (browsers não põem cabeçalhos). */
-export const WS_BEARER_PROTOCOL = 'trucaco.bearer';
+// Constante vive no protocol (cliente e servidor); reexportada para quem importava daqui.
+export { WS_BEARER_PROTOCOL };
 export function bearerFromSubprotocol(value: string | null | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const parts = value.split(',').map((p) => p.trim());

@@ -22,6 +22,7 @@ export const ERROR_CODES = [
   // Específicos do servidor.
   'NOT_SEATED',
   'ROOM_FULL',
+  // Reservado ao cliente: o servidor nunca o emite; o cliente o sintetiza (reconexão com sala morta).
   'ROOM_NOT_FOUND',
   'INVALID_CODE',
   'INVALID_PAYLOAD',
@@ -30,6 +31,7 @@ export const ERROR_CODES = [
   'INVALID_SFX',
   'CHAT_BLOCKED',
   'UNAUTHORIZED',
+  // Reservado ao cliente: o servidor nunca o emite; o cliente o sintetiza (401 na reconexão).
   'TOKEN_EXPIRED',
 ] as const;
 
