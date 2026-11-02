@@ -63,7 +63,9 @@ Divergências do plano original (sem `LobbyRoom`, JWT HS256, código de 8 caract
 - **ZWJ rejeitado no chat**: emoji com ZWJ (comum no celular) é recusado com `CHAT_BLOCKED`. Decidir se libera.
 - **Outros achados**: a rota `GET /matches` não existe (o repositório já tem `listForUser`); o `TRUST_PROXY` usa o último item de `X-Forwarded-For`, e na Fly.io o certo é `Fly-Client-IP` (tratar no deploy).
 
-## Fase 3: cliente jogável (3 semanas)
+## Fase 3: cliente jogável (3 semanas): concluída em 2026-11-02, com ressalvas
+
+Blocos 3A a 3J. Plano em `docs/specs/2026-11-02-fase-3-cliente-plano.md`; relatório da fase em `docs/specs/2026-11-02-fase-3-relatorio.md`; contrato em `docs/protocolo-servidor.md`; app em `apps/mobile/README.md`.
 
 | Etapa                                                                                                           | Agente           | Pronto quando                                         |
 | --------------------------------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------- |
@@ -74,6 +76,32 @@ Divergências do plano original (sem `LobbyRoom`, JWT HS256, código de 8 caract
 | Mesa: jogar carta, carta coberta, botões de truco contextuais, mão de onze/dez, mão de ferro                    | `fabio-frontend` | Partida completa jogável por humanos no web           |
 | Avatar placeholder (círculo com apelido) nas 4 posições                                                         | `fabio-frontend` | —                                                     |
 | E2E web: convidado → sala → partida até o fim                                                                   | `catia-qa`       | Playwright verde no CI                                |
+
+Critério verificado: CI do GitHub verde em `dd8ab6e` (jobs `verify`, `integration` e `e2e-web`, run 41499226931). `pnpm --filter @trucaco/mobile test:e2e` passa local com 5 cenários. Contagens e comandos no relatório da fase.
+
+### Fase 3: pendências e ressalvas (para depois)
+
+**Não validado (só o usuário ou um aparelho consegue):**
+
+- **iOS e Android**: nada nativo foi testado. Sem simulador nem EAS na nuvem. Validar no Expo Go: transporte do JWT no RN (`Sec-WebSocket-Protocol`), SecureStore, deep link, teclado e layout em aparelho.
+- **Leitor de tela** (VoiceOver, TalkBack, leitor do navegador): os textos de acessibilidade e os anúncios não foram ouvidos. Os textos não tiveram revisão de UX.
+- **Safari e outros navegadores**: o E2E roda só em Chromium. O subprotocolo `trucaco.bearer` foi provado em Node (`ws`, undici) e no Chromium.
+- **Proxies de produção**: se a Fly.io repassa `Sec-WebSocket-Protocol` e o `Host` como esperado. Verificar no deploy.
+- **Revisão por Codex nunca feita.** As Fases 1 a 3 foram revisadas só pela Rita-C (agente Claude, `opus`). O Codex CLI instalado no Windows falha com erro 1332 do sandbox, então a revisão por Codex segue pendente.
+
+**Pendências de produto (decidir antes do beta):**
+
+- **Reload da página da mesa** não retoma o assento: o token de reconexão fica só em memória. Persistir o token (SecureStore no nativo e storage no web, com a mesma política do refresh) ou aceitar o comportamento atual.
+- **Botões de aposta do parceiro**: em aposta pendente e em decisão de onze/dez, os dois da dupla veem os botões (o motor dá ação legal aos dois). O servidor aceita a primeira ação. Decidir se a UI esconde os botões do parceiro.
+- **`voteRematch` e o limite de 150 ms** (`ACTION_MIN_INTERVAL_MS`): hoje o voto de revanche também é barrado por esse limite. Isentar ou manter.
+
+**Decisões assumidas por padrão, a confirmar com o usuário:** a lista completa está em "Decisões a confirmar" no `CHANGELOG.md` e em `docs/protocolo-servidor.md`. Inclui voto de cancelar unânime, ban por sala em memória, ZWJ recusado no chat, cooldown de 60 s para reentrar na fila, janela de graça de 20 s no refresh, janela de revanche de 30 s com mínimo de 2 humanos, `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente, `typedRoutes` desligado, carta jogada como "selecionar e confirmar", cores "Nós" e "Eles" fixas e o estilo provisório do baralho.
+
+**Cobertura automatizada:** a cola de efeito dos hooks `useAnnouncer` e `useLayoutMode` não tem teste automatizado. Mão de ferro, onze/dez, `bo3` e aposta pendente têm teste de projeção e de render estático, não de partida completa por humanos.
+
+### Dockerfile do servidor (resultado de 2026-11-02)
+
+`infra/Dockerfile.server` foi construído pela primeira vez com Docker Desktop 29.9.2. A primeira tentativa falhou no `corepack prepare pnpm@9.15.9` (o corepack do `node:22.12.0` não reconhece as chaves de assinatura atuais do npm). Corrigido com `npm install -g pnpm@9.15.9`. Depois da correção: imagem de cerca de 616 MB, `NODE_ENV=production` com o usuário `node`, `GET /health` 200 com `{"status":"ok","protocol":2}`, healthcheck do Docker `healthy`, e `POST /auth/guest` ok contra Postgres 16 e Redis reais depois de `db:deploy`. Sem migração, o erro é `P2021`, esperado: as migrações rodam no release, não no runtime. **Não testado:** Fly.io real e WebSocket de sala dentro do contêiner.
 
 ## Fase 4: avatar Rive e sinais (3 semanas)
 

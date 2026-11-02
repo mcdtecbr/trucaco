@@ -18,7 +18,7 @@ Ao divergir deste texto, o código vence e este documento deve ser corrigido. It
   - Teto absoluto da família: 90 dias (`REFRESH_FAMILY_MAX_SECONDS`). Depois disso o refresh responde `401 INVALID_REFRESH_TOKEN`.
 - **503 não é logout**: `503 SERVICE_UNAVAILABLE` significa Redis ou banco fora do ar. Mantenha a sessão e tente de novo depois.
 - **401 na reconexão**: o access expirou durante a queda. O cliente chama `/auth/refresh`, atualiza o cabeçalho e chama `sdk.reconnect(reconnectionToken)` de novo.
-- **Refresh recusado** (`401 INVALID_REFRESH_TOKEN`): a sessão acabou. Volte à entrada. **a confirmar**: a UX dessa tela fica para a Fase 3.
+- **Refresh recusado** (`401 INVALID_REFRESH_TOKEN`): a sessão acabou. A camada de rede do app sintetiza `TOKEN_EXPIRED` e cria um convidado novo (`apps/mobile/src/net/`).
 
 ## 2. REST: autenticação e perfil
 
@@ -115,9 +115,32 @@ Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (se
 
 `TableState` vai por patch. Cada cliente recebe o estado compartilhado (`roomCode`, `options`, `phase`, `players[4]`, `series`, `game`, `hand`, `turnDeadlineAt`, `cancelVotes`, `rematchVotes`, `rematchDeadlineAt`, `matchNumber`) e, no bloco `privates`, só o do próprio assento (`StateView`): `hand` (cartas), `legalActions` (ids como `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`), `partnerCards` (decisão de onze/dez) e `ownCovered` (identidade das próprias cartas cobertas). Na mão de ferro, `hand` fica vazio e vale só `handSize`. `userId` não está no estado.
 
+#### Campos públicos de `hand` (aditivos, visíveis a todos)
+
+Vêm no estado compartilhado, para os 4 assentos. Fonte: `apps/server/src/game/projection.ts` e `schema.ts`; tipo em `packages/protocol/src/state.ts`.
+
+| Campo               | Valor                                                                                                                                                                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hand.manilhaRank`  | Paulista: rank da manilha, derivada da vira (vira + 1). `''` no Mineiro e antes da primeira mão.                                                                                                                                                |
+| `hand.manilhaCards` | Mineiro: as 4 manilhas fixas em `<rank><suit>`, da mais forte para a mais fraca (ex.: `4paus`). Vazio no Paulista.                                                                                                                              |
+| `hand.nextBetValue` | Valor que a dupla de quem age ganha ao pedir ou aumentar agora (degrau da escada da variante). `0` = indisponível (escada esgotada, ou a mão não aceita aposta neste momento). Em aposta pendente, é o degrau seguinte ao pendente (o aumento). |
+| `hand.pendingValue` | Valor da aposta pendente (degrau de `pending.toLevel`). `0` se não há aposta pendente.                                                                                                                                                          |
+| `hand.actingSeat`   | Assento cuja decisão é esperada agora. É o mesmo do timer de turno. `-1` se ninguém age.                                                                                                                                                        |
+
+Semântica de `actingSeat`:
+
+- No turno normal, `actingSeat` é igual a `hand.turn`.
+- **Aposta pendente** e **decisão de onze/dez/ferro** (`special` em `maoDeOnze`/`maoDeFerro` com `phase` `specialDecision`): `actingSeat` NÃO é `turn`. Os DOIS assentos da dupla que decide têm ação legal (aceitar, correr ou aumentar; jogar ou correr na mão de onze/dez). `actingSeat` é o **menor** deles (`pendingSeat` do motor).
+- Por isso o cliente habilita botões pelo `legalActions` do próprio assento, não por `turn` nem por `actingSeat`. Em decisão especial, a UI deve deixar claro que a dupla decide (o app mostra "Sua dupla decide").
+- Consequência: os dois da dupla podem agir ao mesmo tempo. Vale a primeira ação aceita pelo servidor; a segunda recebe `error` com o código do motor (`NO_PENDING_BET` ou `NO_SPECIAL_DECISION`).
+
+`partnerCards` (privado, só em decisão de onze/dez) segue o descrito acima.
+
 ### Revanche ("Jogar de novo")
 
 Contrato aditivo (`PROTOCOL_VERSION` segue 2). Quando a série termina COM vencedor (`seriesDecided`), a sala abre uma janela de `rematchWindowMs` (padrão `DEFAULT_REMATCH_WINDOW_MS` = 30 s) e publica `rematchDeadlineAt` (epoch ms; 0 = sem janela). Série cancelada ou abandonada não abre janela: a sala fecha após `finishDelayMs` como antes.
+
+Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e entre jogos da série `bo3` (ver `docs/regras-truco.md`). A janela de 30 s, o mínimo de 2 humanos e a unanimidade são padrões assumidos, **a confirmar**.
 
 - `voteRematch` vale da abertura da janela até `rematchDeadlineAt`; `rematchVotes` lista os assentos votantes (ordenados). Votam os humanos conectados; bot e assento em reconexão não votam nem bloqueiam. Voto idempotente, sem "desvoto". Mínimo `REMATCH_MIN_HUMANS` = 2 humanos conectados; fora disso: `error { code: 'REMATCH_NOT_AVAILABLE' }`.
 - Quem sai na janela vira bot e o voto dele é descartado; a unanimidade dos que restam (mínimo 2) inicia a revanche. Vale também em mesa da fila pública (formato segue `single`). Sem teto de revanches.
@@ -148,6 +171,8 @@ Contrato aditivo (`PROTOCOL_VERSION` segue 2). Quando a série termina COM vence
 | Tamanho máximo de mensagem                                            | 1024 bytes (`MAX_MESSAGE_BYTES`, limite do transporte) | conexão cai acima disso                                        |
 | Payload inválido (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) | 5 em 10 s                                              | expulsão com código 1008 e assento vai para o bot, sem janela  |
 
+`voteRematch` também passa por esse limite de 150 ms (o servidor aplica o controle antes de tratar `voteCancel` e `voteRematch`). Pendência de produto: isentar o voto de revanche.
+
 Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora disso, são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase.
 
 ## 9. Chat e texto livre
@@ -163,7 +188,7 @@ Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora di
 
 - Espelho do motor (`RuleErrorCode`): `INVALID_SEAT`, `HAND_FINISHED`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `COVERED_NOT_ALLOWED`, `BLIND_ONLY`, `NOT_BLIND_HAND`, `BET_NOT_ALLOWED`, `BET_PENDING`, `NO_PENDING_BET`, `SPECIAL_DECISION_PENDING`, `NO_SPECIAL_DECISION`, `GAME_FINISHED`, `SERIES_FINISHED`.
 - Do servidor: `NOT_SEATED`, `ROOM_FULL`, `INVALID_PAYLOAD`, `RATE_LIMITED`, `INVALID_SIGNAL`, `INVALID_SFX`, `CHAT_BLOCKED`, `REMATCH_NOT_AVAILABLE` (voto de revanche com a série sem vencedor, janela fechada ou menos de 2 humanos conectados; não conta strike).
-- Declarados mas NÃO emitidos pela sala hoje: `ROOM_NOT_FOUND` e `TOKEN_EXPIRED`. **a confirmar**: se ficam, são reservados para o cliente. `UNAUTHORIZED` e `INVALID_CODE` também estão nesse tipo, mas só saem em respostas REST.
+- Reservados ao cliente (o servidor nunca os emite pelo WebSocket): `ROOM_NOT_FOUND` (sala descartada ou token de reconexão inválido) e `TOKEN_EXPIRED` (401 na reconexão ou refresh recusado). O cliente os sintetiza. Decisão assumida por padrão, a confirmar com o usuário. `UNAUTHORIZED` e `INVALID_CODE` também estão nesse tipo, mas só saem em respostas REST.
 
 **Só do servidor, em respostas HTTP** (não estão no `ErrorCode` do WebSocket): `USE_LOBBY`, `ALREADY_IN_TABLE`, `TABLE_UNAVAILABLE`, `QUEUE_COOLDOWN`, `QUEUE_FULL`, `UNAVAILABLE`, `INVALID_OPTIONS`, `BO3_REQUIRES_PRIVATE`, `INVALID_REFRESH_TOKEN`, `NICKNAME_TAKEN`, `INVALID_NICKNAME`, `INVALID_AVATAR`, `INVALID_PARTNER`, `INVALID_CODES`, `NOT_PARTNERS`, `INVALID_BODY`, `INVALID_JSON`, `INVALID_INPUT`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE` (415), `PAYLOAD_TOO_LARGE` (413), `CORS_FORBIDDEN` (403), `FORBIDDEN`, `BANNED`, `ALREADY_SEATED`, `INTERNAL` (500, genérico).
 

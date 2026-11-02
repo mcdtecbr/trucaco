@@ -6,27 +6,46 @@ App Expo (SDK 58) com Expo Router: web, iOS e Android. O cliente não tem regra 
 
 Na raiz, `pnpm build` antes da primeira execução (os pacotes `@trucaco/*` são resolvidos pelo `dist/`).
 
-| Comando                                    | O que faz                                      |
-| ------------------------------------------ | ---------------------------------------------- |
-| `pnpm --filter @trucaco/mobile dev`        | `expo start --web` (Metro, porta 8081)         |
-| `pnpm --filter @trucaco/mobile start`      | `expo start` (QR para Expo Go)                 |
-| `pnpm --filter @trucaco/mobile export:web` | SPA estática em `apps/mobile/dist` (sem SSR)   |
-| `pnpm --filter @trucaco/mobile test`       | Vitest com `react-native-web` no lugar de RN   |
-| `pnpm --filter @trucaco/mobile test:int`   | Integração contra o servidor real (abaixo)     |
-| `pnpm test:e2e` (raiz) ou `test:e2e` aqui  | E2E web com Playwright, 4 navegadores (abaixo) |
+| Comando                                    | O que faz                                                        |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| `pnpm --filter @trucaco/mobile dev`        | `expo start --web` (Metro, porta 8081)                           |
+| `pnpm --filter @trucaco/mobile start`      | `expo start` (QR para Expo Go)                                   |
+| `pnpm --filter @trucaco/mobile export:web` | SPA estática em `apps/mobile/dist` (sem SSR)                     |
+| `pnpm --filter @trucaco/mobile test`       | Vitest com `react-native-web` no lugar de RN (sem servidor)      |
+| `pnpm --filter @trucaco/mobile test:int`   | Integração contra o servidor real (abaixo)                       |
+| `pnpm test:e2e` (raiz) ou `test:e2e` aqui  | E2E web com Playwright (Chromium, 4 contextos por teste, abaixo) |
 
 ## Variáveis
 
 - `EXPO_PUBLIC_SERVER_URL`: URL do servidor (padrão de dev `http://localhost:2567`). Vai para o bundle: nunca coloque segredo. Em build de produção (`NODE_ENV=production` ou `__DEV__ === false`) só `https:` é aceito (o `wss:` deriva dela), salvo `localhost`, `127.0.0.1` e `10.x`; `getServerUrl()` lança caso contrário.
-- `EXPO_PUBLIC_E2E`: `1` liga a sonda oculta `table-state` da mesa (só testes E2E). Vazio nas demais execuções. O E2E (`e2e/globalSetup.ts`) define esta variável sozinho ao construir o web; não a use em build de produção. A sonda é um texto `fase|turn=<actingSeat>|hand=<n>|act=<canAct>|plays=<n>|match=<n>|me=<assento>`.
+- `EXPO_PUBLIC_E2E`: `1` liga a sonda oculta `table-state` da mesa (só testes E2E). Vazio nas demais execuções. O E2E (`e2e/globalSetup.ts`) define esta variável sozinho ao construir o web; não a use em build de produção. A sonda é um texto `fase|turn=<actingSeat>|hand=<n>|act=<canAct>|plays=<n>|match=<n>|me=<assento>` (`TableView.tsx`).
 
 ## Servidor local
 
 `pnpm db:up` e `pnpm --filter @trucaco/server dev`, depois o app web.
 
+## Estrutura
+
+| Pasta                | Conteúdo                                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `app/`               | Rotas Expo Router, finas: `_layout.tsx`, `index.tsx` (boot), `home.tsx`, `settings.tsx`, `table/[code].tsx` |
+| `src/screens/`       | Telas: `XScreen` (hooks e rede) e `XView` (só props, testável com `renderToStaticMarkup`)                   |
+| `src/net/`           | REST, tokens, sessão e cliente Colyseus (abaixo)                                                            |
+| `src/lobby/`         | Criar mesa, entrar por código, fila pública, apelido (validação de UX)                                      |
+| `src/room/`          | `roomService.ts`: uma sala por vez                                                                          |
+| `src/table/`         | Mesa: projeção pura do estado, controller, relógio, presença, `tableStore`                                  |
+| `src/store/`         | Zustand só para UI: `sessionStore`, `lobbyStore`, `roomStore` (sala de espera)                              |
+| `src/services/`      | `app.ts`: monta rede, sessão e salas sob demanda                                                            |
+| `src/platform/`      | Compartilhar o código da mesa (nativo: `Share`; web: copiar)                                                |
+| `src/i18n/errors.ts` | Código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`)                        |
+| `src/ui/`            | Primitivos de tela (`Button`, `TextField`, `Choice`, `Screen`, `Typography`)                                |
+| `e2e/`               | Playwright: setup, fixtures e `table.spec.ts`                                                               |
+
+Cores, espaçamentos e raios vêm de `@trucaco/ui` (`tokens.ts`), que também tem as cartas e os componentes da mesa.
+
 ## Camada de rede (`src/net/`)
 
-Sem UI; as telas (bloco 3E) consomem estes módulos.
+Sem UI; as telas consomem estes módulos.
 
 - `api.ts`: cliente REST tipado por `@trucaco/protocol`. Refresh em fila única, uma repetição por requisição, 503/rede/timeout nunca descartam a sessão (`ApiError.isUnavailable`). Nada é logado.
 - `tokenStorage.{ts,web.ts,native.ts}`: refresh token e metadados mínimos (`localStorage` na web, `expo-secure-store` no nativo, memória como degradação). O access token vive só em memória.
@@ -39,9 +58,43 @@ Sem UI; as telas (bloco 3E) consomem estes módulos.
 
 `test:int` sobe `apps/server/dist/main.js` (rode `pnpm build` antes; em memória, porta aleatória, `NODE_ENV=test`), cria 4 convidados, entra por código e reconecta com o SDK real. O 401 real é provado com um access de assinatura válida e `exp` no passado (o teste conhece o `JWT_SECRET` que passa ao servidor), na REST e na reconexão. `INT_SLOW=1` liga o caso em que o TTL mínimo do servidor (60 s) expira de verdade durante a queda (cerca de 65 s).
 
+## Mesa, chat e revanche (`src/table/`, `src/screens/`)
+
+- `projectTable.ts`: projeção pura do `room.state` em `TableViewModel`. Sem regra de jogo: quem decide o que é legal é o servidor (`legalActions` do próprio assento).
+- `tableController.ts`: envia uma ação só se ela estiver em `legalActions` do próprio assento, barra o duplo clique e detecta a revanche pela mudança de `matchNumber`. Carta coberta própria vem em `privates[seat].ownCovered`.
+- `clockOffset.ts` (offset do relógio para o prazo do turno), `presence.ts` (presença por assento), `tableStore.ts` (estado de UI da mesa: balões, notícias, histórico).
+- Visões de `/table/[code]`, escolhidas por `roomViewFor(phase)`:
+  - `waiting`: `WaitingRoomView`, com o código grande para compartilhar e os 4 assentos; o chat da mesa já funciona aqui.
+  - `playing`: `TableView`, com leque de cartas, mesa, placar em camadas, histórico das mãos, botões de aposta por `legalActions`, mão de ferro às cegas (`playBlind`), carta coberta (modo "Cobrir"), voto de cancelar e "Sair da mesa" (com diálogo de confirmação).
+  - `finished`: `FinishedView`, com o resultado e o botão "Jogar de novo".
+- Chat (`ChatPanel.tsx`): abas "Mesa" e "Dupla". Texto sempre como `<Text>`, validado com `parseClientMessage` de `@trucaco/protocol` (a validação é só UX; o servidor decide de novo). Balão sobre o avatar por 4 s.
+- Dupla que decide em aposta pendente ou em mão de onze/dez: a UI mostra "Sua dupla decide" (`actingSeat` no protocolo: `docs/protocolo-servidor.md`).
+- **Revanche**: o botão "Jogar de novo" aparece quando a série termina com vencedor e a janela de `rematchDeadlineAt` está aberta. Mostra "Aguardando a mesa (N votaram)" depois do voto, e "O tempo para jogar de novo acabou." quando a janela fecha. A mudança de `matchNumber` reinicia o placar e a mesa na partida nova.
+- Deep link `trucaco://table/CODE`: sem mesa ativa, leva a `/home` com o código preenchido; entrar na mesa é sempre ação do usuário.
+
+## Telas e estado
+
+Rotas em `app/` (finas) e telas em `src/screens/`:
+
+- `/` (boot): restaura a sessão ou cria convidado; `unavailable` mostra "Tentar de novo" sem criar convidado.
+- `/home`: criar mesa privada (variante, formato `single` ou `bo3`, mão de ferro), entrar por código, fila pública.
+- `/table/[code]`: espera, mesa e resultado (visões acima). Rota protegida por `RequireSession`: sem sessão pronta, volta a `/`.
+- `/settings`: apelido via `PUT /me`, sair (sai da fila no servidor antes), versões.
+
+- `src/store/`: Zustand só para UI. `sessionStore` espelha `session.ts`; `lobbyStore` = fila/busy/erro; `roomStore` = conexão e projeção da sala de espera. A fonte continua sendo `room.state`.
+- `src/lobby/lobbyController.ts`: criar/entrar/fila (validação antes da rede, anti duplo clique, polling de 2 s cancelável, guards de resposta). `src/room/roomService.ts`: uma sala por vez, `leave(true)`, reconexão manual quando o SDK desiste.
+- Política de apelido no cliente (`src/lobby/nickname.ts`) é só UX e espelha `apps/server/src/db/validation.ts`, que não está no protocol.
+- `typedRoutes` está DESLIGADO de propósito. Só o `expo start` gera `.expo/types/router.d.ts` (o `expo export` não), e um arquivo velho quebra o `typecheck` (7 erros medidos ao adicionar rotas). Gerar o arquivo dentro do `typecheck` exigia subir o Metro e matar processos por grupo (não portável para o Windows e nunca validado no CI), então a checagem de `router.push`/`Redirect` fica por conta dos testes das funções de rota. Reavaliar quando o CI do GitHub rodar.
+
 ## E2E web (Playwright, `e2e/`)
 
-Cada teste abre **4 contextos de navegador** (Chromium, um convidado por jogador, storage isolado), cria uma mesa privada, entra pelo código de 8 caracteres e joga pela UI real contra o **servidor compilado** (`apps/server/dist/main.js`, `NODE_ENV=test`, `TRUCO_SEED` fixo). Esperas são sempre por estado: a sonda `table-state` (`EXPO_PUBLIC_E2E=1`) e `data-testid`/papéis, nunca por tempo. Cenários em `e2e/table.spec.ts`: mesa criada e iniciada, cartas jogadas guiadas por `actingSeat`/`canAct`, chat da mesa (texto literal e balão), chat da dupla que não chega ao adversário e rate limit, partida decidida numa mão com revanche até `matchNumber` 2, queda do WebSocket com reconexão.
+Cada teste abre **4 contextos de navegador** (Chromium, um convidado por jogador, storage isolado), cria uma mesa privada, entra pelo código de 8 caracteres e joga pela UI real contra o **servidor compilado** (`apps/server/dist/main.js`, `NODE_ENV=test`, `TRUCO_SEED=12345`). Esperas são sempre por estado: a sonda `table-state` (`EXPO_PUBLIC_E2E=1`) e `data-testid`/papéis, nunca por tempo. Cenários em `e2e/table.spec.ts` (5):
+
+1. Convidados criam a mesa, entram pelo código e a partida começa.
+2. Cartas jogadas pelos botões da UI, guiadas por `actingSeat` e `canAct`.
+3. Mensagem do chat da mesa aparece como texto e balão; a da dupla não chega ao adversário.
+4. Série decidida numa mão: todos jogam de novo e a partida 2 começa (`matchNumber` 2).
+5. Queda do WebSocket de um jogador: reconecta, volta à mesa e consegue jogar.
 
 `e2e/globalSetup.ts` faz tudo e desmonta no fim (o servidor é derrubado por PID, também em `process.exit`): (1) `expo export --platform web --output-dir dist-e2e` com `EXPO_PUBLIC_E2E=1` e `EXPO_PUBLIC_SERVER_URL=http://127.0.0.1:2587`; (2) servidor do jogo na porta `2587` com CORS para a origem do web; (3) servidor estático do `dist-e2e/` (SPA, fallback para `index.html`) na porta `8087`. As portas são fixas porque a URL do servidor entra no bundle; troque com `E2E_SERVER_PORT` e `E2E_WEB_PORT`.
 
@@ -75,16 +128,6 @@ pnpm test:e2e
 
 Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração rápida; reconstrua depois de mexer no app), `E2E_SERVER_PORT`, `E2E_WEB_PORT`, `TEST_DATABASE_URL`, `TEST_REDIS_URL`. Em falha, os screenshots dos 4 jogadores são anexados ao teste (relatório HTML: `pnpm exec playwright show-report`; no CI vai como artefato `playwright-report`). O trace do Playwright só cobre o contexto padrão, não os 4 criados pelo fixture. Observação de produto: recarregar a página da mesa não retoma o assento (o app não persiste o token de reconexão e volta para `/home`), então a queda testada é a do WebSocket, não o reload.
 
-## Telas e estado (bloco 3E)
-
-Rotas em `app/` (finas) e telas em `src/screens/` (`XScreen` com hooks e rede, `XView` só props, testável com `renderToStaticMarkup`): `/` (boot: restaura a sessão ou cria convidado; `unavailable` com "Tentar de novo" sem criar convidado), `/home` (criar mesa privada, entrar por código, fila pública), `/table/[code]` (sala de espera e, quando a partida começa, placeholder da mesa), `/settings` (apelido via `PUT /me`, sair, versões). Deep link `trucaco://table/CODE` só preenche o campo de código em `/home`: nunca entra sozinho.
-
-- `src/store/`: Zustand só para UI (`sessionStore` espelha `session.ts`; `lobbyStore` = fila/busy/erro; `roomStore` = projeção da sala de espera). Sem regra de jogo; a fonte continua sendo `room.state`.
-- `src/lobby/lobbyController.ts`: criar/entrar/fila (validação antes da rede, anti duplo clique, polling de 2 s cancelável, guards de resposta). `src/room/roomService.ts`: uma sala por vez, `leave(true)`, reconexão manual quando o SDK desiste. `src/services/app.ts` monta tudo sob demanda.
-- `src/i18n/errors.ts`: código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`). `src/theme.ts`: tokens simples (contraste AA testado); migram para `packages/ui` no 3F.
-- Política de apelido no cliente (`src/lobby/nickname.ts`) é só UX e espelha `apps/server/src/db/validation.ts`, que não está no protocol.
-- `typedRoutes` está DESLIGADO de propósito. Só o `expo start` gera `.expo/types/router.d.ts` (o `expo export` não), e um arquivo velho quebra o `typecheck` (7 erros medidos ao adicionar rotas). Gerar o arquivo dentro do `typecheck` exigia subir o Metro e matar processos por grupo (não portável para o Windows e nunca validado no CI), então a checagem de `router.push`/`Redirect` fica por conta dos testes das funções de rota. Reavaliar quando o CI do GitHub rodar.
-
 ## Reserva, saída e a verificar
 
 - A reserva de assento é validada antes de qualquer rede (`isSafeReservation`): ids `[A-Za-z0-9_-]+` e `publicAddress`, se vier, com o mesmo host do servidor; o transporte também recusa host diferente. Reserva adulterada vira `JOIN_FAILED` sem enviar o JWT.
@@ -93,4 +136,4 @@ Rotas em `app/` (finas) e telas em `src/screens/` (`XScreen` com hooks e rede, `
 
 ## Limites
 
-Nada nativo (iOS/Android) é testado na nuvem: sem simulador nem EAS. Validação em Expo Go fica com o usuário.
+Nada nativo (iOS/Android) é testado na nuvem: sem simulador nem EAS. Validação em Expo Go, em aparelho real, com leitor de tela e no Safari fica com o usuário. Pendências e ressalvas da Fase 3: `docs/plano-desenvolvimento.md`.

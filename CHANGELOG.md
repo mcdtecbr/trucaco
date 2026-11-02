@@ -4,6 +4,43 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Infraestrutura (2026-11-02)
+
+#### Corrigido
+
+- `infra/Dockerfile.server` instala o pnpm com `npm install -g pnpm@9.15.9`, em vez de `corepack prepare`, que falhava no `node:22.12.0` por causa das chaves de assinatura do npm. Build testado com Docker Desktop 29.9.2: imagem de cerca de 616 MB, `GET /health` 200 e healthcheck `healthy`. Hash do commit a registrar.
+
+### Fase 3: cliente jogável (2026-11-02), concluída com ressalvas
+
+Ressalvas e o que não foi validado: `docs/plano-desenvolvimento.md` (Fase 3) e `docs/specs/2026-11-02-fase-3-relatorio.md`.
+
+#### Adicionado
+
+- Contrato HTTP e snapshot de estado em `packages/protocol`: códigos HTTP, respostas REST, `TableStateSnapshot` e `parseLegalAction` (4eb871e).
+- `POST /auth/logout` e teste do handshake com `trucaco.bearer`; `TRUCO_SEED` só em development e test (32dd67e).
+- Esqueleto Expo SDK 58 com Expo Router, Metro no monorepo e export web estático (a533cd8, bc17f60).
+- Camada de rede do app: REST com refresh em fila única e lock entre abas, `TokenStorage` (SecureStore no nativo, `localStorage` no web) e cliente Colyseus que envia o JWT em `Sec-WebSocket-Protocol` (63c15fb).
+- Telas de entrada, início (criar mesa privada `single`/`bo3`, entrar por código, fila pública), sala de espera e configurações, com Zustand (613ccb6).
+- `packages/ui`: tokens, carta, leque, vira, placar em camadas, botões de aposta, timer de turno, chat, avatar placeholder e anúncios para leitor de tela (9370620, 8bed41d).
+- Servidor publica no estado `hand.manilhaRank`, `manilhaCards`, `nextBetValue` e `pendingValue` (8bed41d) e `hand.actingSeat` (7cbe481).
+- Mesa jogável: projeção pura do estado, ação enviada só se estiver em `legalActions`, offset de relógio e reconexão visível (c7a3d3a, 7cbe481).
+- Mesa completa: mão de ferro às cegas, mão de onze/dez com carta do parceiro, carta coberta, histórico das mãos, fim de partida e de série, voto de cancelar e chat de texto (d5f71c1).
+- Balão de chat sobre o avatar (4 s), chat na sala de espera e testes de interação (9779e86).
+- Revanche "Jogar de novo": `voteRematch`, `rematchVotes`, `rematchDeadlineAt`, `matchNumber` e erro `REMATCH_NOT_AVAILABLE` (b6bd137); botão e reset da partida no cliente (f09565e).
+- E2E web com Playwright: 5 cenários, cada um com 4 contextos de navegador, contra o servidor compilado (dd8ab6e).
+- Job `e2e-web` no CI, com o relatório e o build web como artefatos (dd8ab6e).
+
+#### Alterado
+
+- Rodízio do pé na revanche: o pé segue o assento seguinte ao pé da última mão. Confirmado pelo usuário em 2026-11-02 (b6bd137). Entre jogos da série `bo3` o motor já fazia o mesmo rodízio, mas isso segue sem confirmação do usuário.
+- Os códigos `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` ficam no `ErrorCode` como reservados ao cliente, documentados em 4eb871e. O servidor não os emite pelo WebSocket.
+
+#### Corrigido
+
+- Logout revoga o `lastJti`, e o guard recusa `Sec-WebSocket-Protocol` cujo primeiro item não é `trucaco.bearer` (70c6bb9).
+- Rodadas de correção da camada de rede (4025331), das telas de entrada e lobby (de11e9d), e dos componentes e anúncios (ab04426).
+- Revisão do 3H1 aplicada no 3H2: a dupla que decide em aposta pendente e em decisão de onze/dez passa a usar `actingSeat` e legalActions (texto "Sua dupla decide"), e o diálogo de saída da mesa tem `accessibilityViewIsModal` (verificado no código; o comportamento com leitor de tela não foi testado).
+
 ### Fase 2: servidor Colyseus (2026-11-01)
 
 #### Adicionado
@@ -74,4 +111,6 @@ Assumidas por padrão nas fases acima. Cada uma precisa de confirmação do usu�
 - **Cooldown de reentrada na fila de 60 s** para quem casa e não senta ou desiste (Fase 2).
 - **Janela de graça do refresh de 20 s** (`REFRESH_REUSE_GRACE_SECONDS`), usada uma vez por token (Fase 2).
 - **Subprotocolo `trucaco.bearer`** para o JWT no WebSocket do navegador (Fase 2).
-- **Rodízio do pé entre os jogos da série** (Fase 1): o pé do jogo seguinte é o assento seguinte ao que deu a última mão do anterior. Não confirmado.
+- **Janela de revanche de 30 s, mínimo de 2 humanos conectados e unanimidade** (Fase 3): padrões assumidos no `packages/protocol` e no servidor. O rodízio do pé na revanche foi confirmado pelo usuário em 2026-11-02; entre jogos da série `bo3` o motor já faz o mesmo rodízio, mas isso segue sem confirmação.
+- **Limite de 150 ms aplicado também a `voteRematch`** (Fase 3): pendência de produto, a decidir.
+- **`ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente** (Fase 3).

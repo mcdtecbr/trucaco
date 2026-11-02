@@ -1,5 +1,5 @@
-- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0, 1 e 2 concluídas (servidor); Fase 3 (cliente) em andamento, 3A a 3H1 prontos
+- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0 a 3 concluídas (3 com ressalvas, 2026-11-02); próxima: Fase 4 (avatar Rive)
 - [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
 - [Git: modo atual](feedback_git_convencao.md) — commit e push DIRETO na develop, sem PR, até o usuário avisar; nunca mexer na master
-- [Handoff Fase 3](handoff-fase-3.md) — estado completo, pendências (3H2), decisões, o que não foi validado, riscos e armadilhas para retomar em outra máquina
+- [Handoff Fase 3](handoff-fase-3.md) — estado após a 3J, próximo passo (Fase 4), pendências de produto, o que não foi validado, armadilhas do Windows/Git Bash para retomar
 - [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
