@@ -95,7 +95,7 @@ Critério verificado: CI do GitHub verde em `dd8ab6e` (jobs `verify`, `integrati
 - **Botões de aposta do parceiro**: em aposta pendente e em decisão de onze/dez, os dois da dupla veem os botões (o motor dá ação legal aos dois). O servidor aceita a primeira ação. Decidir se a UI esconde os botões do parceiro.
 - **`voteRematch` e o limite de 150 ms** (`ACTION_MIN_INTERVAL_MS`): hoje o voto de revanche também é barrado por esse limite. Isentar ou manter.
 
-**Decisões assumidas por padrão, a confirmar com o usuário:** a lista completa está em "Decisões a confirmar" no `CHANGELOG.md` e em `docs/protocolo-servidor.md`. Inclui voto de cancelar unânime, ban por sala em memória, ZWJ recusado no chat, cooldown de 60 s para reentrar na fila, janela de graça de 20 s no refresh, janela de revanche de 30 s com mínimo de 2 humanos, `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente, `typedRoutes` desligado, carta jogada como "selecionar e confirmar", cores "Nós" e "Eles" fixas e o estilo provisório do baralho.
+**Decisões assumidas por padrão, a confirmar com o usuário:** a lista completa está em "Decisões a confirmar" no `CHANGELOG.md` e em `docs/protocolo-servidor.md`. Inclui voto de cancelar unânime, ban por sala em memória, ZWJ recusado no chat, cooldown de 60 s para reentrar na fila, janela de graça de 20 s no refresh, `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente, `typedRoutes` desligado, carta jogada como "selecionar e confirmar", cores "Nós" e "Eles" fixas e o estilo provisório do baralho.
 
 **Cobertura automatizada:** a cola de efeito dos hooks `useAnnouncer` e `useLayoutMode` não tem teste automatizado. Mão de ferro, onze/dez, `bo3` e aposta pendente têm teste de projeção e de render estático, não de partida completa por humanos.
 

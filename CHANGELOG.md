@@ -32,7 +32,7 @@ Ressalvas e o que não foi validado: `docs/plano-desenvolvimento.md` (Fase 3) e 
 
 #### Alterado
 
-- Rodízio do pé na revanche: o pé segue o assento seguinte ao pé da última mão. Confirmado pelo usuário em 2026-11-02 (b6bd137). Entre jogos da série `bo3` o motor já fazia o mesmo rodízio, mas isso segue sem confirmação do usuário.
+- Rodízio do pé na revanche: o pé segue o assento seguinte ao pé da última mão. Confirmado pelo usuário em 2026-11-02 (b6bd137), assim como o rodízio entre jogos da série `bo3`, que o motor já fazia.
 - Os códigos `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` ficam no `ErrorCode` como reservados ao cliente, documentados em 4eb871e. O servidor não os emite pelo WebSocket.
 
 #### Corrigido
@@ -111,6 +111,6 @@ Assumidas por padrão nas fases acima. Cada uma precisa de confirmação do usu�
 - **Cooldown de reentrada na fila de 60 s** para quem casa e não senta ou desiste (Fase 2).
 - **Janela de graça do refresh de 20 s** (`REFRESH_REUSE_GRACE_SECONDS`), usada uma vez por token (Fase 2).
 - **Subprotocolo `trucaco.bearer`** para o JWT no WebSocket do navegador (Fase 2).
-- **Janela de revanche de 30 s, mínimo de 2 humanos conectados e unanimidade** (Fase 3): padrões assumidos no `packages/protocol` e no servidor. O rodízio do pé na revanche foi confirmado pelo usuário em 2026-11-02; entre jogos da série `bo3` o motor já faz o mesmo rodízio, mas isso segue sem confirmação.
+- **Janela de revanche de 30 s, mínimo de 2 humanos conectados e unanimidade** (Fase 3): implementados no `packages/protocol` e no servidor e **confirmados pelo usuário** em 2026-11-02, junto com o rodízio do pé na revanche e entre jogos da série `bo3`.
 - **Limite de 150 ms aplicado também a `voteRematch`** (Fase 3): pendência de produto, a decidir.
 - **`ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente** (Fase 3).

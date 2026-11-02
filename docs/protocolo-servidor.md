@@ -140,7 +140,7 @@ Semântica de `actingSeat`:
 
 Contrato aditivo (`PROTOCOL_VERSION` segue 2). Quando a série termina COM vencedor (`seriesDecided`), a sala abre uma janela de `rematchWindowMs` (padrão `DEFAULT_REMATCH_WINDOW_MS` = 30 s) e publica `rematchDeadlineAt` (epoch ms; 0 = sem janela). Série cancelada ou abandonada não abre janela: a sala fecha após `finishDelayMs` como antes.
 
-Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e entre jogos da série `bo3` (ver `docs/regras-truco.md`). A janela de 30 s, o mínimo de 2 humanos e a unanimidade são padrões assumidos, **a confirmar**.
+Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e entre jogos da série `bo3` (ver `docs/regras-truco.md`). A janela de 30 s, o mínimo de 2 humanos conectados e a unanimidade foram **confirmados pelo usuário** em 2026-11-02.
 
 - `voteRematch` vale da abertura da janela até `rematchDeadlineAt`; `rematchVotes` lista os assentos votantes (ordenados). Votam os humanos conectados; bot e assento em reconexão não votam nem bloqueiam. Voto idempotente, sem "desvoto". Mínimo `REMATCH_MIN_HUMANS` = 2 humanos conectados; fora disso: `error { code: 'REMATCH_NOT_AVAILABLE' }`.
 - Quem sai na janela vira bot e o voto dele é descartado; a unanimidade dos que restam (mínimo 2) inicia a revanche. Vale também em mesa da fila pública (formato segue `single`). Sem teto de revanches.

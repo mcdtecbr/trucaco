@@ -37,7 +37,7 @@ Conforme `docs/plano-desenvolvimento.md`. Ponto de partida real: **não existe `
 
 Mão de ferro é opção da sala (padrão ligada); Mineiro com mão de 10; bot nunca pede nem aumenta aposta (pode dar sinal); código de sala com 8 caracteres; mão de ferro com carta escolhida às cegas e visível ao ser jogada; respostas "padrões" às decisões da Fase 3: refresh no `localStorage` no web (atrás de `TokenStorage`, cookie httpOnly na Fase 6), chat de texto já na Fase 3, `POST /auth/logout` agora, bundle/scheme `com.mcdtec.trucaco` e `trucaco://`, `TRUCO_SEED` só dev/test, usuário valida iOS/Android no Expo Go.
 
-**Em 2026-11-02**: o usuário criou a **revanche** ("Jogar de novo") e confirmou o **rodízio do pé na revanche** (o pé é o assento seguinte ao pé da última mão). Entre jogos da série `bo3` o código já faz o mesmo rodízio, mas o usuário ainda NÃO confirmou essa parte. Ver `.claude/memory/decisao_rodizio_pe_revanche.md`.
+**Em 2026-11-02**: o usuário criou a **revanche** ("Jogar de novo") e confirmou o **rodízio do pé na revanche** (o pé é o assento seguinte ao pé da última mão). Também confirmou o rodízio entre jogos da série `bo3` e os padrões da revanche (janela de 30 s, mínimo de 2 humanos conectados, unanimidade). Ver `.claude/memory/decisao_rodizio_pe_revanche.md`.
 
 ## Decisões assumidas por padrão (pedir confirmação ao usuário)
 

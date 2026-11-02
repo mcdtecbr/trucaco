@@ -44,7 +44,7 @@ Opção definida por quem cria a mesa, nas duas variantes:
 
 - **`single`** (padrão): um jogo de 12 pontos. É o formato da fila pública rápida.
 - **`bo3`**: vence a série a dupla que ganhar **2 jogos**. O terceiro jogo só acontece se a série estiver 1 × 1. Disponível em mesas privadas e amistosas.
-- **Entre jogos**: os pontos voltam a 0, as duplas e os assentos permanecem. O pé do jogo seguinte é o assento que vem depois do pé que deu a última mão do jogo anterior (o rodízio continua). Interpretação adotada, ainda **não confirmada** pelo usuário. Na revanche o mesmo rodízio foi **confirmado pelo usuário** em 2026-11-02 (`docs/protocolo-servidor.md`, seção "Revanche").
+- **Entre jogos**: os pontos voltam a 0, as duplas e os assentos permanecem. O pé do jogo seguinte é o assento que vem depois do pé que deu a última mão do jogo anterior (o rodízio continua). Confirmado pelo usuário em 2026-11-02. O mesmo rodízio vale na revanche (`docs/protocolo-servidor.md`, seção "Revanche").
 - **Mão de onze/dez e mão de ferro** valem por jogo: reiniciam junto com o placar de pontos.
 - **Mesa encerrada por voto durante a série**: a série é cancelada, sem vencedor e sem estatística de vitória.
 - Não confundir com o "melhor de 3" da **mão**, que já é a regra das vazas: vence a mão quem faz 2 das 3 vazas.
