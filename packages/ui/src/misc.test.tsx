@@ -39,7 +39,7 @@ describe('AvatarPlaceholder', () => {
         nickname="bia"
         status="away"
         caption="sua vez"
-        team={1}
+        side="theirs"
         active
         layout="column"
       />,

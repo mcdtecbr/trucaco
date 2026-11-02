@@ -32,12 +32,29 @@ describe('betButtons', () => {
     expect(betButtons(['bet'])[0]?.detail).toBeUndefined();
   });
 
+  it('Paulista: truco aceito, próximo valor 6 vira "Seis!"; Mineiro: 4 truco, 6 seis, 8 oito', () => {
+    const b = (v: number) => betButtons(['bet'], { nextValue: v })[0];
+    expect(b(6)).toMatchObject({
+      label: 'Seis!',
+      detail: 'vale 6',
+      accessibilityLabel: 'Seis, vale 6',
+    });
+    expect(b(9)?.label).toBe('Nove!');
+    expect(b(12)?.label).toBe('Doze!');
+    expect(b(3)?.label).toBe('Truco!');
+    expect(b(4)?.label).toBe('Truco!');
+    expect(b(8)).toMatchObject({ label: 'Oito!', accessibilityLabel: 'Oito, vale 8' });
+    expect(b(10)?.label).toBe('Dez!');
+    expect(betButtons(['bet'], { raising: true, nextValue: 6 })[0]?.label).toBe('Seis!');
+    expect(betButtons(['bet'], { nextValue: 7 })[0]?.label).toBe('Truco!');
+  });
+
   it('aumentar com grito do valor (seis, oito, dez, doze)', () => {
     const r = (v: number) => betButtons(['bet'], { raising: true, nextValue: v })[0];
-    expect(r(6)?.accessibilityLabel).toBe('Pedir seis, vale 6');
-    expect(r(8)?.accessibilityLabel).toBe('Pedir oito, vale 8');
-    expect(r(12)?.accessibilityLabel).toBe('Pedir doze, vale 12');
-    expect(r(6)?.label).toBe('Aumentar');
+    expect(r(6)?.accessibilityLabel).toBe('Seis, vale 6');
+    expect(r(8)?.accessibilityLabel).toBe('Oito, vale 8');
+    expect(r(12)?.accessibilityLabel).toBe('Doze, vale 12');
+    expect(r(6)?.label).toBe('Seis!');
     expect(betButtons(['bet'], { raising: true })[0]?.accessibilityLabel).toBe('Aumentar');
   });
 
@@ -66,7 +83,7 @@ describe('BetButtons', () => {
     expect(html).toContain('role="toolbar"');
     expect(html.match(/role="button"/g)).toHaveLength(3);
     expect(html).toContain('aria-label="Aceitar, vale 3"');
-    expect(html).toContain('aria-label="Pedir seis, vale 6"');
+    expect(html).toContain('aria-label="Seis, vale 6"');
     expect(
       renderToStaticMarkup(<BetButtons legalActions={['play:3paus']} onPress={vi.fn()} />),
     ).toBe('');

@@ -39,8 +39,8 @@ export interface AvatarPlaceholderProps {
   readonly status?: AvatarStatus;
   /** Texto extra (ex.: "sua vez"). */
   readonly caption?: string;
-  /** Dupla 0 ou 1: cor do anel. */
-  readonly team?: 0 | 1;
+  /** Perspectiva: minha dupla (azul) ou adversária (laranja). Independe do número da dupla. */
+  readonly side?: 'mine' | 'theirs';
   /** Destaca quem joga agora. */
   readonly active?: boolean;
   readonly layout?: 'row' | 'column';
@@ -53,7 +53,7 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
   const empty = status === 'empty';
   const name = empty ? 'Vaga livre' : p.nickname;
   const column = p.layout === 'column';
-  const team = p.team === undefined ? null : p.team === 0 ? teamColors.a : teamColors.b;
+  const team = p.side === undefined ? null : teamColors[p.side];
   const parts = [
     name,
     status === undefined || empty ? null : STATUS_TEXT[status],

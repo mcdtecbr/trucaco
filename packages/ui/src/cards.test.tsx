@@ -61,7 +61,9 @@ describe('Card', () => {
   it('interativa: botão, estados desabilitado e selecionado, dentro dos 44 pt', () => {
     const on = renderToStaticMarkup(<Card rank="K" suit="espadas" onPress={vi.fn()} selected />);
     expect(on).toContain('role="button"');
-    expect(on).toContain('aria-selected="true"');
+    expect(on).toContain('aria-pressed="true"');
+    expect(on).not.toContain('aria-selected');
+    expect(on).toContain('aria-label="rei de espadas, selecionada"');
     expect(on).not.toContain('aria-disabled="true"');
     const off = renderToStaticMarkup(<Card rank="K" suit="espadas" onPress={vi.fn()} disabled />);
     expect(off).toContain('aria-disabled="true"');

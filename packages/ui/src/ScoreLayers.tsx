@@ -76,7 +76,7 @@ export function ScoreLayers(p: ScoreLayersProps) {
               <Text
                 style={[
                   styles.teamName,
-                  { color: team === 0 ? teamColors.a.main : teamColors.b.main },
+                  { color: team === p.myTeam ? teamColors.mine.main : teamColors.theirs.main },
                 ]}
                 numberOfLines={1}
               >

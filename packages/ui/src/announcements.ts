@@ -27,6 +27,12 @@ function cry(value: number): string {
   return c ?? `${value}`;
 }
 
+/** "Nós vencemos" / "Eles venceram" / "Ana e Eu venceram" (concordância com o nome da dupla). */
+function won(t: number, ctx: AnnounceContext): string {
+  const name = team(t, ctx);
+  return name === 'Nós' ? 'Nós vencemos' : `${name} venceram`;
+}
+
 function score(scores: readonly [number, number], ctx: AnnounceContext): string {
   return `${team(0, ctx)} ${scores[0]}, ${team(1, ctx)} ${scores[1]}`;
 }
@@ -49,7 +55,12 @@ export function announcementFor(event: PublicGameEvent, ctx: AnnounceContext): s
     }
     case 'cardPlayed': {
       const face = event.card === null ? null : parseFace(event.card);
-      if (event.covered && face === null) return `${who(event.seat, ctx)} jogou uma carta coberta.`;
+      if (event.covered) {
+        // A coberta é privada do dono: só ele ouve a identidade. Alheia nunca revela rank/naipe.
+        return event.seat === ctx.mySeat && face !== null
+          ? `Você jogou coberta: ${cardName(face.rank, face.suit)}.`
+          : `${who(event.seat, ctx)} jogou uma carta coberta.`;
+      }
       const name = face === null ? 'uma carta' : cardName(face.rank, face.suit);
       return `${who(event.seat, ctx)} jogou ${name}${event.blind ? ' às cegas' : ''}.`;
     }
@@ -64,7 +75,7 @@ export function announcementFor(event: PublicGameEvent, ctx: AnnounceContext): s
     case 'betRaised':
       return `${who(event.seat, ctx)} aumentou para ${cry(event.value)}. A mão passa a valer ${event.value} se aceitar.`;
     case 'betRun':
-      return `${who(event.seat, ctx)} correu. ${team(event.winnerTeam, ctx)} ganha ${pointsText(event.points)}.`;
+      return `${who(event.seat, ctx)} correu. ${pointsText(event.points)} para ${team(event.winnerTeam, ctx)}.`;
     case 'specialDecided': {
       const sp = specialText('maoDeOnze', ctx.variant)?.toLowerCase() ?? 'mão especial';
       return event.decision === 'play'
@@ -74,11 +85,11 @@ export function announcementFor(event: PublicGameEvent, ctx: AnnounceContext): s
     case 'handDecided':
       return event.winnerTeam === null
         ? `Fim da mão: empate, ninguém pontua. Placar: ${score(event.scores, ctx)}.`
-        : `Fim da mão: ${team(event.winnerTeam, ctx)} ganha ${pointsText(event.points)}. Placar: ${score(event.scores, ctx)}.`;
+        : `Fim da mão: ${pointsText(event.points)} para ${team(event.winnerTeam, ctx)}. Placar: ${score(event.scores, ctx)}.`;
     case 'gameDecided':
-      return `Fim de jogo: ${team(event.winnerTeam, ctx)} venceu por ${event.scores[event.winnerTeam]} a ${event.scores[event.winnerTeam === 0 ? 1 : 0]}.`;
+      return `Fim de jogo: ${won(event.winnerTeam, ctx)} por ${event.scores[event.winnerTeam]} a ${event.scores[event.winnerTeam === 0 ? 1 : 0]}.`;
     case 'seriesDecided':
-      return `Fim da série: ${team(event.winnerTeam, ctx)} venceu por ${event.games[event.winnerTeam]} a ${event.games[event.winnerTeam === 0 ? 1 : 0]}.`;
+      return `Fim da série: ${won(event.winnerTeam, ctx)} por ${event.games[event.winnerTeam]} a ${event.games[event.winnerTeam === 0 ? 1 : 0]}.`;
     case 'seriesCancelled':
       return 'A série foi cancelada.';
     default:

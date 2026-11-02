@@ -1,3 +1,4 @@
+import { teamColors } from './tokens';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ScoreLayers } from './ScoreLayers';
@@ -108,6 +109,20 @@ describe('ScoreLayers', () => {
     expect(html).toContain('Mão 1: 1 ponto para Nós (nas vazas)');
     expect(html).toContain('&lt;img');
     expect(html).not.toContain('<img');
+  });
+
+  it('cor do "Nós" é fixa (azul) nas duas duplas e a adversária é laranja', () => {
+    const hex = (c: string) => {
+      const n = Number.parseInt(c.slice(1), 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+    };
+    for (const my of [0, 1] as const) {
+      const html = renderToStaticMarkup(<ScoreLayers {...BASE} myTeam={my} />);
+      const nos = html.slice(html.indexOf('>Nós<') - 80, html.indexOf('>Nós<'));
+      const eles = html.slice(html.indexOf('>Eles<') - 80, html.indexOf('>Eles<'));
+      expect(nos).toContain(hex(teamColors.mine.main));
+      expect(eles).toContain(hex(teamColors.theirs.main));
+    }
   });
 
   it('nomes de dupla customizados', () => {

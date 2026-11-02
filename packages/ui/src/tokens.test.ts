@@ -29,10 +29,14 @@ describe('tokens de tema', () => {
       [colors.primary, colors.surface],
       [cardColors.red, cardColors.face],
       [cardColors.black, cardColors.face],
-      [teamColors.a.on, teamColors.a.main],
-      [teamColors.b.on, teamColors.b.main],
-      [teamColors.a.main, colors.surface],
-      [teamColors.b.main, colors.surface],
+      [cardColors.red, cardColors.faceDisabled],
+      [cardColors.black, cardColors.faceDisabled],
+      [teamColors.mine.main, colors.background],
+      [teamColors.theirs.main, colors.background],
+      [teamColors.mine.on, teamColors.mine.main],
+      [teamColors.theirs.on, teamColors.theirs.main],
+      [teamColors.mine.main, colors.surface],
+      [teamColors.theirs.main, colors.surface],
       [cardColors.backBorder, cardColors.back],
     ];
     for (const [fg, bg] of pairs) {

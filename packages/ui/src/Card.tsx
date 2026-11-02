@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Rank, Suit } from '@trucaco/protocol';
 import { SUIT_SYMBOL, cardName, isRedSuit } from './cardInfo';
 import { MIN_TOUCH, cardColors, cardSizes, fontWeight, radius, shadows } from './tokens';
@@ -45,7 +45,8 @@ export function Card(props: CardProps) {
     props.suit !== undefined &&
     props.covered !== true &&
     props.unknown !== true;
-  const label = props.accessibilityLabel ?? cardLabel(props);
+  const baseLabel = props.accessibilityLabel ?? cardLabel(props);
+  const label = props.selected === true ? `${baseLabel}, selecionada` : baseLabel;
   const interactive = props.onPress !== undefined;
   const disabled = props.disabled === true;
   const selected = props.selected === true;
@@ -64,6 +65,7 @@ export function Card(props: CardProps) {
     styles.card,
     { width: dim.width, height: dim.height },
     faceUp ? styles.face : styles.back,
+    faceUp && disabled && styles.faceDisabled,
     props.manilha === true && styles.manilha,
     selected && styles.selected,
     disabled && styles.disabled,
@@ -91,7 +93,7 @@ export function Card(props: CardProps) {
       accessibilityRole="button"
       accessibilityLabel={label}
       aria-disabled={disabled}
-      aria-selected={selected}
+      {...selectedProps(selected)}
       disabled={disabled}
       hitSlop={{ top: slopY, bottom: slopY, left: slopX, right: slopX }}
       onPress={props.onPress}
@@ -101,6 +103,21 @@ export function Card(props: CardProps) {
       {body}
     </Pressable>
   );
+}
+
+/**
+ * Estado "selecionada" por plataforma. Web: `aria-pressed` (aria-selected não vale para role=button;
+ * o RNW 0.21 o repassa ao DOM). Nativo: o RN 0.88 não tem `aria-pressed` em View/Pressable; a via
+ * é `aria-selected`, que vira `accessibilityState.selected` (View.js/Pressable.js).
+ */
+export function selectedProps(selected: boolean): {
+  'aria-pressed'?: boolean;
+  'aria-selected'?: boolean;
+} {
+  return Platform.select({
+    web: { 'aria-pressed': selected },
+    default: { 'aria-selected': selected },
+  });
 }
 
 function FaceBody({ rank, suit, dim }: { rank: Rank; suit: Suit; dim: CardDim }) {
@@ -158,7 +175,8 @@ const styles = StyleSheet.create({
   back: { backgroundColor: cardColors.back, borderColor: cardColors.backBorder },
   manilha: { borderColor: cardColors.manilha, borderWidth: 3 },
   selected: { borderColor: cardColors.selected, transform: [{ translateY: -10 }] },
-  disabled: { opacity: 0.55 },
+  disabled: { opacity: 0.85, borderStyle: 'dashed', shadowOpacity: 0, elevation: 0 },
+  faceDisabled: { backgroundColor: cardColors.faceDisabled },
   fill: { flex: 1 },
   backInner: {
     margin: 4,
@@ -171,11 +189,14 @@ const styles = StyleSheet.create({
   question: { color: cardColors.backBorder, fontWeight: fontWeight.heavy },
   mini: {
     position: 'absolute',
-    bottom: 2,
-    right: 2,
+    bottom: 3,
+    right: 3,
     backgroundColor: cardColors.face,
     borderRadius: 3,
-    paddingHorizontal: 2,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    borderWidth: 1,
+    borderColor: cardColors.faceBorder,
   },
   miniText: { fontWeight: fontWeight.bold },
   corner: { position: 'absolute', top: 2, left: 4, fontWeight: fontWeight.heavy },

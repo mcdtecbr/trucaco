@@ -50,3 +50,42 @@ export function startTicker(
   const handle = timers.setInterval(onTick, ms);
   return () => timers.clearInterval(handle);
 }
+
+export interface CountdownOptions {
+  readonly deadlineAt: number;
+  /** Relógio do cliente (padrão `Date.now`). */
+  readonly now?: () => number;
+  /** Servidor − cliente em ms (ver `clockOffsetMs` em `TurnTimer`). */
+  readonly clockOffsetMs?: number;
+  readonly onTick: () => void;
+  readonly ms?: number;
+  readonly timers?: TickTimers;
+}
+
+/**
+ * Tick periódico enquanto há prazo a vencer: sem prazo ou já expirado não liga nada; ao chegar a
+ * zero dispara o último tick e se desliga sozinho. Devolve o `stop` (idempotente).
+ */
+export function startCountdown(o: CountdownOptions): () => void {
+  const now = o.now ?? Date.now;
+  const offset = o.clockOffsetMs ?? 0;
+  const remaining = (): number => timerState(o.deadlineAt, now() + offset).remainingMs;
+  if (o.deadlineAt <= 0 || remaining() === 0) return () => {};
+  let stop: (() => void) | null = null;
+  let done = false;
+  const halt = (): void => {
+    done = true;
+    stop?.();
+    stop = null;
+  };
+  stop = startTicker(
+    () => {
+      if (done) return;
+      o.onTick();
+      if (remaining() === 0) halt();
+    },
+    o.ms ?? TICK_MS,
+    o.timers,
+  );
+  return halt;
+}

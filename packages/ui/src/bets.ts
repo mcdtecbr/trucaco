@@ -65,17 +65,19 @@ function spec(kind: BetButtonSpec['kind'], ctx: BetContext): BetButtonSpec {
   const cry = next === undefined ? undefined : betCry(next);
   switch (kind) {
     case 'bet': {
-      const label = ctx.raising === true ? 'Aumentar' : 'Truco!';
+      // Rótulo e fala derivam do grito do valor que o servidor/estado informou (Paulista 3/6/9/12,
+      // Mineiro 2/4/6/8/10/12); sem valor conhecido, texto genérico.
+      const label =
+        cry !== undefined ? `${cap(cry)}!` : ctx.raising === true ? 'Aumentar' : 'Truco!';
       const detail = next === undefined ? undefined : `vale ${next}`;
-      const spoken =
-        cry !== undefined && ctx.raising === true ? `Pedir ${cry}` : label.replace('!', '');
+      const spoken = label.replace('!', '');
       return {
         id: 'bet',
         kind,
         label,
         ...(detail !== undefined ? { detail } : {}),
         tone: 'primary',
-        accessibilityLabel: detail !== undefined ? `${cap(spoken)}, ${detail}` : cap(spoken),
+        accessibilityLabel: detail !== undefined ? `${spoken}, ${detail}` : spoken,
       };
     }
     case 'accept': {

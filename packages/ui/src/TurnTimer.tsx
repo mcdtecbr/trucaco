@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { startTicker, timerState } from './turn';
+import { startCountdown, timerState } from './turn';
 import { colors, fontSize, fontWeight, radius, spacing } from './tokens';
 
 export interface TurnTimerProps {
@@ -8,18 +8,29 @@ export interface TurnTimerProps {
   readonly deadlineAt: number;
   /** Relógio injetável (padrão `Date.now`). */
   readonly now?: () => number;
+  /**
+   * Diferença servidor − cliente em ms (`serverNow - Date.now()`), para o prazo `turnDeadlineAt`
+   * (epoch do servidor) não adiantar nem atrasar com o relógio do aparelho errado. O 3H calcula o
+   * offset (ex.: do `Date`/latência da conexão ou de uma mensagem com o horário do servidor); 0 = relógios iguais.
+   */
+  readonly clockOffsetMs?: number;
   readonly totalMs?: number;
 }
 
 /** Barra + contagem regressiva do turno. Só atualiza (a cada 250 ms) enquanto montada e com prazo. */
-export function TurnTimer({ deadlineAt, now = Date.now, totalMs }: TurnTimerProps) {
+export function TurnTimer({
+  deadlineAt,
+  now = Date.now,
+  clockOffsetMs = 0,
+  totalMs,
+}: TurnTimerProps) {
   const [, force] = useState(0);
   useEffect(() => {
-    if (deadlineAt <= 0) return undefined;
-    return startTicker(() => force((n) => n + 1));
-  }, [deadlineAt]);
+    return startCountdown({ deadlineAt, now, clockOffsetMs, onTick: () => force((n) => n + 1) });
+    // `now` injetado só muda em teste; religar a cada novo prazo ou offset.
+  }, [deadlineAt, clockOffsetMs]);
 
-  const s = timerState(deadlineAt, now(), totalMs);
+  const s = timerState(deadlineAt, now() + clockOffsetMs, totalMs);
   if (!s.active) return null;
   const pct = Math.round(s.fraction * 100);
   return (

@@ -55,20 +55,24 @@ describe('announcementFor', () => {
     expect(announcementFor({ type: 'betCalled', seat: 1, toLevel: 1, value: 7 }, CTX)).toContain(
       'pediu 7',
     );
-    expect(announcementFor(SAMPLES.betRun, CTX)).toBe('Jogador 4 correu. Nós ganha 3 pontos.');
+    expect(announcementFor(SAMPLES.betRun, CTX)).toBe('Jogador 4 correu. 3 pontos para Nós.');
   });
 
   it('fim de mão, de jogo e de série usam o ponto de vista do jogador', () => {
     expect(announcementFor(SAMPLES.handDecided, CTX)).toBe(
-      'Fim da mão: Nós ganha 3 pontos. Placar: Nós 7, Eles 6.',
+      'Fim da mão: 3 pontos para Nós. Placar: Nós 7, Eles 6.',
     );
     expect(
       announcementFor({ ...SAMPLES.handDecided, winnerTeam: null } as PublicGameEvent, CTX),
     ).toContain('empate');
-    expect(announcementFor(SAMPLES.gameDecided, CTX)).toBe('Fim de jogo: Eles venceu por 12 a 9.');
-    expect(announcementFor(SAMPLES.seriesDecided, CTX)).toBe('Fim da série: Nós venceu por 2 a 1.');
+    expect(announcementFor(SAMPLES.gameDecided, CTX)).toBe(
+      'Fim de jogo: Eles venceram por 12 a 9.',
+    );
+    expect(announcementFor(SAMPLES.seriesDecided, CTX)).toBe(
+      'Fim da série: Nós vencemos por 2 a 1.',
+    );
     const as1 = announcementFor(SAMPLES.handDecided, { ...CTX, mySeat: 1 });
-    expect(as1).toBe('Fim da mão: Eles ganha 3 pontos. Placar: Eles 7, Nós 6.');
+    expect(as1).toBe('Fim da mão: 3 pontos para Eles. Placar: Eles 7, Nós 6.');
   });
 
   it('mão de onze/dez, ferro e decisão especial', () => {
@@ -88,6 +92,39 @@ describe('announcementFor', () => {
     expect(announcementFor({ type: 'specialDecided', seat: 1, decision: 'run' }, CTX)).toBe(
       'Ana correu da mão de onze.',
     );
+  });
+
+  it('própria coberta é anunciada com a carta; alheia nunca revela a carta', () => {
+    expect(
+      announcementFor(
+        {
+          type: 'cardPlayed',
+          seat: 0,
+          card: { rank: '3', suit: 'paus' },
+          covered: true,
+          blind: false,
+        },
+        CTX,
+      ),
+    ).toBe('Você jogou coberta: três de paus.');
+    expect(
+      announcementFor(
+        {
+          type: 'cardPlayed',
+          seat: 1,
+          card: { rank: '3', suit: 'paus' },
+          covered: true,
+          blind: false,
+        },
+        CTX,
+      ),
+    ).toBe('Ana jogou uma carta coberta.');
+    expect(
+      announcementFor(
+        { type: 'cardPlayed', seat: 0, card: null, covered: true, blind: false },
+        CTX,
+      ),
+    ).toBe('Você jogou uma carta coberta.');
   });
 
   it('cartas: aberta, coberta, às cegas e vaza empatada', () => {
@@ -121,7 +158,18 @@ describe('announcementFor', () => {
       ...CTX,
       teamNames: ['Ana e Eu', 'Bia e Caio'],
     });
-    expect(t).toContain('Ana e Eu ganha');
+    expect(t).toContain('3 pontos para Ana e Eu.');
+    const g = announcementFor(SAMPLES.gameDecided, {
+      ...CTX,
+      teamNames: ['Ana e Eu', 'Bia e Caio'],
+    });
+    expect(g).toBe('Fim de jogo: Bia e Caio venceram por 12 a 9.');
+    expect(announcementFor({ type: 'gameDecided', winnerTeam: 0, scores: [12, 3] }, CTX)).toBe(
+      'Fim de jogo: Nós vencemos por 12 a 3.',
+    );
+    expect(announcementFor({ type: 'betRun', seat: 0, winnerTeam: 1, points: 1 }, CTX)).toBe(
+      'Você correu. 1 ponto para Eles.',
+    );
   });
 });
 

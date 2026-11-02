@@ -29,13 +29,17 @@ export const cardColors = {
   backBorder: '#D9E2FF',
   manilha: '#F2C14E',
   selected: '#5AA9FF',
-  disabledOverlay: 'rgba(15,42,30,0.55)',
+  /** Face de carta indisponível: cinza-areia (texto continua legível), com borda tracejada. */
+  faceDisabled: '#DDD9CA',
 } as const;
 
-/** Duplas A (assentos pares, dupla 0) e B (ímpares, dupla 1); cada cor tem a cor de texto sobre ela. */
+/**
+ * Cores FIXAS por perspectiva, não por número da dupla: azul = minha dupla ("Nós"), laranja =
+ * adversários ("Eles"), seja eu dupla 0 ou 1. Cada cor tem a cor de texto sobre ela.
+ */
 export const teamColors = {
-  a: { main: '#7CC6FE', on: '#08233A' },
-  b: { main: '#FFB26B', on: '#3A1D00' },
+  mine: { main: '#7CC6FE', on: '#08233A' },
+  theirs: { main: '#FFB26B', on: '#3A1D00' },
 } as const;
 
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 } as const;
@@ -78,9 +82,9 @@ export const WIDE_BREAKPOINT = 900;
 
 /** Dimensões das cartas por tamanho (largura x altura, proporção 5:7, e corpos de fonte internos). */
 export const cardSizes = {
-  sm: { width: 44, height: 62, rank: 14, suit: 12, center: 20, question: 24, mini: 9 },
-  md: { width: 64, height: 90, rank: 18, suit: 16, center: 34, question: 30, mini: 11 },
-  lg: { width: 84, height: 118, rank: 22, suit: 20, center: 44, question: 38, mini: 13 },
+  sm: { width: 44, height: 62, rank: 14, suit: 12, center: 20, question: 24, mini: 12 },
+  md: { width: 64, height: 90, rank: 18, suit: 16, center: 34, question: 30, mini: 15 },
+  lg: { width: 84, height: 118, rank: 22, suit: 20, center: 44, question: 38, mini: 18 },
 } as const;
 export type CardSize = keyof typeof cardSizes;
 
