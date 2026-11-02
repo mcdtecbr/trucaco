@@ -4,3 +4,4 @@
 - [Handoff Fase 3](handoff-fase-3.md) — estado após a 3J, próximo passo (Fase 4), pendências de produto, o que não foi validado, armadilhas do Windows/Git Bash para retomar
 - [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
 - [Resposta de aposta e onze/dez](decisao_resposta_aposta_onze_dez.md) — usuário: só um jogador responde truco/retruco; onze/dez: os dois decidem, um correr = dupla corre
+- [Ideia de arte: tela de carregamento](ideia_arte_tela_carregamento.md) — imagem conceito guardada para a Fase 7; sem marcas de terceiros, não está no repo
