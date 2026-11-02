@@ -10,6 +10,13 @@ import type { Card, PublicGameEvent, SeriesState, Seat } from '@trucaco/rules';
 import { legalActionIds, projectState } from './projection';
 import { createTableState } from './schema';
 
+/** Carta vista no JSON; `manilhaItem` = item do array público `hand.manilhaCards` (isento se for manilha fixa). */
+export interface Sighting {
+  path: string;
+  card: Card;
+  manilhaItem?: true;
+}
+
 export const key = (c: Card): string => `${c.rank}${c.suit}`;
 
 /** O que o detector precisa de um `Decoder`: o mapa de refs que ele guarda. */
@@ -50,7 +57,7 @@ export function cardsInText(text: string): Card[] {
  *   naipe, como `viraRank`/`viraSuit` ou nomes inventados);
  * - carta embutida em QUALQUER string (valores, itens de array de string, chaves de mapa).
  */
-export function sightings(node: unknown, path: string, out: { path: string; card: Card }[]): void {
+export function sightings(node: unknown, path: string, out: Sighting[]): void {
   if (typeof node === 'string') {
     for (const card of cardsInText(node)) out.push({ path, card });
     return;
@@ -64,6 +71,8 @@ export function sightings(node: unknown, path: string, out: { path: string; card
   const ranks = entries.filter(([, v]) => typeof v === 'string' && RANK_SET.has(v));
   const suits = entries.filter(([, v]) => typeof v === 'string' && SUIT_SET.has(v));
   for (const [rk, rv] of ranks) {
+    // `manilhaRank` é só um rank público (regra), sem naipe próprio: não forma carta com o irmão `viraSuit`.
+    if (rk === 'manilhaRank') continue;
     for (const [sk, sv] of suits) {
       const card = { rank: rv as Card['rank'], suit: sv as Card['suit'] };
       out.push({ path: `${path}.{${rk},${sk}}`, card });
@@ -76,11 +85,21 @@ export function sightings(node: unknown, path: string, out: { path: string; card
 }
 
 /** Mesma varredura sobre TODOS os refs que o decoder guarda (inclusive os soltos, fora da árvore). */
-export function refSightings(decoder: RefHolder): { path: string; card: Card }[] {
-  const out: { path: string; card: Card }[] = [];
+export function refSightings(decoder: RefHolder): Sighting[] {
+  const out: Sighting[] = [];
+  // Identidade dos ArraySchema `manilhaCards` (propriedade do nó Hand): só os itens deles são isentos.
+  const manilhaArrays = new Set<unknown>();
+  for (const ref of decoder.root.refs.values()) {
+    const arr = (ref as { manilhaCards?: unknown }).manilhaCards;
+    if (arr !== undefined && arr !== null) manilhaArrays.add(arr);
+  }
   for (const [id, ref] of decoder.root.refs) {
     const r = ref as { toJSON?: () => unknown };
+    const start = out.length;
     sightings(typeof r.toJSON === 'function' ? r.toJSON() : ref, `ref#${id}`, out);
+    if (manilhaArrays.has(ref)) {
+      for (let i = start; i < out.length; i++) (out[i] as Sighting).manilhaItem = true;
+    }
   }
   return out;
 }
@@ -158,10 +177,14 @@ export function leakViolations(
   const exact = opts.exact ?? true;
   const bad: string[] = [];
   const truth = truthFor(series, seat);
-  const found: { path: string; card: Card }[] = [];
+  const found: Sighting[] = [];
   sightings(json, 'state', found);
   if (opts.decoder !== undefined) found.push(...refSightings(opts.decoder));
+  // Manilhas fixas (Mineiro) são regra pública: só o campo `hand.manilhaCards` pode citá-las.
+  const fixed = new Set((series.match.hand.variant.fixedManilhas ?? []).map(key));
   for (const f of found) {
+    const inTree = /^(state|ref#\d+)(\.hand)?\.manilhaCards\[\d+\]$/.test(f.path);
+    if ((inTree || f.manilhaItem === true) && fixed.has(key(f.card))) continue;
     if (truth.forbidden.has(key(f.card))) {
       bad.push(`${label}: carta proibida ${key(f.card)} em ${f.path}`);
     } else if (exact && !truth.allowed.has(key(f.card))) {
@@ -210,7 +233,7 @@ export function leakViolations(
  */
 export function eventViolations(event: unknown, viewer: Seat, label: string): string[] {
   const e = event as PublicGameEvent;
-  const found: { path: string; card: Card }[] = [];
+  const found: Sighting[] = [];
   sightings(e, 'event', found);
   if (found.length === 0) return [];
   if (e.type !== 'cardPlayed') return [`${label}: carta em evento ${e.type}`];

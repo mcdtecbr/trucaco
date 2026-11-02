@@ -11,7 +11,7 @@
  * `privates[seat].ownCovered`. Carta às cegas (mão de ferro) é pública depois de jogada.
  */
 import type { Card } from '@trucaco/protocol';
-import { legalActions, pendingSeat, viewFor } from '@trucaco/rules';
+import { legalActions, manilhaRank, pendingSeat, viewFor } from '@trucaco/rules';
 import type { HandAction, HandView, PlayedCardView, SeriesState, Seat, Team } from '@trucaco/rules';
 import type { ArraySchema } from '@colyseus/schema';
 import {
@@ -87,6 +87,10 @@ export interface SharedSnapshot {
   };
   readonly hand: {
     readonly vira: Card | null;
+    readonly manilhaRank: string;
+    readonly manilhaCards: readonly string[];
+    readonly nextBetValue: number;
+    readonly pendingValue: number;
     readonly special: string;
     readonly specialTeam: number;
     readonly phase: string;
@@ -130,6 +134,21 @@ function publicPlay(p: PlayedCardView): PlaySnapshot {
   };
 }
 
+/**
+ * Valores de aposta a partir da escada do motor (`variant.betLadder`, indexada por `level`).
+ * `pendingValue`: degrau de `pending.toLevel`. `nextBetValue`: degrau seguinte ao pendente (aumento)
+ * ou ao nível atual (pedido); 0 se a escada acabou ou a mão não aceita aposta agora.
+ */
+function betValues(
+  ladder: readonly number[],
+  v: HandView,
+): { nextBetValue: number; pendingValue: number } {
+  const pendingValue = v.pending === null ? 0 : (ladder[v.pending.toLevel] ?? 0);
+  const open = v.phase === 'playing' || v.phase === 'betPending';
+  const base = v.pending === null ? v.level : v.pending.toLevel;
+  return { nextBetValue: open ? (ladder[base + 1] ?? 0) : 0, pendingValue };
+}
+
 /** O que todos os assentos veem. Independe do assento (usa a visão do 0 e mascara as cobertas). */
 export function sharedSnapshot(series: SeriesState): SharedSnapshot {
   const hand = series.match.hand;
@@ -150,6 +169,9 @@ export function sharedSnapshot(series: SeriesState): SharedSnapshot {
     },
     hand: {
       vira: v.vira === null ? null : plain(v.vira),
+      manilhaRank: manilhaRank(hand.variant, v.vira) ?? '',
+      manilhaCards: (hand.variant.fixedManilhas ?? []).map((c) => `${c.rank}${c.suit}`),
+      ...betValues(hand.variant.betLadder, v),
       special: v.special,
       specialTeam: v.specialTeam ?? -1,
       phase: v.phase,
@@ -307,6 +329,10 @@ export function projectState(
   const hand = state.hand;
   setIf(hand, 'viraRank', h.vira?.rank ?? '');
   setIf(hand, 'viraSuit', h.vira?.suit ?? '');
+  setIf(hand, 'manilhaRank', h.manilhaRank);
+  syncStrings(hand.manilhaCards, h.manilhaCards);
+  setIf(hand, 'nextBetValue', h.nextBetValue);
+  setIf(hand, 'pendingValue', h.pendingValue);
   setIf(hand, 'special', h.special);
   setIf(hand, 'specialTeam', h.specialTeam);
   setIf(hand, 'phase', h.phase);

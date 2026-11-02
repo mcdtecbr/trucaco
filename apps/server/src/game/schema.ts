@@ -41,6 +41,18 @@ export const HandSchema = schema(
     /** Vazio quando a variante não usa vira (Mineiro). */
     viraRank: t.string().default(''),
     viraSuit: t.string().default(''),
+    /**
+     * Manilha pública (derivada do motor). Paulista: `manilhaRank` = rank da manilha (vira + 1),
+     * `manilhaCards` vazio. Mineiro: `manilhaRank` '' e `manilhaCards` = as 4 fixas, da mais forte à
+     * mais fraca, no formato `<rank><suit>` (ex.: '4paus'). Vazios antes da primeira mão.
+     * Aditivo (PROTOCOL_VERSION não muda).
+     */
+    manilhaRank: t.string().default(''),
+    manilhaCards: t.array('string'),
+    /** Valor se a dupla da vez pedir/aumentar agora (escada do motor); 0 = indisponível. */
+    nextBetValue: t.uint8().default(0),
+    /** Valor da aposta pendente (`pending.toLevel` na escada); 0 se não há. */
+    pendingValue: t.uint8().default(0),
     special: t.string().default(''),
     specialTeam: t.int8(),
     /** '' antes da primeira mão. */

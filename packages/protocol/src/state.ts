@@ -55,6 +55,14 @@ export interface HandSnapshot {
   /** `''` quando a variante não usa vira. */
   readonly viraRank: string;
   readonly viraSuit: string;
+  /** Paulista: rank da manilha (derivada da vira); `''` no Mineiro ou antes da primeira mão. */
+  readonly manilhaRank: string;
+  /** Mineiro: manilhas fixas, da mais forte à mais fraca, `<rank><suit>` (ex.: `4paus`); vazio no Paulista. */
+  readonly manilhaCards: readonly string[];
+  /** Valor se a dupla da vez pedir/aumentar agora (escada da variante); 0 = indisponível. */
+  readonly nextBetValue: number;
+  /** Valor da aposta pendente; 0 se não há. */
+  readonly pendingValue: number;
   /** `normal` | `maoDeOnze` | `maoDeFerro` (ver `SpecialKind`). */
   readonly special: string;
   readonly specialTeam: number;

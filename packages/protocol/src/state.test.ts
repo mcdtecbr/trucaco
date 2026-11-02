@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RANKS, SUITS, parseLegalAction } from './index';
+import type { HandSnapshot } from './index';
 
 describe('parseLegalAction', () => {
   it('aceita todas as cartas em play e playCovered', () => {
@@ -65,5 +66,38 @@ describe('parseLegalAction', () => {
       ['bet'],
     ];
     for (const id of bad) expect(parseLegalAction(id)).toBeNull();
+  });
+});
+
+describe('HandSnapshot: campos de manilha e aposta (aditivos)', () => {
+  it('aceita manilha Paulista/Mineiro e valores de aposta', () => {
+    const base = {
+      viraRank: '',
+      viraSuit: '',
+      special: 'normal',
+      specialTeam: -1,
+      phase: 'playing',
+      turn: 0,
+      value: 1,
+      level: -1,
+      tricks: [],
+      current: [],
+    };
+    const paulista: HandSnapshot = {
+      ...base,
+      manilhaRank: '3',
+      manilhaCards: [],
+      nextBetValue: 3,
+      pendingValue: 0,
+    };
+    const mineiro: HandSnapshot = {
+      ...base,
+      manilhaRank: '',
+      manilhaCards: ['4paus', '7copas', 'Aespadas', '7ouros'],
+      nextBetValue: 4,
+      pendingValue: 0,
+    };
+    expect(paulista.nextBetValue).toBe(3);
+    expect(mineiro.manilhaCards).toHaveLength(4);
   });
 });

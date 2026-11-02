@@ -4,7 +4,9 @@
  */
 import {
   applySeriesAction,
+  PAULISTA,
   legalActions,
+  manilhaRank,
   mulberry32,
   startHand,
   startSeries,
@@ -186,6 +188,41 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
     }
   });
 
+  it('manilha e valores de aposta vêm do motor (Paulista, Mineiro, pendente, onze)', () => {
+    const paulista = build({ name: 'p', variant: 'paulista', ironHand: false, scores: [0, 0] });
+    const p = checkAllSeats(paulista.state)[0]?.hand;
+    const vira = paulista.series.match.hand.vira;
+    expect(p?.manilhaRank).toBe(manilhaRank(PAULISTA, vira));
+    expect(p?.manilhaRank).not.toBe('');
+    expect(p?.manilhaCards).toEqual([]);
+    expect(p).toMatchObject({ nextBetValue: 3, pendingValue: 0 });
+
+    const mineiro = build({ name: 'm', variant: 'mineiro', ironHand: false, scores: [2, 5] });
+    const m = checkAllSeats(mineiro.state)[0]?.hand;
+    expect(m?.manilhaRank).toBe('');
+    expect(m?.manilhaCards).toEqual(['4paus', '7copas', 'Aespadas', '7ouros']);
+    expect(m).toMatchObject({ nextBetValue: 4, pendingValue: 0 });
+
+    // Truco pendente (Paulista): pendente 3, próximo aumento 6.
+    const caller = paulista.series.match.hand.turn;
+    const r = applySeriesAction(paulista.series, { type: 'callBet', seat: caller }, mulberry32(7));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    projectState(r.state, paulista.state, { turnDeadlineAt: 1234 });
+    expect(checkAllSeats(paulista.state)[1]?.hand).toMatchObject({
+      pendingValue: 3,
+      nextBetValue: 6,
+    });
+
+    // Mão de onze: decisão especial, sem aposta disponível.
+    const onze = build({ name: 'o', variant: 'paulista', ironHand: true, scores: [11, 3] });
+    expect(checkAllSeats(onze.state)[0]?.hand).toMatchObject({
+      phase: 'specialDecision',
+      nextBetValue: 0,
+      pendingValue: 0,
+    });
+  });
+
   it('convenções do estado inicial: assento/dupla/índice ausente = -1, carta ausente = vazio', () => {
     const state = createTableState('ABCDEFGH', {
       variant: 'mineiro',
@@ -201,6 +238,12 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
     expect(snap.hand.viraRank).toBe(NO_CARD);
     expect(snap.hand.viraSuit).toBe(NO_CARD);
     expect(snap.hand.pending).toBeUndefined();
+    expect(snap.hand).toMatchObject({
+      manilhaRank: '',
+      manilhaCards: [],
+      nextBetValue: 0,
+      pendingValue: 0,
+    });
     expect(snap.phase).toBe('waiting');
     expectNoUndefinedRequired(snap);
     for (const p of snap.players) {

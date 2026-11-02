@@ -14,6 +14,9 @@ import { PlayedCardSchema, createTableState } from './schema';
 import type { SeatPrivateNode } from './schema';
 import { WireSim } from './testkit';
 
+/** JSON de cliente manipulável nos testes do detector. */
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
 const SEATS = [0, 1, 2, 3] as const;
 function checkClientView(json: unknown, series: SeriesState, seat: Seat, label: string): void {
   expect(leakViolations(json, series, seat, label)).toEqual([]);
@@ -200,6 +203,56 @@ describe('projeção: nenhum cliente recebe carta que não deve', () => {
     c0.view.add(state.privates.get('1') as SeatPrivateNode);
     sim.flush();
     expect(() => checkClientView(sim.json(c0), series, 0, 'vazou')).toThrow();
+  });
+
+  it('Mineiro: manilhas fixas só são isentas em hand.manilhaCards; em qualquer outro campo são acusadas', () => {
+    // Procura uma semente em que o assento 1 (adversário do 0) tenha uma manilha fixa na mão.
+    let found: { series: SeriesState; card: Card } | undefined;
+    for (let seed = 1; seed < 200 && found === undefined; seed++) {
+      const { series } = startScenario({
+        variant: 'mineiro',
+        ironHand: false,
+        format: 'single',
+        scores: [0, 0],
+        seed,
+      });
+      const fixed = series.match.hand.variant.fixedManilhas ?? [];
+      const card = (series.match.hand.hands[1] ?? []).find((c) =>
+        fixed.some((m) => key(m) === key(c)),
+      );
+      if (card !== undefined) found = { series, card };
+    }
+    expect(found).toBeDefined();
+    const { series, card } = found as { series: SeriesState; card: Card };
+    const state = createTableState('ABCD2345', {
+      variant: 'mineiro',
+      format: 'single',
+      ironHand: false,
+      visibility: 'private',
+    });
+    projectState(series, state);
+    const sim = new WireSim(state);
+    const c0 = sim.connect(0);
+    sim.flush();
+    const text = key(card);
+    const clean = sim.json(c0) as Json;
+    // (b) manilhaCards legítimo (tree e refs do decoder) não é acusado.
+    expect((clean.hand as { manilhaCards: string[] }).manilhaCards).toContain(text);
+    expect(leakViolations(clean, series, 0, 'ok', { decoder: c0.decoder })).toEqual([]);
+    // (a) a mesma string em outros campos é acusada.
+    const clone = (): Json => JSON.parse(JSON.stringify(clean));
+    const injections: Array<[string, (j: Json) => void]> = [
+      ['privates.hand', (j) => (j.privates['0'].hand = [...j.privates['0'].hand, text])],
+      ['players', (j) => (j.players[1].nickname = text)],
+      ['current', (j) => j.hand.current.push(text)],
+      ['partnerCards', (j) => j.privates['0'].partnerCards.push(text)],
+      ['manilhaCards fora do campo', (j) => (j.hand.tricks = [text])],
+    ];
+    for (const [name, inject] of injections) {
+      const j = clone();
+      inject(j);
+      expect(leakViolations(j, series, 0, name), name).not.toEqual([]);
+    }
   });
 
   it('mão de onze: partnerCards só para a dupla que decide, e some depois da decisão', () => {
