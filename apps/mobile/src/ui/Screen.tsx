@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
-import { MAX_COLUMN_WIDTH, colors, spacing } from '../theme';
+import { MAX_COLUMN_WIDTH, colors, spacing } from '@trucaco/ui';
 
 /** Coluna central (largura máxima ~480 no web), com rolagem. */
 export function Screen({ children, testID }: { children: ReactNode; testID?: string }) {

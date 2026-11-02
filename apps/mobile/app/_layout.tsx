@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { colors } from '../src/theme';
+import { colors } from '@trucaco/ui';
 
 export default function RootLayout() {
   return (

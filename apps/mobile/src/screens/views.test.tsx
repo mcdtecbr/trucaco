@@ -6,7 +6,7 @@ import type { HomeViewProps } from './HomeView';
 import { SettingsView } from './SettingsView';
 import { TablePlaceholderView, WaitingRoomView } from './WaitingRoomView';
 import type { WaitingRoomViewProps } from './WaitingRoomView';
-import { AvatarPlaceholder, initialOf } from '../ui/AvatarPlaceholder';
+import { AvatarPlaceholder, initialOf } from '@trucaco/ui';
 
 const noop = vi.fn();
 function home(over: Partial<HomeViewProps> = {}): string {

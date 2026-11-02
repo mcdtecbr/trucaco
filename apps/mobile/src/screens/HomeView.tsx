@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { withRetry } from '../i18n/errors';
 import { formatCodeDisplay } from '../lobby/codeInput';
 import type { LobbyBusy, LobbyError, LobbyScope, QueueView } from '../store/lobbyStore';
-import { spacing } from '../theme';
+import { spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
 import { ChoiceGroup, Toggle } from '../ui/Choice';
 import { Screen } from '../ui/Screen';

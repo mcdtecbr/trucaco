@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { MIN_TOUCH, colors, fontSize, radius, spacing } from '../theme';
+import { MIN_TOUCH, colors, fontSize, radius, spacing } from '@trucaco/ui';
 
 export interface ChoiceOption<T extends string> {
   value: T;

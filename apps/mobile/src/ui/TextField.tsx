@@ -1,6 +1,6 @@
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import type { TextInputProps } from 'react-native';
-import { MIN_TOUCH, colors, fontSize, radius, spacing } from '../theme';
+import { MIN_TOUCH, colors, fontSize, radius, spacing } from '@trucaco/ui';
 
 export interface TextFieldProps {
   label: string;

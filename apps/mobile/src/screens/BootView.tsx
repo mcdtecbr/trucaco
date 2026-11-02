@@ -1,5 +1,5 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { colors, spacing } from '../theme';
+import { colors, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
 import { Body, Title } from '../ui/Typography';
 
