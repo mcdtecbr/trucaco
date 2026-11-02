@@ -2,7 +2,7 @@ import { ERROR_CODES } from '@trucaco/protocol';
 import type { ClientMessage } from '@trucaco/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { errorMessage, hasMessage } from '../i18n/errors';
-import { snapshot, priv } from './snapshotFixtures';
+import { snapshot, priv, player } from './snapshotFixtures';
 import {
   BUSY_TIMEOUT_MS,
   LINGER_MS,
@@ -627,5 +627,194 @@ describe('rodada de correção 3H2: última vaza da mão', () => {
     ev(5, { type: 'trickDecided', index: 2, winnerSeat: 1, winnerTeam: 1 });
     expect(h.store.getState().lingering?.plays).toHaveLength(4);
     expect(h.store.getState().lingering?.winnerSeat).toBe(1);
+  });
+});
+
+describe('revanche', () => {
+  const finished = (over: Record<string, unknown> = {}) =>
+    snapshot({
+      phase: 'finished',
+      series: { winnerTeam: 0 },
+      rematchDeadlineAt: 2_000_000,
+      hand: { phase: 'finished', turn: -1, actingSeat: -1 },
+      privates: priv(0),
+      ...over,
+    });
+
+  it('voteRematch só com a janela aberta e uma vez só', () => {
+    const { ctl, sent } = setup();
+    expect(ctl.voteRematch()).toBe(false);
+    ctl.applyState(snapshot());
+    expect(ctl.voteRematch()).toBe(false);
+    // Servidor antigo: finished com vencedor, mas sem prazo publicado.
+    ctl.applyState(finished({ rematchDeadlineAt: 0 }));
+    expect(ctl.voteRematch()).toBe(false);
+    ctl.applyState(finished({ series: { winnerTeam: -1 } }));
+    expect(ctl.voteRematch()).toBe(false);
+    expect(sent).toEqual([]);
+    ctl.applyState(finished());
+    expect(ctl.voteRematch()).toBe(true);
+    ctl.applyState(finished({ rematchVotes: [0] }));
+    expect(ctl.voteRematch()).toBe(false);
+    expect(sent).toEqual([{ type: 'voteRematch' }]);
+  });
+
+  it('com poucos humanos o cliente ainda envia: o servidor decide e devolve REMATCH_NOT_AVAILABLE', () => {
+    const { ctl, sent, store } = setup();
+    ctl.applyState(
+      finished({
+        players: [
+          player(0),
+          player(1, { isBot: true }),
+          player(2, { isBot: true }),
+          player(3, { isBot: true }),
+        ],
+      }),
+    );
+    expect(ctl.voteRematch()).toBe(true);
+    expect(sent).toEqual([{ type: 'voteRematch' }]);
+    ctl.onServerError({ code: 'REMATCH_NOT_AVAILABLE' });
+    expect(store.getState().errorCode).toBe('REMATCH_NOT_AVAILABLE');
+  });
+
+  it('voto, queda, reconexão e estado sem o voto: novo clique reenvia', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(finished());
+    expect(ctl.voteRematch()).toBe(true);
+    ctl.applyState(finished({ rematchVotes: [0] }));
+    expect(ctl.voteRematch()).toBe(false);
+    ctl.onReconnected();
+    ctl.applyState(finished({ rematchVotes: [] }));
+    expect(ctl.voteRematch()).toBe(true);
+    // Só o estado (sem reconexão): voto refletido que some libera de novo.
+    ctl.applyState(finished({ rematchVotes: [0] }));
+    ctl.applyState(finished({ rematchVotes: [] }));
+    expect(ctl.voteRematch()).toBe(true);
+    expect(sent).toHaveLength(3);
+  });
+
+  it('o voto limpa erro antigo, e entrar em finished limpa RATE_LIMITED da última jogada', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    store.getState().patch({ errorCode: 'RATE_LIMITED' });
+    ctl.applyState(finished());
+    expect(store.getState().errorCode).toBeNull();
+    store.getState().patch({ errorCode: 'RATE_LIMITED' });
+    ctl.voteRematch();
+    expect(store.getState().errorCode).toBeNull();
+  });
+
+  it('gameStarted antes do patch: fala "Nova partida começou." uma vez, antes de "Jogo 1"', () => {
+    const { ctl, said } = setup();
+    ctl.applyState(finished());
+    ctl.onEvent({ seq: 5, at: 1_000_000, event: { type: 'gameStarted', gameNumber: 1 } });
+    expect(said[0]).toBe('Nova partida começou.');
+    ctl.applyState(snapshot({ matchNumber: 2 }));
+    expect(said.filter((m) => m === 'Nova partida começou.')).toHaveLength(1);
+    // Jogo seguinte da série (fase playing): não é nova partida.
+    ctl.onEvent({ seq: 6, at: 1_000_000, event: { type: 'gameStarted', gameNumber: 2 } });
+    expect(said.filter((m) => m === 'Nova partida começou.')).toHaveLength(1);
+  });
+
+  it('REMATCH_NOT_AVAILABLE guarda o erro e não destrava a ação em voo', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.act('play:3paus');
+    ctl.applyState(finished());
+    store.getState().patch({ busy: true });
+    ctl.voteRematch();
+    ctl.onServerError({ code: 'REMATCH_NOT_AVAILABLE' });
+    expect(store.getState().errorCode).toBe('REMATCH_NOT_AVAILABLE');
+    expect(store.getState().busy).toBe(true);
+    expect(store.getState().chatError).toBeNull();
+    expect((ACTION_ERRORS as readonly string[]).includes('REMATCH_NOT_AVAILABLE')).toBe(false);
+  });
+
+  it('anuncia o voto de outro jogador, não o meu', () => {
+    const { ctl, said } = setup();
+    ctl.applyState(finished());
+    ctl.applyState(finished({ rematchVotes: [1] }));
+    ctl.applyState(finished({ rematchVotes: [0, 1] }));
+    expect(said).toEqual(['Bia quer jogar de novo.']);
+  });
+
+  it('matchNumber novo zera histórico, vaza retida, balões e anuncia; seq não é resync', () => {
+    const { ctl, store, said } = setup();
+    ctl.applyState(snapshot());
+    ctl.onEvent({ seq: 1, at: 1_000_000, event: { type: 'gameStarted' } });
+    ctl.onChat({ scope: 'table', seat: 1, text: 'gg' });
+    store.getState().patch({
+      history: [{ handNumber: 1, winnerTeam: 0, points: 1, reason: 'tricks', scores: [1, 0] }],
+      handLog: ['x'],
+      lingering: { plays: [], winnerSeat: 0, ownCovered: null },
+      busy: true,
+      selected: 'play:3paus',
+      errorCode: 'REMATCH_NOT_AVAILABLE',
+    });
+    ctl.applyState(finished({ rematchVotes: [0, 1, 2, 3] }));
+    expect(store.getState().history).toHaveLength(1);
+    ctl.applyState(snapshot({ matchNumber: 2 }));
+    const s = store.getState();
+    expect(s.history).toEqual([]);
+    expect(s.handLog).toEqual([]);
+    expect(s.lingering).toBeNull();
+    expect(s.bubbles).toEqual({});
+    expect(s.busy).toBe(false);
+    expect(s.selected).toBeNull();
+    expect(s.errorCode).toBeNull();
+    expect(s.vm?.matchNumber).toBe(2);
+    expect(said).toContain('Nova partida começou.');
+    // Mesmo matchNumber: nada de novo é anunciado.
+    const before = said.length;
+    ctl.applyState(snapshot({ matchNumber: 2 }));
+    expect(said).toHaveLength(before);
+    // `seq` continua (sem resync): os eventos seguintes da nova partida entram no histórico zerado.
+    ctl.onEvent({ seq: 2, at: 1_000_000, event: { type: 'handStarted', handNumber: 1 } });
+    ctl.onEvent({
+      seq: 3,
+      at: 1_000_000,
+      event: { type: 'handDecided', winnerTeam: 0, points: 1, reason: 'tricks', scores: [1, 0] },
+    });
+    expect(store.getState().history).toHaveLength(1);
+    expect(store.getState().history[0]).toMatchObject({ handNumber: 1, winnerTeam: 0 });
+  });
+});
+
+describe('revanche: duplo clique', () => {
+  it('segundo voteRematch antes do estado refletir não reenvia; o erro libera nova tentativa', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(
+      snapshot({
+        phase: 'finished',
+        series: { winnerTeam: 0 },
+        rematchDeadlineAt: 2_000_000,
+        hand: { phase: 'finished', turn: -1, actingSeat: -1 },
+        privates: priv(0),
+      }),
+    );
+    expect(ctl.voteRematch()).toBe(true);
+    expect(ctl.voteRematch()).toBe(false);
+    ctl.onServerError({ code: 'REMATCH_NOT_AVAILABLE' });
+    expect(ctl.voteRematch()).toBe(true);
+    expect(sent).toHaveLength(2);
+  });
+});
+
+describe('revanche: RATE_LIMITED', () => {
+  it('voto recusado por ritmo libera nova tentativa', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(
+      snapshot({
+        phase: 'finished',
+        series: { winnerTeam: 0 },
+        rematchDeadlineAt: 2_000_000,
+        hand: { phase: 'finished', turn: -1, actingSeat: -1 },
+        privates: priv(0),
+      }),
+    );
+    expect(ctl.voteRematch()).toBe(true);
+    ctl.onServerError({ code: 'RATE_LIMITED' });
+    expect(ctl.voteRematch()).toBe(true);
+    expect(sent).toHaveLength(2);
   });
 });

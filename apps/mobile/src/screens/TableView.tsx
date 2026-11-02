@@ -11,7 +11,6 @@ import {
   Card,
   ChatBubble,
   HandFan,
-  LiveRegion,
   MIN_TOUCH,
   PlayedCards,
   ScoreLayers,
@@ -63,7 +62,6 @@ export interface TableViewProps {
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
-  live: { message: string; nonce: number };
   on: {
     pressCard(id: LegalActionId): void;
     act(id: LegalActionId): void;
@@ -463,7 +461,6 @@ export function TableView(p: TableViewProps) {
           {probe}
         </Text>
       ) : null}
-      <LiveRegion message={p.live.message} nonce={p.live.nonce} />
       {/* O fundo some para o leitor de tela enquanto o diálogo está aberto. */}
       <View
         style={styles.flex}

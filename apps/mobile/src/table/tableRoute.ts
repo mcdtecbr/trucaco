@@ -45,6 +45,34 @@ export function finishedSummary(vm: TableViewModel | null): string | null {
   return `Série: Nós ${vm.series.games[me]} × ${vm.series.games[them]} Eles. Último jogo: ${game}`;
 }
 
+/** Janela de revanche pronta para desenhar. `null` = oculta (sem prazo publicado, mesa cancelada). */
+export interface RematchView {
+  /** Prazo no relógio do servidor. */
+  readonly deadlineAt: number;
+  readonly iVoted: boolean;
+  readonly votes: number;
+  /** Apelidos de quem já votou (inclui eu). */
+  readonly voters: readonly string[];
+  /** Posso votar agora (falta o prazo, que a tela confere com o relógio). */
+  readonly canVote: boolean;
+}
+
+export function rematchView(vm: TableViewModel | null): RematchView | null {
+  if (vm === null || !vm.rematchOpen) return null;
+  return {
+    deadlineAt: vm.rematchDeadlineAt,
+    iVoted: vm.iVotedRematch,
+    votes: vm.rematchVotes.length,
+    voters: vm.rematchVotes.map((s) => vm.seats[s]?.nickname ?? '').filter((n) => n !== ''),
+    canVote: !vm.iVotedRematch && vm.mySeat >= 0,
+  };
+}
+
+/** Segundos que faltam (arredondado para cima) no relógio do servidor; nunca negativo. */
+export function secondsLeft(deadlineAt: number, clientNow: number, clockOffsetMs: number): number {
+  return Math.max(0, Math.ceil((deadlineAt - (clientNow + clockOffsetMs)) / 1000));
+}
+
 export type FinishedOutcome = 'won' | 'lost' | 'cancelled' | 'unknown';
 
 export interface FinishedResult {

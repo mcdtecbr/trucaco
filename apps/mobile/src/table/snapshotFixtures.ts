@@ -59,6 +59,9 @@ export function snapshot(
     },
     turnDeadlineAt: 0,
     cancelVotes: [],
+    rematchVotes: [],
+    rematchDeadlineAt: 0,
+    matchNumber: 1,
     privates: privates ?? {
       '0': {
         seat: 0,

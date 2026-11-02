@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { projectTable } from '../table/projectTable';
-import { priv, snapshot } from '../table/snapshotFixtures';
-import { finishedResult } from '../table/tableRoute';
+import { player, priv, snapshot } from '../table/snapshotFixtures';
+import { finishedResult, rematchView, secondsLeft } from '../table/tableRoute';
 import { ChatPanel } from './ChatPanel';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
@@ -35,7 +35,6 @@ function html(state: unknown, over: Partial<TableViewProps> = {}): string {
     deadlineAt: 0,
     clockOffsetMs: 0,
     leaveConfirm: false,
-    live: { message: '', nonce: 0 },
     on: {
       pressCard: noop,
       act: noop,
@@ -172,11 +171,9 @@ describe('TableView', () => {
           ],
         },
       }),
-      { live: { message: 'Bia jogou rei de ouros.', nonce: 1 } },
     );
     expect(out).toContain('rei de ouros');
     expect(out).toContain('coberta');
-    expect(out).toContain('aria-live');
   });
 });
 
@@ -447,5 +444,84 @@ describe('FinishedView', () => {
 
   it('sem estado, resultado desconhecido', () => {
     expect(finishedResult(null).outcome).toBe('unknown');
+  });
+});
+
+describe('FinishedView: revanche', () => {
+  const done = (over: Record<string, unknown> = {}) =>
+    projectTable(
+      snapshot({
+        phase: 'finished',
+        series: { winnerTeam: 0 },
+        game: { scores: [12, 9] },
+        rematchDeadlineAt: Date.now() + 25_000,
+        hand: { phase: 'finished', turn: -1, actingSeat: -1 },
+        ...over,
+      }),
+    );
+  const render = (vm: ReturnType<typeof projectTable>, extra: object = {}) =>
+    renderToStaticMarkup(
+      <FinishedView
+        result={finishedResult(vm)}
+        myTeam={0}
+        history={[]}
+        onLeave={noop}
+        rematch={rematchView(vm)}
+        onRematch={noop}
+        {...extra}
+      />,
+    );
+
+  it('janela aberta: botão, contagem regressiva e quem já votou', () => {
+    const out = render(done({ rematchVotes: [1] }));
+    expect(out).toContain('Jogar de novo');
+    expect(out).toContain('Tempo para decidir:');
+    expect(out).toContain('Querem jogar de novo: Bia');
+    expect(out).toContain('Voltar ao início');
+  });
+
+  it('depois do meu voto: aguardando a mesa (x/y) e botão desabilitado', () => {
+    const out = render(done({ rematchVotes: [0, 1] }));
+    expect(out).toContain('Aguardando a mesa (2 votaram)');
+    expect(tagWith(out, 'Aguardando a mesa (2 votaram)')).toContain('aria-disabled="true"');
+    expect(out).not.toContain('>Jogar de novo<');
+  });
+
+  it('poucos humanos: o botão segue habilitado (o servidor decide) e há só a nota informativa', () => {
+    const out = render(
+      done({
+        players: [
+          player(0),
+          player(1, { isBot: true }),
+          player(2, { isBot: true }),
+          player(3, { isBot: true }),
+        ],
+      }),
+    );
+    expect(tagWith(out, 'Jogar de novo')).not.toContain('disabled');
+    expect(out).toContain('A revanche precisa de pelo menos 2 jogadores conectados.');
+  });
+
+  it('oculta sem prazo publicado (servidor antigo) e com a mesa cancelada', () => {
+    expect(render(done({ rematchDeadlineAt: 0 }))).not.toContain('Jogar de novo');
+    expect(render(done({ series: { winnerTeam: -1 } }))).not.toContain('Jogar de novo');
+    expect(rematchView(done({ rematchDeadlineAt: 0 }))).toBeNull();
+    expect(rematchView(null)).toBeNull();
+  });
+
+  it('prazo vencido desabilita e avisa; erro do servidor aparece', () => {
+    const out = render(done({ rematchDeadlineAt: 1 }), {
+      errorText: 'A revanche não está disponível.',
+    });
+    expect(tagWith(out, 'Jogar de novo')).toContain('aria-disabled="true"');
+    expect(out).toContain('O tempo para jogar de novo acabou.');
+    expect(out).toContain('A revanche não está disponível.');
+  });
+
+  it('secondsLeft usa o offset do servidor e nunca fica negativo', () => {
+    expect(secondsLeft(10_000, 4_000, 0)).toBe(6);
+    expect(secondsLeft(10_000, 4_000, 3_000)).toBe(3);
+    expect(secondsLeft(10_000, 9_500, 0)).toBe(1);
+    expect(secondsLeft(10_000, 20_000, 0)).toBe(0);
   });
 });

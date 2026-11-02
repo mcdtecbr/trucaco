@@ -1,6 +1,6 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { useAnnouncer, useLayoutMode } from '@trucaco/ui';
+import { LiveRegion, useAnnouncer, useLayoutMode } from '@trucaco/ui';
 import type { ChatScope, LegalActionId } from '@trucaco/protocol';
 import type { ChatPanelProps } from './ChatPanel';
 import { errorMessage } from '../i18n/errors';
@@ -9,7 +9,13 @@ import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../p
 import { getApp } from '../services/app';
 import { useRoomStore } from '../store/roomStore';
 import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
-import { connectionBanner, finishedResult, holdRoom, roomViewFor } from '../table/tableRoute';
+import {
+  connectionBanner,
+  finishedResult,
+  holdRoom,
+  rematchView,
+  roomViewFor,
+} from '../table/tableRoute';
 import { buildChatPanelProps } from './chatPanelProps';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
@@ -97,45 +103,72 @@ function JoinedTable() {
     void shareCode(roomCode).then((o) => setFeedback(o === 'dismissed' ? 'idle' : o));
   }, [roomCode]);
 
-  const view = roomViewFor(tablePhase);
-  if (view === 'playing') return <PlayingTable onLeave={leave} />;
-  if (view === 'finished') return <FinishedTable onLeave={leave} />;
+  // O leitor de tela fala por aqui em TODAS as visões (votos de revanche na tela final, "Nova partida
+  // começou" na transição para a mesa): o anunciante não pode depender de qual visão está montada.
+  const { announce, live } = useAnnouncer();
+  useEffect(() => {
+    const table = getApp().table;
+    table.setAnnouncer(announce);
+    return () => table.setAnnouncer(null);
+  }, [announce]);
 
+  const view = roomViewFor(tablePhase);
+  let body;
+  if (view === 'playing') body = <PlayingTable onLeave={leave} />;
+  else if (view === 'finished') body = <FinishedTable onLeave={leave} />;
+  else
+    body = (
+      <WaitingRoomView
+        roomCode={roomCode}
+        seats={seats}
+        mySeat={mySeat}
+        connection={connection}
+        errorCode={errorCode}
+        shareLabel={SHARE_LABEL}
+        shareDoneText={SHARE_DONE_TEXT}
+        shareFailedText={SHARE_FAILED_TEXT}
+        shareFeedback={feedback}
+        chatPanel={chatPanel}
+        chatUnreadTotal={chatUnreadTotal}
+        on={{
+          share,
+          leave,
+          openChat: () => {
+            // Na espera só existe a Mesa: não deixa o store em 'partner'.
+            getApp().table.setChatTab('table');
+            getApp().table.setChatOpen(true);
+          },
+        }}
+      />
+    );
+  // Uma única região viva para espera, mesa e fim de partida.
   return (
-    <WaitingRoomView
-      roomCode={roomCode}
-      seats={seats}
-      mySeat={mySeat}
-      connection={connection}
-      errorCode={errorCode}
-      shareLabel={SHARE_LABEL}
-      shareDoneText={SHARE_DONE_TEXT}
-      shareFailedText={SHARE_FAILED_TEXT}
-      shareFeedback={feedback}
-      chatPanel={chatPanel}
-      chatUnreadTotal={chatUnreadTotal}
-      on={{
-        share,
-        leave,
-        openChat: () => {
-          // Na espera só existe a Mesa: não deixa o store em 'partner'.
-          getApp().table.setChatTab('table');
-          getApp().table.setChatOpen(true);
-        },
-      }}
-    />
+    <>
+      {body}
+      <LiveRegion message={live.message} nonce={live.nonce} />
+    </>
   );
 }
 
 function FinishedTable({ onLeave }: { onLeave(): void }) {
   const vm = useTableStore((s) => s.vm);
   const history = useTableStore((s) => s.history);
+  const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
+  const errorCode = useTableStore((s) => s.errorCode);
   return (
     <FinishedView
       result={finishedResult(vm)}
       myTeam={vm?.myTeam ?? 0}
       history={history}
       onLeave={onLeave}
+      rematch={rematchView(vm)}
+      clockOffsetMs={clockOffsetMs}
+      errorText={
+        errorCode === 'REMATCH_NOT_AVAILABLE' || errorCode === 'RATE_LIMITED'
+          ? errorMessage(errorCode)
+          : null
+      }
+      onRematch={() => void getApp().table.voteRematch()}
     />
   );
 }
@@ -163,14 +196,6 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
   const deadlineAt = useTableStore((s) => effectiveDeadline(s));
   const leaveConfirm = useTableStore((s) => s.leaveConfirm);
-  const { announce, live } = useAnnouncer();
-
-  // Anúncios: o controlador entrega as frases; esta tela as fala (fila respeitada pelo useAnnouncer).
-  useEffect(() => {
-    const table = getApp().table;
-    table.setAnnouncer(announce);
-    return () => table.setAnnouncer(null);
-  }, [announce]);
 
   const table = getApp().table;
   if (vm === null) return null;
@@ -195,7 +220,6 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       deadlineAt={deadlineAt}
       clockOffsetMs={clockOffsetMs}
       leaveConfirm={leaveConfirm}
-      live={live}
       on={{
         pressCard: (id: LegalActionId) => table.pressCard(id),
         act: (id: LegalActionId) => void table.act(id),

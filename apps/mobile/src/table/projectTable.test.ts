@@ -337,3 +337,57 @@ describe('projectTable: legalActions e a própria coberta', () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe('projectTable: revanche', () => {
+  const done = (over: Record<string, unknown> = {}) =>
+    projectTable(
+      snapshot({
+        phase: 'finished',
+        series: { winnerTeam: 0 },
+        rematchDeadlineAt: 5_000,
+        rematchVotes: [1],
+        ...over,
+      }),
+    );
+
+  it('janela aberta: fim com vencedor e prazo publicado', () => {
+    const vm = done();
+    expect(vm.rematchOpen).toBe(true);
+    expect(vm.rematchDeadlineAt).toBe(5_000);
+    expect(vm.rematchVotes).toEqual([1]);
+    expect(vm.iVotedRematch).toBe(false);
+  });
+
+  it('fechada: sem prazo (servidor antigo), mesa cancelada, em andamento', () => {
+    expect(done({ rematchDeadlineAt: 0 }).rematchOpen).toBe(false);
+    expect(done({ series: { winnerTeam: -1 } }).rematchOpen).toBe(false);
+    expect(projectTable(snapshot({ rematchDeadlineAt: 5_000 })).rematchOpen).toBe(false);
+    const old = snapshot({ phase: 'finished', series: { winnerTeam: 0 } });
+    delete old['rematchVotes'];
+    delete old['rematchDeadlineAt'];
+    delete old['matchNumber'];
+    const vm = projectTable(old);
+    expect(vm.rematchOpen).toBe(false);
+    expect(vm.rematchVotes).toEqual([]);
+    expect(vm.matchNumber).toBe(1);
+  });
+
+  it('iVotedRematch usa o meu assento; humanos conectados ignoram bot e ausentes', () => {
+    const vm = done({
+      rematchVotes: [0, 1],
+      players: [
+        player(0),
+        player(1),
+        player(2, { isBot: true, status: 'connected' }),
+        player(3, { status: 'away' }),
+      ],
+    });
+    expect(vm.iVotedRematch).toBe(true);
+    expect(done({ rematchVotes: [0], privates: priv(1) }).iVotedRematch).toBe(false);
+  });
+
+  it('matchNumber vem do servidor e tem piso 1', () => {
+    expect(projectTable(snapshot({ matchNumber: 3 })).matchNumber).toBe(3);
+    expect(projectTable(snapshot({ matchNumber: 0 })).matchNumber).toBe(1);
+  });
+});

@@ -58,6 +58,8 @@ interface Player {
   beforeReconnect: (() => Promise<void>) | null;
   /** Quantas amostras entraram no estimador de offset do relógio (replay não pode somar). */
   offsetSamples: number;
+  /** `matchNumber` e pé (`game.pe`) de cada estado bruto, sem repetição consecutiva. */
+  pes: { match: number; pe: number }[];
 }
 
 let server: RunningServer;
@@ -120,6 +122,7 @@ async function newPlayer(): Promise<Player> {
     rawStates: 0,
     beforeReconnect: null,
     offsetSamples: 0,
+    pes: [],
   };
   // Sorvedouro que registra o que chega e repassa ao controlador real.
   const sink = {
@@ -131,6 +134,10 @@ async function newPlayer(): Promise<Player> {
         hand?: { phase?: string; actingSeat?: number; specialTeam?: number };
         privates?: Record<string, { seat?: number; legalActions?: string[] }>;
       };
+      const rawState = json as { matchNumber?: number; game?: { pe?: number } };
+      const lastPe = p.pes.at(-1);
+      const curPe = { match: rawState.matchNumber ?? 1, pe: rawState.game?.pe ?? -1 };
+      if (lastPe?.match !== curPe.match || lastPe.pe !== curPe.pe) p.pes.push(curPe);
       if (state.game?.handNumber === 1) scan(json, false, p.seenPublic, p.seenPrivate);
       for (const mine of Object.values(state.privates ?? {})) {
         if ((mine.legalActions?.length ?? 0) === 0 || mine.seat === undefined) continue;
@@ -478,4 +485,93 @@ describe('mesa jogável contra o servidor real', () => {
     expect(victim.errors).toEqual([]);
     victim.beforeReconnect = null;
   }, 60_000);
+});
+
+describe('revanche contra o servidor real', () => {
+  it('série decidida em uma mão: todos votam, matchNumber 2, mesa volta a jogar com o pé rodado', async () => {
+    const ps = await seatedAndPlaying();
+    // Motor: pede/aumenta a aposta sempre que pode e aceita; a mão sobe até 12 e decide o jogo (e a série).
+    const GAP_MS = 220;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const drive = ps.map((p) => {
+      let lastAct = 0;
+      let waiting = false;
+      const step = (): void => {
+        const st = p.tableStore.getState();
+        const vm = st.vm;
+        if (p.errors.length > 0) return;
+        if (vm === null || vm.phase !== 'playing' || !vm.canAct || st.busy || waiting) return;
+        if (vm.matchNumber !== 1) return;
+        if (vm.handPhase === 'betPending' && vm.actingSeat !== vm.mySeat) return;
+        const first = vm.legalActions.includes('bet')
+          ? 'bet'
+          : (vm.legalActions.find((a) => a === 'accept') ?? vm.legalActions[0]);
+        if (first === undefined) return;
+        const wait = lastAct + GAP_MS - Date.now();
+        if (wait > 0) {
+          waiting = true;
+          timers.push(
+            setTimeout(() => {
+              waiting = false;
+              step();
+            }, wait),
+          );
+          return;
+        }
+        lastAct = Date.now();
+        p.table.act(first);
+      };
+      step();
+      return p.tableStore.subscribe(step);
+    });
+    await waitFor(
+      () => ps.every((p) => p.tableStore.getState().vm?.rematchOpen === true),
+      'janela de revanche aberta para todos',
+      90_000,
+    );
+    for (const off of drive) off();
+    for (const t of timers) clearTimeout(t);
+    for (const p of ps) {
+      const vm = p.tableStore.getState().vm!;
+      expect(vm.matchNumber).toBe(1);
+      expect(vm.rematchVotes).toEqual([]);
+      expect(vm.rematchDeadlineAt).toBeGreaterThan(0);
+    }
+    const lastPe = ps[0]!.pes.filter((x) => x.match === 1).at(-1)!.pe;
+    const history1 = ps[0]!.tableStore.getState().history.length;
+    expect(history1).toBeGreaterThan(0);
+
+    // O servidor exige 150 ms entre ações do mesmo assento: quem jogou a última carta espera um pouco.
+    await new Promise((r) => setTimeout(r, 400));
+    // Todos votam (o controlador envia; um segundo voto é barrado no cliente).
+    for (const p of ps) {
+      expect(p.table.voteRematch()).toBe(true);
+      expect(p.table.voteRematch()).toBe(false);
+    }
+    await waitFor(
+      () => ps.every((p) => p.tableStore.getState().vm?.matchNumber === 2),
+      'matchNumber 2 em todos',
+    );
+    await waitFor(
+      () => ps.every((p) => p.tableStore.getState().vm?.phase === 'playing'),
+      'mesa volta a jogar',
+    );
+    for (const p of ps) {
+      const s = p.tableStore.getState();
+      expect(s.vm?.rematchOpen).toBe(false);
+      expect(s.vm?.rematchDeadlineAt).toBe(0);
+      expect(s.vm?.rematchVotes).toEqual([]);
+      expect(s.vm?.scores).toEqual([0, 0]);
+      expect(s.vm?.series.winnerTeam).toBe(-1);
+      expect(p.roomStore.getState().connection).toBe('connected');
+      expect(p.desyncs).toBe(0);
+      expect(p.errors).toEqual([]);
+      p.seqs.forEach((q, i) => {
+        if (i > 0) expect(q).toBe(p.seqs[i - 1]! + 1);
+      });
+    }
+    // Rodízio do pé: o pé da primeira mão da partida 2 é o seguinte ao da última mão da partida 1.
+    const firstPe2 = ps[0]!.pes.find((x) => x.match === 2)!.pe;
+    expect(firstPe2).toBe((lastPe + 1) % 4);
+  }, 150_000);
 });

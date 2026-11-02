@@ -110,6 +110,8 @@ export interface TableController {
   setCoverMode(on: boolean): void;
   /** Voto para cancelar a mesa (mensagem de sala, não faz parte de `legalActions`). */
   voteCancel(): boolean;
+  /** Voto "Jogar de novo": só com a janela de revanche aberta e uma vez por partida. */
+  voteRematch(): boolean;
   /** Valida com o protocol e envia. `false` = recusado (erro em `chatError`) ou sem sala. */
   sendChat(scope: ChatScope, text: string): boolean;
   sendPhrase(scope: ChatScope, phraseId: string): boolean;
@@ -189,7 +191,11 @@ export function createTableController(opts: TableControllerOptions): TableContro
   let lingerTimer: unknown = null;
   let handNumber = 0;
   let replayUntil = 0;
-  let lastSend: 'action' | 'chat' | 'other' = 'other';
+  let lastSend: 'action' | 'chat' | 'rematch' | 'other' = 'other';
+  /** Partida (`matchNumber`) para a qual já enviei `voteRematch`: barra o duplo clique antes do estado refletir. */
+  let rematchSentFor = 0;
+  /** "Nova partida começou." já foi dita pelo evento `gameStarted` (que chega antes do patch de estado). */
+  let matchAnnounced = false;
   /** Cartas da vaza em curso, montadas dos eventos; e a última vaza fechada (para a retenção). */
   let trickPlays: PlayedView[] = [];
   let closedTrick: ClosedTrick | null = null;
@@ -216,13 +222,37 @@ export function createTableController(opts: TableControllerOptions): TableContro
       cur.selected !== null && (vm.legalActions as readonly string[]).includes(cur.selected)
         ? cur.selected
         : null;
-    const release = cur.busy && actionSignature(vm) !== busySignature;
+    // Revanche iniciada (ou reconexão numa partida nova): `matchNumber` mudou. Não é resync (seq segue).
+    const newMatch = cur.vm !== null && vm.matchNumber !== cur.vm.matchNumber;
+    if (newMatch) {
+      clear(busyTimer);
+      clear(lingerTimer);
+      busyTimer = lingerTimer = null;
+      for (const h of bubbleTimers.values()) timers.clearTimeout(h);
+      bubbleTimers.clear();
+      trickPlays = [];
+      closedTrick = null;
+      if (!matchAnnounced) say('Nova partida começou.');
+      matchAnnounced = false;
+    } else if (cur.vm !== null) {
+      // O servidor poda o voto de quem reconectou: o voto local deixa de valer.
+      if (cur.vm.iVotedRematch && !vm.iVotedRematch) rematchSentFor = 0;
+      for (const seat of vm.rematchVotes) {
+        if (cur.vm.rematchVotes.includes(seat) || seat === vm.mySeat) continue;
+        const nick = vm.seats[seat]?.nickname ?? '';
+        say(`${nick === '' ? 'Um jogador' : nick} quer jogar de novo.`);
+      }
+    }
+    // Um RATE_LIMITED sobrando da última jogada não deve aparecer na tela final.
+    const enteredFinished =
+      cur.vm !== null && cur.vm.phase !== 'finished' && vm.phase === 'finished';
+    const release = !newMatch && cur.busy && actionSignature(vm) !== busySignature;
     if (release) {
       clear(busyTimer);
       busyTimer = null;
     }
     const canCover = vm.legalActions.some((id) => parseLegalAction(id)?.kind === 'playCovered');
-    const ling = lingeringFor(cur.vm, vm, closedTrick);
+    const ling = newMatch ? null : lingeringFor(cur.vm, vm, closedTrick);
     if (ling !== null) {
       clear(lingerTimer);
       lingerTimer = timers.setTimeout(() => {
@@ -234,6 +264,19 @@ export function createTableController(opts: TableControllerOptions): TableContro
     cur.patch({
       vm,
       selected,
+      ...(enteredFinished ? { errorCode: null } : {}),
+      ...(newMatch
+        ? {
+            history: [],
+            handLog: [],
+            lingering: null,
+            bubbles: {},
+            busy: false,
+            coverMode: false,
+            errorCode: null,
+            selected: null,
+          }
+        : {}),
       ...(release ? { busy: false } : {}),
       ...(cur.coverMode && !canCover ? { coverMode: false } : {}),
       ...(ling !== null ? { lingering: ling } : {}),
@@ -296,7 +339,20 @@ export function createTableController(opts: TableControllerOptions): TableContro
           handNumber = e.handNumber;
           patch.handLog = [];
         }
-        if (e.type === 'gameStarted') patch.history = [];
+        if (e.type === 'gameStarted') {
+          patch.history = [];
+          // Revanche: o evento pode chegar antes do patch com o novo `matchNumber`. Série decidida + novo
+          // jogo = nova partida; fala antes de "Jogo 1 começou" e o patch não repete.
+          if (
+            !replay &&
+            cur.vm !== null &&
+            cur.vm.phase === 'finished' &&
+            cur.vm.series.winnerTeam >= 0
+          ) {
+            matchAnnounced = true;
+            say('Nova partida começou.');
+          }
+        }
         if (e.type === 'handStarted') {
           trickPlays = [];
           closedTrick = null;
@@ -432,6 +488,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const raw = (payload as { code?: unknown } | null)?.code;
       const code = isErrorCode(raw) ? raw : 'UNKNOWN';
       const ambiguous = AMBIGUOUS_ERRORS.includes(code);
+      // Voto recusado: a janela pode estar errada para mim; permite tentar de novo se o estado reabrir.
+      if (code === 'REMATCH_NOT_AVAILABLE' || lastSend === 'rematch') rematchSentFor = 0;
       if (code === 'CHAT_BLOCKED' || (ambiguous && lastSend === 'chat')) {
         store.getState().patch({ chatError: code });
         return;
@@ -445,6 +503,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
     onReconnected() {
       clear(noticeTimer);
       replayUntil = now() + REPLAY_WINDOW_MS;
+      // O servidor poda o voto de quem caiu: o próximo estado diz se ainda vale; até lá permite reenviar.
+      rematchSentFor = 0;
       unlock();
       store.getState().patch({ notice: 'reconnected' });
       noticeTimer = timers.setTimeout(() => {
@@ -476,6 +536,18 @@ export function createTableController(opts: TableControllerOptions): TableContro
       if (vm === null || vm.phase !== 'playing' || vm.iVotedCancel) return false;
       if (!opts.send({ type: 'voteCancel' })) return false;
       lastSend = 'other';
+      return true;
+    },
+
+    voteRematch() {
+      const vm = store.getState().vm;
+      // Só com a janela aberta publicada pelo servidor (servidor antigo nunca publica prazo > 0).
+      if (vm === null || !vm.rematchOpen || vm.iVotedRematch || vm.mySeat < 0) return false;
+      if (rematchSentFor === vm.matchNumber) return false;
+      if (!opts.send({ type: 'voteRematch' })) return false;
+      rematchSentFor = vm.matchNumber;
+      store.getState().patch({ errorCode: null });
+      lastSend = 'rematch';
       return true;
     },
 
@@ -535,8 +607,10 @@ export function createTableController(opts: TableControllerOptions): TableContro
       handNumber = 0;
       replayUntil = 0;
       lastSend = 'other';
+      rematchSentFor = 0;
       trickPlays = [];
       closedTrick = null;
+      matchAnnounced = false;
       offset.reset();
       store.getState().reset();
     },

@@ -15,6 +15,8 @@ import type { TableController, TableTimers } from '../table/tableController';
 import { createTableStore } from '../table/tableStore';
 import type { TableStore } from '../table/tableStore';
 import { priv, snapshot } from '../table/snapshotFixtures';
+import { finishedResult, rematchView } from '../table/tableRoute';
+import { FinishedView } from './FinishedView';
 import { ChatPanel } from './ChatPanel';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
@@ -104,7 +106,6 @@ function Screen({ h }: { h: Harness }) {
       deadlineAt={0}
       clockOffsetMs={0}
       leaveConfirm={false}
-      live={{ message: '', nonce: 0 }}
       on={{
         pressCard: (id) => table.pressCard(id),
         act: (id) => void table.act(id),
@@ -414,5 +415,53 @@ describe('sala de espera com chat da mesa', () => {
     expect(sent).toEqual([{ type: 'chat', scope: 'table', text: 'Quem falta?' }]);
     act(() => table.onChat({ scope: 'table', seat: 1, text: 'Já vou', at: 1 }));
     expect(host.textContent).toContain('Já vou');
+  });
+});
+
+describe('revanche: interação real', () => {
+  it('clicar "Jogar de novo" envia voteRematch uma vez e depois mostra a espera', () => {
+    const store = createTableStore();
+    const sent: ClientMessage[] = [];
+    const table = createTableController({
+      store,
+      send: (m) => {
+        sent.push(m);
+        return true;
+      },
+    });
+    const state = (votes: number[]) =>
+      snapshot({
+        phase: 'finished',
+        series: { winnerTeam: 0 },
+        rematchDeadlineAt: Date.now() + 30_000,
+        rematchVotes: votes,
+        hand: { phase: 'finished', turn: -1, actingSeat: -1 },
+        privates: priv(0),
+      });
+    table.applyState(state([]));
+    function Finished() {
+      const s = useStore(store);
+      return (
+        <FinishedView
+          result={finishedResult(s.vm)}
+          myTeam={0}
+          history={[]}
+          onLeave={() => undefined}
+          rematch={rematchView(s.vm)}
+          onRematch={() => void table.voteRematch()}
+        />
+      );
+    }
+    const r = createRoot(host);
+    root = r;
+    act(() => r.render(<Finished />));
+    click(must('rematch'));
+    click(must('rematch'));
+    expect(sent).toEqual([{ type: 'voteRematch' }]);
+    // O servidor reflete o voto: o botão vira espera e não reenvia.
+    act(() => table.applyState(state([0])));
+    expect(host.textContent).toContain('Aguardando a mesa (1 votou)');
+    click(must('rematch'));
+    expect(sent).toHaveLength(1);
   });
 });

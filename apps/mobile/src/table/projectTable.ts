@@ -117,6 +117,15 @@ export interface TableViewModel {
   readonly cancelVotes: readonly number[];
   /** Eu já votei para cancelar. */
   readonly iVotedCancel: boolean;
+  /** Assentos que votaram "Jogar de novo" (servidor). */
+  readonly rematchVotes: readonly number[];
+  /** Prazo da janela de revanche (epoch do servidor); 0 = sem janela (servidor antigo, cancelada). */
+  readonly rematchDeadlineAt: number;
+  /** Partida atual da sala (1 na primeira; sobe a cada revanche). Servidor antigo = 1. */
+  readonly matchNumber: number;
+  readonly iVotedRematch: boolean;
+  /** Janela de revanche aberta: fim de série com vencedor E prazo publicado. Só então se envia `voteRematch`. */
+  readonly rematchOpen: boolean;
 }
 
 // ------------------------------------------------------------------ leitura tolerante
@@ -262,10 +271,14 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
   const game = rec(s['game']);
   const options = rec(s['options']);
   const phaseRaw = s['phase'];
+  const phase: TablePhase | '' = isTablePhase(phaseRaw) ? phaseRaw : '';
+  const rematchVotes = list(s['rematchVotes']).filter((x): x is number => typeof x === 'number');
+  const rematchDeadlineAt = Math.max(0, num(s['rematchDeadlineAt']));
+  const seriesWinner = num(series['winnerTeam'], ABSENT);
 
   return {
     roomCode: str(s['roomCode']),
-    phase: isTablePhase(phaseRaw) ? phaseRaw : '',
+    phase,
     variant: str(options['variant'], 'paulista'),
     format: str(options['format'], 'single'),
     ironHand: bool(options['ironHand']),
@@ -314,6 +327,11 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
     },
     cancelVotes,
     iVotedCancel: me >= 0 && cancelVotes.includes(me),
+    rematchVotes,
+    rematchDeadlineAt,
+    matchNumber: Math.max(1, num(s['matchNumber'], 1)),
+    iVotedRematch: me >= 0 && rematchVotes.includes(me),
+    rematchOpen: phase === 'finished' && seriesWinner >= 0 && rematchDeadlineAt > 0,
   };
 }
 
