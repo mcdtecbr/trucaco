@@ -4,6 +4,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Regras de aposta e onze/dez (2026-11-02)
+
+#### Alterado
+
+- Aposta pendente é respondida por um só jogador: no truco, o adversário que joga logo depois de quem pediu; nos aumentos, quem fez o pedido anterior. O parceiro e o pedinte ficam sem ação (3968e85).
+- Mão de onze/dez sem mão de ferro: os dois da dupla veem as cartas um do outro e decidem; para jogar os dois aceitam, se um corre a dupla corre (3968e85).
+- Servidor e protocolo (aditivo, `PROTOCOL_VERSION` segue 2): `pending.responderSeat`, `hand.specialAccepted`, `actingSeat = -1` na decisão de onze/dez; timeout e bot de ausência atuam pelos decisores pendentes (e7b3d39, 3570a35).
+- Cliente: botões só para quem decide e textos "Seu parceiro responde", "Aguardando resposta de …", "Você e seu parceiro decidem", "Aguardando o parceiro" (222d633).
+
 ### Infraestrutura (2026-11-02)
 
 #### Corrigido
