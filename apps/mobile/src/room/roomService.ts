@@ -35,9 +35,20 @@ export interface RoomClientLike {
   reconnect(source: { reconnectionToken: string }): Promise<RoomLike>;
 }
 
+/** Persistência do token de reconexão (retomada depois de recarregar a página). Ver `tableResume.ts`. */
+export interface ResumePersistence {
+  save(token: string, code: string, visibility?: 'private' | 'public'): void;
+  clear(): void;
+}
+
 export interface RoomService {
   /** Consome a reserva e resolve com o `roomCode` (pode ser '' se o estado não chegou a tempo). */
   enter(reservation: SeatReservation): Promise<string>;
+  /**
+   * Volta a uma sala pelo token de reconexão guardado (reload da página, reabertura do app). Mesmo
+   * contrato de `enter`; não apaga o registro guardado no começo (um novo reload ainda pode retomar).
+   */
+  resume(reconnectionToken: string): Promise<string>;
   /** Sai da sala atual de forma consentida e zera o store. Idempotente. */
   leave(): Promise<void>;
   current(): RoomLike | null;
@@ -70,14 +81,37 @@ export function createRoomService(options: {
   store: RoomStore;
   /** Alimentada a cada patch de estado e a cada mensagem do servidor. */
   table?: TableSink;
+  /** Guarda o token vigente da sala e o apaga quando a mesa acaba ou o jogador sai de propósito. */
+  persist?: ResumePersistence;
+  /** A mesa acabou de vez (encerrada sem revanche aberta): não há o que retomar. */
+  isTableOver?: () => boolean;
   firstStateTimeoutMs?: number;
 }): RoomService {
-  const { store, table } = options;
+  const { store, table, persist } = options;
   const timeoutMs = options.firstStateTimeoutMs ?? FIRST_STATE_TIMEOUT_MS;
   let room: RoomLike | null = null;
   /** Sobe a cada `enter`/`leave`: callbacks de uma sala antiga são ignorados. */
   let generation = 0;
   let tracker: EventTracker | null = null;
+
+  /**
+   * Mantém o registro de retomada igual ao token vigente da sala. O SDK troca o token a cada
+   * `JOIN_ROOM` (entrada e cada reconexão), então regravamos quando muda; o gravador ignora repetidos.
+   */
+  function remember(r: RoomLike): void {
+    if (persist === undefined) return;
+    if (options.isTableOver?.() === true) {
+      persist.clear();
+      return;
+    }
+    const code = store.getState().roomCode;
+    if (code === '') return;
+    const json = (r.state as { toJSON?: () => unknown } | null | undefined)?.toJSON?.();
+    const tableOpts = (json as { options?: { visibility?: unknown } } | null | undefined)?.options;
+    const v = tableOpts?.visibility;
+    if (v === 'private' || v === 'public') persist.save(r.reconnectionToken, code, v);
+    else persist.save(r.reconnectionToken, code);
+  }
 
   function project(r: RoomLike): void {
     const json = (r.state as { toJSON?: () => unknown } | null | undefined)?.toJSON?.();
@@ -89,6 +123,7 @@ export function createRoomService(options: {
       seats: p.seats,
       mySeat: p.mySeat,
     });
+    remember(r);
   }
 
   function attach(r: RoomLike, gen: number, afterSeq: number | null = null): void {
@@ -133,10 +168,15 @@ export function createRoomService(options: {
       store.getState().patch({ connection: 'connected', errorCode: null });
       project(r);
       table?.onReconnected();
+      // O SDK só grava o token novo DEPOIS de chamar este callback: regrava no próximo microtask.
+      void Promise.resolve().then(() => {
+        if (live()) remember(r);
+      });
     });
     r.onLeave((code) => {
       if (!live()) return;
       if (code === CLOSE_CONSENTED) {
+        persist?.clear(); // saída consentida pelo servidor: mesa encerrada ou jogador removido
         store.getState().patch({ connection: 'closed' });
         return;
       }
@@ -185,6 +225,8 @@ export function createRoomService(options: {
     const r = room;
     room = null;
     tracker = null;
+    // Saída de propósito (ou fim da sessão): não há mais o que retomar.
+    persist?.clear();
     store.getState().reset();
     table?.reset();
     if (r === null) return;
@@ -195,39 +237,48 @@ export function createRoomService(options: {
     }
   }
 
+  /** Entrada em uma sala (reserva nova ou retomada por token): o resto do ciclo é o mesmo. */
+  async function open(connect: (client: RoomClientLike) => Promise<RoomLike>): Promise<string> {
+    // `gen` é tomado ANTES de qualquer await: um `leave()` durante a entrada invalida esta tentativa.
+    const gen = ++generation;
+    const previous = room;
+    room = null;
+    tracker = null;
+    store.getState().reset();
+    table?.reset();
+    store.getState().patch({ connection: 'joining' });
+    if (previous !== null) {
+      persist?.clear(); // a sala anterior foi largada de propósito
+      await previous.leave(true).catch(() => undefined);
+    }
+    if (gen !== generation) return '';
+    let r: RoomLike;
+    try {
+      r = await connect(options.getClient());
+    } catch (e) {
+      if (gen === generation) {
+        store.getState().patch({ connection: 'closed', errorCode: errorCodeOf(e) });
+      }
+      throw e;
+    }
+    if (gen !== generation) {
+      // O usuário saiu durante a entrada.
+      void r.leave(true).catch(() => undefined);
+      return '';
+    }
+    room = r;
+    attach(r, gen);
+    store.getState().patch({ connection: 'connected', errorCode: null });
+    project(r);
+    await firstState(r, gen);
+    // O estado pode ter chegado só agora (código da sala): regrava com o token vigente.
+    if (gen === generation && room === r) remember(r);
+    return store.getState().roomCode;
+  }
+
   return {
-    async enter(reservation) {
-      // `gen` é tomado ANTES de qualquer await: um `leave()` durante a entrada invalida esta tentativa.
-      const gen = ++generation;
-      const previous = room;
-      room = null;
-      tracker = null;
-      store.getState().reset();
-      table?.reset();
-      store.getState().patch({ connection: 'joining' });
-      if (previous !== null) await previous.leave(true).catch(() => undefined);
-      if (gen !== generation) return '';
-      let r: RoomLike;
-      try {
-        r = await options.getClient().joinWithReservation(reservation);
-      } catch (e) {
-        if (gen === generation) {
-          store.getState().patch({ connection: 'closed', errorCode: errorCodeOf(e) });
-        }
-        throw e;
-      }
-      if (gen !== generation) {
-        // O usuário saiu durante a entrada.
-        void r.leave(true).catch(() => undefined);
-        return '';
-      }
-      room = r;
-      attach(r, gen);
-      store.getState().patch({ connection: 'connected', errorCode: null });
-      project(r);
-      await firstState(r, gen);
-      return store.getState().roomCode;
-    },
+    enter: (reservation) => open((client) => client.joinWithReservation(reservation)),
+    resume: (reconnectionToken) => open((client) => client.reconnect({ reconnectionToken })),
 
     leave,
     current: () => room,

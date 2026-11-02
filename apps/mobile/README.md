@@ -126,7 +126,17 @@ export TEST_REDIS_URL=redis://localhost:6380/15
 pnpm test:e2e
 ```
 
-Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração rápida; reconstrua depois de mexer no app), `E2E_SERVER_PORT`, `E2E_WEB_PORT`, `TEST_DATABASE_URL`, `TEST_REDIS_URL`. Em falha, os screenshots dos 4 jogadores são anexados ao teste (relatório HTML: `pnpm exec playwright show-report`; no CI vai como artefato `playwright-report`). O trace do Playwright só cobre o contexto padrão, não os 4 criados pelo fixture. Observação de produto: recarregar a página da mesa não retoma o assento (o app não persiste o token de reconexão e volta para `/home`), então a queda testada é a do WebSocket, não o reload.
+Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração rápida; reconstrua depois de mexer no app), `E2E_SERVER_PORT`, `E2E_WEB_PORT`, `TEST_DATABASE_URL`, `TEST_REDIS_URL`. Em falha, os screenshots dos 4 jogadores são anexados ao teste (relatório HTML: `pnpm exec playwright show-report`; no CI vai como artefato `playwright-report`). O trace do Playwright só cobre o contexto padrão, não os 4 criados pelo fixture. O E2E cobre a queda do WebSocket e o **reload da página** (mesa em jogo e sala de espera), ver "Retomar a mesa depois de recarregar" abaixo.
+
+## Retomar a mesa depois de recarregar
+
+Recarregar a página da mesa (web) ou reabrir o app (nativo) devolve o jogador ao assento:
+
+- **O que é guardado** (`src/net/resumeStorage*.ts`): `{ reconnectionToken, code, userId }`, gravado pelo `roomService` a cada token novo do Colyseus (entrada e cada reconexão). Web: `sessionStorage` (por aba; morre com a aba; **nunca** `localStorage`). Nativo: `expo-secure-store`. Qualquer falha do armazenamento degrada para memória, sem lançar.
+- **Quando é apagado**: saída de propósito, logout ou sessão perdida, saída consentida vinda do servidor, mesa encerrada sem revanche aberta, e toda falha da retomada. Registro de outro `userId` é descartado sem uso.
+- **Retomada** (`src/room/tableResume.ts`, chamada pela splash `BootScreen` antes de qualquer ida ao `/home`): com a sessão válida e registro do mesmo usuário, mostra "Reconectando à mesa…" (visível e anunciado) e tenta (1) `reconnect` pelo token, dentro da janela de 60 s do servidor; (2) se o token foi recusado (janela fechada e o bot assumiu, ou saída na sala de espera), entra de novo por `POST /tables/join` com o código guardado, que devolve o assento ao dono (mesmo `userId`) em **mesa privada**. Até 3 rodadas com 600 ms entre elas (o servidor pode demorar a notar o socket antigo morto). Falhou: apaga o registro, vai ao início com aviso claro.
+- **Limite conhecido**: mesa da **fila pública** não tem o caminho (2) (`POST /tables/join` só serve mesa privada). Reload dentro dos 60 s funciona nas duas; depois disso, só na privada.
+- O token nunca vai na URL, em log ou em mensagem de erro; a rota continua `/table/<código>` (o código da mesa já é público para quem convida).
 
 ## Reserva, saída e a verificar
 

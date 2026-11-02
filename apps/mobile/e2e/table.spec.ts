@@ -4,11 +4,14 @@
  */
 import { expect, test } from './fixtures';
 import {
+  createTable,
   drive,
   dropSocket,
   handLabels,
+  joinTable,
   readProbe,
   readProbeAndHand,
+  roomCodeOf,
   startTable,
 } from './support/table';
 import type { Player } from './support/table';
@@ -237,5 +240,91 @@ test.describe('mesa privada de 4 jogadores', () => {
       players.map((p) => drive(p, { strategy: 'cards', maxMs: 90_000, maxActs: 1 })),
     );
     expect(acts).toEqual([1, 1, 1, 1]);
+  });
+
+  test('reload da página no meio da partida: volta ao mesmo assento, com a mesma mão, e a mesa segue', async ({
+    players,
+  }) => {
+    const code = await startTable(players);
+    const victim = players[2] as Player;
+    const before = await readProbeAndHand(victim.page);
+    expect(before.hand).toHaveLength(3);
+    const tableUrl = victim.page.url();
+    expect(tableUrl).toContain(`/table/${code}`);
+    // O token de reconexão fica no sessionStorage (por aba) e nunca na URL nem no localStorage.
+    const stored = await victim.page.evaluate(() => ({
+      session: window.sessionStorage.getItem('trucaco.table.v1'),
+      local: window.localStorage.getItem('trucaco.table.v1'),
+    }));
+    expect(stored.session).toContain(code);
+    expect(stored.local).toBeNull();
+    const token = (JSON.parse(stored.session ?? '{}') as { reconnectionToken?: string })
+      .reconnectionToken;
+    expect(token).toMatch(/^[\w-]+:[\w-]+$/);
+    expect(tableUrl).not.toContain(token?.split(':')[1] ?? 'x');
+
+    await victim.page.reload();
+
+    // De volta à mesma rota e ao mesmo assento, sem passar pelo início.
+    await expect(victim.page.getByTestId('table-state')).toContainText('playing|', {
+      timeout: 30_000,
+    });
+    expect(victim.page.url()).toContain(`/table/${code}`);
+    await expect(victim.page.getByTestId('my-hand').getByRole('button')).toHaveCount(3);
+    const after = await readProbeAndHand(victim.page);
+    expect(after.probe?.me).toBe(before.probe?.me);
+    expect(after.probe?.match).toBe(before.probe?.match);
+    expect(after.hand).toEqual(before.hand);
+    // Quatro assentos distintos, e nas páginas dos outros o assento do recarregado voltou a "presente":
+    // nem bot nem ausente (a presença vem do servidor).
+    const seats = await Promise.all(players.map(async (p) => (await readProbe(p.page))?.me));
+    expect(new Set(seats).size).toBe(4);
+    for (const p of players) {
+      if (p === victim) continue;
+      const box = p.page.getByTestId(`table-seat-${before.probe?.me}`);
+      await expect(box).not.toContainText(/Bot|Ausente/);
+    }
+
+    // A mesa inteira continua jogando (o recarregado age pela UI como qualquer um).
+    const acts = await Promise.all(
+      players.map((p) => drive(p, { strategy: 'cards', maxMs: 90_000, maxActs: 1 })),
+    );
+    expect(acts).toEqual([1, 1, 1, 1]);
+  });
+
+  test('reload na sala de espera: o dono volta à mesma mesa pelo código', async ({ players }) => {
+    const [owner, guest] = players as [Player, Player, Player, Player];
+    const code = await createTable(owner);
+    await joinTable(guest, code);
+    await expect(owner.page.getByTestId('seated-count')).toContainText('2');
+
+    await owner.page.reload();
+
+    // O dono sai da mesa no reload (a espera não tem janela de reconexão): o convidado vê cair para 1...
+    await expect(guest.page.getByTestId('seated-count')).toContainText('1');
+    // ...e a volta pelo código devolve o segundo lugar.
+    await expect(owner.page.getByTestId('waiting-room')).toBeVisible({ timeout: 30_000 });
+    await expect(owner.page.getByTestId('room-code')).toHaveText(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(await roomCodeOf(owner.page)).toBe(code);
+    expect(owner.page.url()).toContain(`/table/${code}`);
+    // Os dois continuam sentados, sem lugar duplicado.
+    await expect(owner.page.getByTestId('seated-count')).toContainText('2');
+    await expect(guest.page.getByTestId('seated-count')).toContainText('2');
+  });
+
+  test('sair da mesa de propósito apaga o registro: o reload seguinte cai no início', async ({
+    players,
+  }) => {
+    const [owner] = players as [Player, Player, Player, Player];
+    await createTable(owner);
+    await owner.page.getByTestId('leave-table').click();
+    await expect(owner.page.getByTestId('home')).toBeVisible();
+    const stored = await owner.page.evaluate(() =>
+      window.sessionStorage.getItem('trucaco.table.v1'),
+    );
+    expect(stored).toBeNull();
+    await owner.page.reload();
+    await expect(owner.page.getByTestId('home')).toBeVisible({ timeout: 30_000 });
+    await expect(owner.page.getByTestId('notice-table-lost')).toHaveCount(0);
   });
 });

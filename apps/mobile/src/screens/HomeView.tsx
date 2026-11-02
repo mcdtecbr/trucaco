@@ -30,9 +30,17 @@ export interface QueueForm {
   ironHand: boolean;
 }
 
+/** Aviso de retomada de mesa que não deu certo (reload da página). */
+export const RESUME_NOTICE_TEXT: Readonly<Record<'tableLost' | 'tableUnavailable', string>> = {
+  tableLost: 'Não foi possível voltar à mesa: ela terminou ou o seu lugar já foi assumido.',
+  tableUnavailable:
+    'Não foi possível reconectar à mesa agora. Verifique a conexão e tente entrar pelo código.',
+};
+
 export interface HomeViewProps {
   nickname: string | null;
   lostSession: boolean;
+  resumeNotice: 'tableLost' | 'tableUnavailable' | null;
   queueExpired: boolean;
   table: TableForm;
   code: string;
@@ -45,6 +53,7 @@ export interface HomeViewProps {
   retryRemaining: number;
   on: {
     dismissLost(): void;
+    dismissResumeNotice(): void;
     table(next: TableForm): void;
     create(): void;
     code(text: string): void;
@@ -76,6 +85,18 @@ export function HomeView(p: HomeViewProps) {
         <Title>Trucaco</Title>
         {p.nickname !== null ? <Body muted>{`Jogando como ${p.nickname}`}</Body> : null}
       </View>
+
+      {p.resumeNotice !== null ? (
+        <View>
+          <Notice testID="notice-table-lost">{RESUME_NOTICE_TEXT[p.resumeNotice]}</Notice>
+          <Button
+            label="Entendi"
+            variant="secondary"
+            onPress={p.on.dismissResumeNotice}
+            testID="notice-table-lost-dismiss"
+          />
+        </View>
+      ) : null}
 
       {p.lostSession ? (
         <View>

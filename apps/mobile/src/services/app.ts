@@ -5,11 +5,16 @@
 import type { SeatReservation } from '@trucaco/protocol';
 import { createGameClient } from '../net/colyseus';
 import type { GameClient } from '../net/colyseus';
+import { isJoinTableResponse } from '../net/guards';
+import { ApiError } from '../net/api';
+import { createResumeStorage } from '../net/resumeStorage';
 import { createSession } from '../net/session';
 import type { Session } from '../net/session';
 import { createTokenStorage } from '../net/tokenStorage';
 import { createRoomService } from '../room/roomService';
 import type { RoomClientLike, RoomLike, RoomService } from '../room/roomService';
+import { createResumeRecorder, createTableResume } from '../room/tableResume';
+import type { TableResumeController } from '../room/tableResume';
 import { lobbyStore } from '../store/lobbyStore';
 import { roomStore } from '../store/roomStore';
 import { bindSession, sessionStore } from '../store/sessionStore';
@@ -21,6 +26,8 @@ export interface App {
   readonly session: Session;
   readonly rooms: RoomService;
   readonly table: TableController;
+  /** Volta à mesa depois de recarregar a página ou reabrir o app (ver `room/tableResume.ts`). */
+  readonly resume: TableResumeController;
   gameClient(): GameClient;
 }
 
@@ -30,6 +37,11 @@ export function getApp(): App {
   if (app !== null) return app;
   const session = createSession({ storage: createTokenStorage() });
   bindSession(session);
+  const resumeStorage = createResumeStorage();
+  const recorder = createResumeRecorder({
+    storage: resumeStorage,
+    getUserId: () => session.getState().user?.id ?? null,
+  });
   let client: GameClient | null = null;
   const gameClient = (): GameClient => (client ??= createGameClient(session));
   const roomClient: RoomClientLike = {
@@ -43,15 +55,39 @@ export function getApp(): App {
     store: tableStore,
     send: (msg) => rooms?.send(msg) ?? false,
   });
-  rooms = createRoomService({ getClient: () => roomClient, store: roomStore, table });
+  rooms = createRoomService({
+    getClient: () => roomClient,
+    store: roomStore,
+    table,
+    persist: recorder,
+    // Mesa encerrada sem revanche aberta (venceu, cancelou, prazo da revanche fechou): nada a retomar.
+    isTableOver: () =>
+      roomStore.getState().tablePhase === 'finished' &&
+      tableStore.getState().vm?.rematchOpen === false,
+  });
   const roomsRef = rooms;
-  // A sessão acabou (logout ou refresh recusado): larga a sala e zera o estado do lobby.
+  const resume = createTableResume({
+    storage: resumeStorage,
+    clear: () => recorder.clear(),
+    getUserId: () => session.getState().user?.id ?? null,
+    resumeRoom: (token) => roomsRef.resume(token),
+    reserveByCode: async (code) => {
+      const res = await session.api.joinTable(code);
+      if (!isJoinTableResponse(res)) {
+        throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+      }
+      return res.reservation;
+    },
+    enter: (reservation) => roomsRef.enter(reservation),
+  });
+  // A sessão acabou (logout ou refresh recusado): larga a sala, esquece a mesa e zera o lobby.
   sessionStore.subscribe((s, prev) => {
     if (s.status === 'signedOut' && prev.status !== 'signedOut') {
+      recorder.clear();
       void roomsRef.leave();
       lobbyStore.getState().reset();
     }
   });
-  app = { session, rooms: roomsRef, table, gameClient };
+  app = { session, rooms: roomsRef, table, resume, gameClient };
   return app;
 }

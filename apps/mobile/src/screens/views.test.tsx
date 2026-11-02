@@ -13,6 +13,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
   const props: HomeViewProps = {
     nickname: 'Zé',
     lostSession: false,
+    resumeNotice: null,
     queueExpired: false,
     table: { variant: 'paulista', format: 'single', ironHand: true },
     code: '',
@@ -24,6 +25,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
     retryRemaining: 0,
     on: {
       dismissLost: noop,
+      dismissResumeNotice: noop,
       table: noop,
       create: noop,
       code: noop,
@@ -215,6 +217,21 @@ describe('SettingsView e BootView', () => {
     const bad = renderToStaticMarkup(<BootView phase="unavailable" onRetry={noop} />);
     expect(bad).toContain('Tentar de novo');
     expect(bad).toContain('sessão foi mantida');
+  });
+
+  it('boot: reconectando à mesa mostra o texto e o indicador acessível', () => {
+    const html = renderToStaticMarkup(<BootView phase="resuming" onRetry={noop} />);
+    expect(html).toContain('data-testid="boot-resuming"');
+    expect(html).toContain('Reconectando à mesa…');
+    expect(html).not.toContain('Entrando…');
+  });
+});
+
+describe('aviso de retomada de mesa na tela inicial', () => {
+  it('mesa perdida e indisponível têm textos próprios; sem aviso, nada aparece', () => {
+    expect(home({ resumeNotice: 'tableLost' })).toContain('ela terminou');
+    expect(home({ resumeNotice: 'tableUnavailable' })).toContain('Verifique a conexão');
+    expect(home({ resumeNotice: null })).not.toContain('notice-table-lost');
   });
 });
 

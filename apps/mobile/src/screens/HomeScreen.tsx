@@ -24,6 +24,7 @@ export function HomeScreen() {
   const busy = useLobbyStore((s) => s.busy);
   const error = useLobbyStore((s) => s.error);
   const notice = useLobbyStore((s) => s.notice);
+  const resumeNotice = useLobbyStore((s) => s.resumeNotice);
 
   const [table, setTable] = useState<TableForm>({
     variant: 'paulista',
@@ -61,6 +62,7 @@ export function HomeScreen() {
     <HomeView
       nickname={nickname}
       lostSession={lostSession}
+      resumeNotice={resumeNotice}
       queueExpired={notice === 'queueExpired'}
       table={table}
       code={code}
@@ -72,6 +74,7 @@ export function HomeScreen() {
       retryRemaining={retryRemaining}
       on={{
         dismissLost: () => sessionStore.getState().dismissLost(),
+        dismissResumeNotice: () => lobbyStore.getState().setResumeNotice(null),
         table: setTable,
         create: () => void controller.createTable(table),
         code: (text) => setCode(normalizeCodeInput(text)),

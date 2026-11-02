@@ -91,7 +91,7 @@ Critério verificado: CI do GitHub verde em `dd8ab6e` (jobs `verify`, `integrati
 
 **Pendências de produto (decidir antes do beta):**
 
-- **Reload da página da mesa** não retoma o assento: o token de reconexão fica só em memória. Persistir o token (SecureStore no nativo e storage no web, com a mesma política do refresh) ou aceitar o comportamento atual.
+- **Reload da página da mesa** (decidido em 2026-11-02: retomar): o token de reconexão agora é guardado (`sessionStorage` no web, SecureStore no nativo) e a splash volta ao assento; ver `apps/mobile/README.md`. Pendente de servidor: a mesa da fila pública não pode ser retomada depois dos 60 s (o bot assumiu), porque `POST /tables/join` só serve mesa privada.
 - **Botões de aposta do parceiro**: em aposta pendente e em decisão de onze/dez, os dois da dupla veem os botões (o motor dá ação legal aos dois). O servidor aceita a primeira ação. Decidir se a UI esconde os botões do parceiro.
 - **`voteRematch` e o limite de 150 ms** (`ACTION_MIN_INTERVAL_MS`): o voto de revanche também é barrado por esse limite. **Decidido pelo usuário em 2026-11-02: manter como está** (um humano dificilmente vota em menos de 150 ms depois da última jogada).
 

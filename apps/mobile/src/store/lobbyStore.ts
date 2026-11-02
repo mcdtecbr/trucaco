@@ -21,15 +21,24 @@ export interface LobbyError {
 
 export type LobbyNotice = 'queueExpired' | null;
 
+/**
+ * Aviso de uma retomada de mesa que não deu certo (reload da página). Vive à parte de `notice` porque
+ * a tela inicial limpa `notice` ao montar, e este aviso nasce ANTES dela (na splash).
+ * `tableLost`: a mesa acabou ou o lugar foi assumido; `tableUnavailable`: rede ou servidor fora.
+ */
+export type LobbyResumeNotice = 'tableLost' | 'tableUnavailable' | null;
+
 export interface LobbyStoreState {
   readonly queue: QueueView;
   readonly busy: LobbyBusy;
   readonly error: LobbyError | null;
   readonly notice: LobbyNotice;
+  readonly resumeNotice: LobbyResumeNotice;
   setQueue(queue: QueueView): void;
   setBusy(busy: LobbyBusy): void;
   setError(error: LobbyError | null): void;
   setNotice(notice: LobbyNotice): void;
+  setResumeNotice(notice: LobbyResumeNotice): void;
   reset(): void;
 }
 
@@ -38,6 +47,7 @@ const INITIAL = {
   busy: 'none' as LobbyBusy,
   error: null as LobbyError | null,
   notice: null as LobbyNotice,
+  resumeNotice: null as LobbyResumeNotice,
 };
 
 export function createLobbyStore() {
@@ -47,6 +57,7 @@ export function createLobbyStore() {
     setBusy: (busy) => set({ busy }),
     setError: (error) => set({ error }),
     setNotice: (notice) => set({ notice }),
+    setResumeNotice: (resumeNotice) => set({ resumeNotice }),
     reset: () => set({ ...INITIAL }),
   }));
 }
