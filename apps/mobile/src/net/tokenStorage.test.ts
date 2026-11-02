@@ -69,6 +69,35 @@ describe('degradação para memória', () => {
     expect(await s.load()).toEqual(S);
   });
 
+  it('save falho no primário tenta limpá-lo (não deixa refresh velho para o próximo início)', async () => {
+    const primary = createMemoryTokenStorage(S);
+    const clear = vi.fn(() => primary.clear());
+    const s = withMemoryFallback({
+      load: () => primary.load(),
+      save: () => Promise.reject(new Error('quota')),
+      clear,
+    });
+    await s.save({ ...S, refreshToken: 'r2' });
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(await primary.load()).toBeNull();
+    expect((await s.load())?.refreshToken).toBe('r2'); // em memória
+    // Se o clear também falhar, nada propaga.
+    const s2 = withMemoryFallback({
+      load: () => primary.load(),
+      save: () => Promise.reject(new Error('quota')),
+      clear: () => Promise.reject(new Error('keychain')),
+    });
+    await expect(s2.save(S)).resolves.toBeUndefined();
+  });
+
+  it('subscribe do primário é repassado', () => {
+    const off = vi.fn();
+    const subscribe = vi.fn(() => off);
+    const s = withMemoryFallback({ ...createMemoryTokenStorage(), subscribe });
+    expect(s.subscribe).toBeDefined();
+    expect(withMemoryFallback(createMemoryTokenStorage()).subscribe).toBeUndefined();
+  });
+
   it('primário saudável é a fonte do load', async () => {
     const primary = createMemoryTokenStorage(S);
     const s = withMemoryFallback(primary);
@@ -118,6 +147,28 @@ describe('web (localStorage)', () => {
     expect(await s.load()).toEqual(S);
     await s.clear();
     expect(ls.data.size).toBe(0);
+  });
+
+  it('subscribe escuta o evento storage de OUTRA aba, só da chave da sessão', async () => {
+    const handlers = new Map<
+      string,
+      (e: { key: string | null; newValue: string | null }) => void
+    >();
+    vi.stubGlobal('localStorage', fakeLocalStorage());
+    vi.stubGlobal('addEventListener', (t: string, cb: never) => handlers.set(t, cb));
+    vi.stubGlobal('removeEventListener', (t: string) => handlers.delete(t));
+    const { createTokenStorage: create } = await import('./tokenStorage.web');
+    const s = create();
+    const got: string[] = [];
+    const off = s.subscribe?.((x) => got.push(x.refreshToken));
+    const fire = handlers.get('storage')!;
+    fire({ key: 'outra', newValue: serializeSession(S) });
+    fire({ key: STORAGE_KEY, newValue: null }); // remoção: ignorada
+    fire({ key: STORAGE_KEY, newValue: 'lixo' });
+    fire({ key: STORAGE_KEY, newValue: serializeSession({ ...S, refreshToken: 'r9' }) });
+    expect(got).toEqual(['r9']);
+    off?.();
+    expect(handlers.has('storage')).toBe(false);
   });
 
   it('modo privado (localStorage lança): degrada para memória sem erro', async () => {

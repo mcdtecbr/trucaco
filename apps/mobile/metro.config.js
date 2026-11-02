@@ -8,9 +8,12 @@ const { getDefaultConfig } = require('expo/metro-config');
 const config = getDefaultConfig(__dirname);
 
 // `ws` (puxado por `@colyseus/sdk`) não empacota no Metro nativo: ver shims/ws-stub.js.
+// A troca vale SÓ para imports de `ws` feitos de dentro de `@colyseus/sdk`: qualquer outro pacote
+// (ou código nosso) que importe `ws` continua resolvendo o `ws` de verdade.
+const SDK_DIR = `${path.sep}node_modules${path.sep}@colyseus${path.sep}sdk${path.sep}`;
 const upstreamResolveRequest = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (moduleName === 'ws') {
+  if (moduleName === 'ws' && (context.originModulePath ?? '').includes(SDK_DIR)) {
     return { type: 'sourceFile', filePath: path.join(__dirname, 'shims', 'ws-stub.js') };
   }
   return (upstreamResolveRequest ?? context.resolveRequest)(context, moduleName, platform);

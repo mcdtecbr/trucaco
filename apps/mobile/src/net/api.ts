@@ -70,6 +70,16 @@ export interface ApiAuth {
   setTokens(pair: TokenPairResponse): Promise<void>;
   /** `401` no `/auth/refresh`: a família morreu. */
   onRefreshRejected(): void | Promise<void>;
+  /**
+   * Opcional. Executa a renovação inteira (reler armazenamento + POST + gravar) em exclusão mútua
+   * ENTRE abas (Web Locks). Sem isso, só a fila única dentro do processo protege.
+   */
+  exclusive?<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * Opcional. Chamado dentro da exclusão, ANTES de ler `getRefreshToken()`: a sessão relê o armazenamento
+   * e adota o refresh que outra aba já rotacionou (reapresentar o antigo é reuso e revoga a família).
+   */
+  beforeRefresh?(): Promise<void>;
 }
 
 export type FetchLike = (
@@ -226,23 +236,48 @@ export function createApiClient(options: ApiOptions): ApiClient {
   // ---- Refresh em fila única ----
   let inflight: Promise<string> | null = null;
 
+  /**
+   * Um POST /auth/refresh. Falha de transporte (timeout, rede) ou corpo inválido NÃO prova que o servidor
+   * não rotacionou: o par novo pode ter se perdido no caminho. Por isso repete UMA vez, na hora, com o
+   * MESMO refresh: dentro da janela de graça do servidor (20 s) ele devolve o par já emitido. Se a
+   * segunda também falhar, o erro sobe e o refresh antigo continua guardado (a sessão não é descartada).
+   * Limite conhecido: rede fora por mais de 20 s depois de um commit perdido => reuso => família revogada
+   * (mitigação futura: graça maior no servidor).
+   */
+  async function postRefresh(refreshToken: string): Promise<TokenPairResponse> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const json = await raw('POST', '/auth/refresh', { refreshToken }, null);
+        if (!isTokenPair(json)) {
+          throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+        }
+        return json;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          await auth.onRefreshRejected();
+          throw e;
+        }
+        const lost =
+          e instanceof ApiError &&
+          (e.kind === 'timeout' || e.kind === 'network' || e.kind === 'invalid_response');
+        if (lost && attempt === 0) continue;
+        throw e;
+      }
+    }
+  }
+
   async function doRefresh(): Promise<string> {
-    const refreshToken = auth.getRefreshToken();
-    if (refreshToken === null) {
-      throw new ApiError({ status: 401, code: 'UNAUTHORIZED', kind: 'http' });
-    }
-    let json: unknown;
-    try {
-      json = await raw('POST', '/auth/refresh', { refreshToken }, null);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) await auth.onRefreshRejected();
-      throw e;
-    }
-    if (!isTokenPair(json)) {
-      throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
-    }
-    await auth.setTokens(json); // persistido ANTES de repetir qualquer chamada
-    return json.accessToken;
+    const body = async (): Promise<string> => {
+      await auth.beforeRefresh?.();
+      const refreshToken = auth.getRefreshToken();
+      if (refreshToken === null) {
+        throw new ApiError({ status: 401, code: 'UNAUTHORIZED', kind: 'http' });
+      }
+      const pair = await postRefresh(refreshToken);
+      await auth.setTokens(pair); // persistido ANTES de repetir qualquer chamada
+      return pair.accessToken;
+    };
+    return auth.exclusive !== undefined ? auth.exclusive(body) : body();
   }
 
   function refreshSession(): Promise<string> {

@@ -3,8 +3,8 @@ import { createSession } from './session';
 import type { SessionState } from './session';
 import { createMemoryTokenStorage } from './tokenStorageCore';
 import type { StoredSession } from './tokenStorageCore';
-import { fakeFetch } from './testHelpers';
-import type { Handler } from './testHelpers';
+import { fakeFetch, tick } from './testHelpers';
+import type { Handler, RecordedRequest } from './testHelpers';
 
 const guestRes = (n: number) => ({
   user: { id: `u${n}`, nickname: `Guest${n}` },
@@ -227,4 +227,124 @@ it('estado é observável e cancelável', async () => {
   off();
   await session.start();
   expect(seen).toHaveLength(0);
+});
+
+describe('refresh perdido no caminho (timeout, rede, corpo inválido)', () => {
+  const STORED = { refreshToken: 'r1', userId: 'u1', nickname: 'Zé' };
+  const refreshCalls = (calls: RecordedRequest[]) =>
+    calls.filter((c) => c.path === '/auth/refresh');
+
+  it.each([
+    ['rede', 'throw' as const],
+    ['corpo inválido', { status: 200, text: 'nao-json' }],
+    ['200 vazio', { status: 200 }],
+  ])('%s: repete UMA vez na hora com o MESMO refresh e adota o par da graça', async (_n, fail) => {
+    let n = 0;
+    const { session, storage, calls } = setup(
+      () => (++n === 1 ? fail : { status: 200, json: refreshRes(2) }),
+      STORED,
+    );
+    expect((await session.start()).status).toBe('authenticated');
+    expect(
+      refreshCalls(calls).map((c) => (c.body as { refreshToken: string }).refreshToken),
+    ).toEqual(['r1', 'r1']);
+    expect((await storage.load())?.refreshToken).toBe('r2');
+  });
+
+  it('timeout: também repete uma vez', async () => {
+    let n = 0;
+    const storage = createMemoryTokenStorage(STORED);
+    const f = fakeFetch(() => (++n === 1 ? 'hang' : { status: 200, json: refreshRes(2) }));
+    const session = createSession({ storage, baseUrl: 'http://x', fetch: f.fetch, timeoutMs: 10 });
+    expect((await session.start()).status).toBe('authenticated');
+    expect(n).toBe(2);
+  });
+
+  it('segunda falha: unavailable SEM descartar o refresh antigo; depois recupera com ele', async () => {
+    let up = false;
+    const { session, storage, calls } = setup(
+      () => (up ? { status: 200, json: refreshRes(2) } : 'throw'),
+      STORED,
+    );
+    expect((await session.start()).status).toBe('unavailable');
+    expect(refreshCalls(calls)).toHaveLength(2); // 1 tentativa + 1 repetição, sem laço
+    expect((await storage.load())?.refreshToken).toBe('r1');
+    expect(session.getState().user?.id).toBe('u1');
+    up = true;
+    expect((await session.start()).status).toBe('authenticated');
+    expect((refreshCalls(calls).at(-1)?.body as { refreshToken: string }).refreshToken).toBe('r1');
+  });
+
+  it('503 e 401 NÃO repetem na hora', async () => {
+    const a = setup(() => ({ status: 503 }), STORED);
+    await a.session.start();
+    expect(refreshCalls(a.calls)).toHaveLength(1);
+    const b = setup(
+      (r) =>
+        r.path === '/auth/refresh'
+          ? { status: 401, json: { error: { code: 'INVALID_REFRESH_TOKEN' } } }
+          : { status: 201, json: guestRes(9) },
+      STORED,
+    );
+    await b.session.start();
+    expect(refreshCalls(b.calls)).toHaveLength(1);
+  });
+});
+
+describe('promoção de status', () => {
+  it('refresh bem-sucedido depois de unavailable volta para authenticated', async () => {
+    let up = false;
+    const { session } = setup(() => (up ? { status: 200, json: refreshRes(2) } : { status: 503 }), {
+      refreshToken: 'r1',
+      userId: 'u1',
+      nickname: 'Zé',
+    });
+    expect((await session.start()).status).toBe('unavailable');
+    up = true;
+    await session.ensureAccessToken();
+    expect(session.getState()).toMatchObject({ status: 'authenticated', user: { id: 'u1' } });
+  });
+});
+
+describe('corrida logout x start', () => {
+  it('guest que termina depois do logout é descartado e nada é gravado', async () => {
+    let release!: (r: { status: number; json: unknown }) => void;
+    const pending = new Promise<{ status: number; json: unknown }>((r) => (release = r));
+    let first = true;
+    const { session, storage } = setup(() => {
+      if (first) {
+        first = false;
+        return pending;
+      }
+      return { status: 201, json: guestRes(2) };
+    });
+    const started = session.start();
+    await tick();
+    await session.logout();
+    release({ status: 201, json: guestRes(1) });
+    const result = await started;
+    expect(result).toEqual({ status: 'signedOut', user: null });
+    expect(session.getState()).toEqual({ status: 'signedOut', user: null });
+    expect(session.getAccessToken()).toBeNull();
+    expect(await storage.load()).toBeNull();
+    // Um start() novo cria outra sessão normalmente.
+    expect((await session.start()).user?.id).toBe('u2');
+  });
+
+  it('restauração (refresh) que termina depois do logout não ressuscita a sessão', async () => {
+    let release!: (r: { status: number; json: unknown }) => void;
+    const pending = new Promise<{ status: number; json: unknown }>((r) => (release = r));
+    const { session, storage } = setup(
+      (r) => (r.path === '/auth/refresh' ? pending : { status: 204 }),
+      { refreshToken: 'r1', userId: 'u1', nickname: 'Zé' },
+    );
+    const started = session.start();
+    await tick();
+    const loggingOut = session.logout(); // espera o refresh em voo (fila única) e então encerra
+    release({ status: 200, json: refreshRes(2) });
+    await Promise.all([started, loggingOut]);
+    expect(session.getState()).toEqual({ status: 'signedOut', user: null });
+    expect(session.getAccessToken()).toBeNull();
+    expect(await storage.load()).toBeNull();
+  });
 });

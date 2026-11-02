@@ -5,11 +5,16 @@
  *   sempre com o JWT em `Sec-WebSocket-Protocol: trucaco.bearer, <jwt>`;
  * - o controle negativo emula o ramo de NAVEGADOR do SDK (`typeof document !== 'undefined'`) com o
  *   `Client` puro: a reconexão falha, e o mesmo caso passa com o shim.
- * `INT_SLOW=1` liga o teste de JWT expirado durante a queda (~70 s, TTL do access = 60 s no servidor).
+ * - o 401 REAL (access vencido para o servidor) é exercitado de duas formas, ambas contra o servidor de
+ *   verdade: (1) um access com assinatura válida e `exp` no passado (segredo conhecido do teste) na REST e
+ *   no matchmake de reconexão: "401 -> 1 refresh -> 1 nova tentativa"; (2) `INT_SLOW=1` espera o TTL
+ *   mínimo do servidor (60 s) expirar de verdade durante uma queda (~70 s).
+ * - as sessões usam `refreshAheadMs` muito negativo: nunca renovam por antecedência, então só o 401 renova.
  */
 import { Client, CloseCode } from '@colyseus/sdk';
 import type { Room } from '@colyseus/sdk';
 import type { CreateTableRequest } from '@trucaco/protocol';
+import { createHmac } from 'node:crypto';
 import { request } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GameClientError, createGameClient, trackEvents } from './colyseus';
@@ -55,6 +60,27 @@ function rawUpgradeStatus(url: string, headers: Record<string, string>): Promise
     req.once('error', reject);
     req.end();
   });
+}
+
+const JWT_SECRET = 'segredo-de-teste-int-0123456789-abcdefghijklmnopqrstuvwxyz';
+/** Nunca renova por antecedência: só o 401 do servidor dispara o refresh. */
+const NEVER_AHEAD_MS = -3_600_000;
+
+/** Access HS256 com o formato do servidor (iss/aud/sub/jti/iat/exp). `expired` = venceu há ~2 h. */
+function mintAccess(userId: string, expired: boolean): string {
+  const b64 = (o: object): string => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const iat = Math.floor(Date.now() / 1000) - (expired ? 7200 : 0);
+  const head = b64({ alg: 'HS256', typ: 'JWT' });
+  const body = b64({
+    iss: 'trucaco',
+    aud: 'trucaco-api',
+    sub: userId,
+    jti: expired ? 'jti-expirado-0001' : 'jti-valido-0001',
+    iat,
+    exp: iat + 900,
+  });
+  const sig = createHmac('sha256', JWT_SECRET).update(`${head}.${body}`).digest('base64url');
+  return `${head}.${body}.${sig}`;
 }
 
 const OPTIONS: CreateTableRequest = {
@@ -107,16 +133,14 @@ function attach(i: number, room: Room): Room {
 }
 
 beforeAll(async () => {
-  server = await startServer();
-  // Relógio da sessão 10 min atrás: nunca renova por antecedência, então o 401 real é exercitado.
-  const skewed = () => Date.now() - 600_000;
+  server = await startServer({ JWT_SECRET });
   issuedAt = Date.now();
   sessions = await Promise.all(
     [0, 1, 2, 3].map(async () => {
       const s = createSession({
         storage: createMemoryTokenStorage(),
         baseUrl: server.url,
-        now: skewed,
+        refreshAheadMs: NEVER_AHEAD_MS,
       });
       expect((await s.start()).status).toBe('authenticated');
       return s;
@@ -237,6 +261,84 @@ describe('reconexão com o JWT no subprotocolo', () => {
       expect(ok.connection.isOpen).toBe(true);
     } finally {
       delete (globalThis as { document?: unknown }).document;
+    }
+  });
+});
+
+describe('401 real do servidor (access vencido)', () => {
+  it('CONTROLE: o access forjado é aceito quando vigente e recusado (401) quando vencido', async () => {
+    const userId = sessions[0]!.getState().user!.id;
+    const get = (t: string) =>
+      fetch(`${server.url}/me`, { headers: { authorization: `Bearer ${t}` } }).then(
+        (r) => r.status,
+      );
+    expect(await get(mintAccess(userId, false))).toBe(200);
+    expect(await get(mintAccess(userId, true))).toBe(401);
+  });
+
+  it('REST: access vencido -> 401 -> 1 refresh -> 1 repetição bem-sucedida', async () => {
+    const calls: string[] = [];
+    let poison = false;
+    let userId = '';
+    const s = createSession({
+      storage: createMemoryTokenStorage(),
+      baseUrl: server.url,
+      refreshAheadMs: NEVER_AHEAD_MS,
+      fetch: (url, init) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        const headers = { ...init.headers };
+        // Só no PRIMEIRO pedido autenticado: manda o access vencido; o retry leva o real.
+        if (poison && path === '/me') {
+          poison = false;
+          headers['authorization'] = `Bearer ${mintAccess(userId, true)}`;
+        }
+        return fetch(url, { ...init, headers });
+      },
+    });
+    await s.start();
+    userId = s.getState().user!.id;
+    const before = s.getAccessToken();
+    calls.length = 0;
+    poison = true;
+    const me = await s.api.me();
+    expect(me).toBeDefined();
+    expect(calls).toEqual(['/me', '/auth/refresh', '/me']);
+    expect(s.getAccessToken()).not.toBe(before);
+  });
+
+  it('reconexão: access vencido no matchmake -> 401 -> 1 refresh -> 1 nova tentativa', async () => {
+    const room = rooms[2]!;
+    const token = room.reconnectionToken;
+    await dropAndWait(room);
+
+    const real = sessions[2]!;
+    let expired: string | null = mintAccess(real.getState().user!.id, true);
+    let forced = 0;
+    const wrapped: Session = {
+      ...real,
+      getAccessToken: () => expired ?? real.getAccessToken(),
+      ensureAccessToken: () => Promise.resolve(expired ?? real.getAccessToken()!),
+      forceRefresh: async () => {
+        forced += 1;
+        expired = null;
+        return real.forceRefresh();
+      },
+    };
+    const gc = createGameClient(wrapped, { serverUrl: server.url });
+    const attempts: string[] = [];
+    const orig = gc.client.reconnect.bind(gc.client);
+    gc.client.reconnect = ((t: string, ...rest: unknown[]) => {
+      attempts.push(t);
+      return (orig as (...a: unknown[]) => unknown)(t, ...rest);
+    }) as typeof gc.client.reconnect;
+    try {
+      const back = attach(2, await gc.reconnect(token));
+      expect(forced).toBe(1);
+      expect(attempts).toHaveLength(2);
+      expect(back.connection.isOpen).toBe(true);
+    } finally {
+      gc.dispose();
     }
   });
 });

@@ -27,6 +27,8 @@ import {
 import { WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { ErrorCode, SeatReservation } from '@trucaco/protocol';
 import { getServerUrl } from './config';
+import { isApiError } from './api';
+import { SessionRequiredError } from './session';
 import type { Session } from './session';
 
 // ---------------------------------------------------------------------------
@@ -111,17 +113,19 @@ export class BearerWebSocketTransport {
     };
     ws.onclose = onclose;
     ws.onerror = (event) => {
-      // Um socket que nunca abriu (ex.: upgrade recusado com 401) pode não emitir `close`:
-      // sintetiza o fechamento anormal para o SDK tentar de novo.
-      if (!opened) {
-        ws.onerror = null;
-        setTimeout(() => {
-          if (ws.onclose === onclose) {
-            onclose({ code: CloseCode.ABNORMAL_CLOSURE, reason: '' });
-          }
-        }, 0);
+      if (opened) {
+        this.events.onerror?.(event);
+        return;
       }
-      this.events.onerror?.(event);
+      // Socket que nunca abriu (upgrade recusado, 401, rede). NÃO repassa o evento cru: o SDK rejeita
+      // a entrada no primeiro `onerror` com `ServerError(undefined)` e o `classifyFailure` nunca veria o
+      // 1006. O fechamento (real, ou sintetizado como 1006 se o runtime não emitir) leva o código.
+      ws.onerror = null;
+      setTimeout(() => {
+        if (ws.onclose === onclose) {
+          onclose({ code: CloseCode.ABNORMAL_CLOSURE, reason: '' });
+        }
+      }, 0);
     };
   }
 
@@ -188,6 +192,20 @@ class BearerClient extends Client {
     private readonly wiring: Wiring,
   ) {
     super(url, { headers });
+    // `new Client` lê `localStorage['colyseus-auth-token']` (Auth) e `buildEndpoint` poria esse valor na
+    // query (`_authToken`), vazando em log de proxy. O JWT do Trucaco vai só no subprotocolo/cabeçalho:
+    // `authToken` fica fixo em `undefined`, inclusive contra a leitura assíncrona do storage.
+    Object.defineProperty(this.http, 'authToken', {
+      configurable: true,
+      enumerable: true,
+      get: () => undefined,
+      set: () => undefined,
+    });
+  }
+
+  protected override buildEndpoint(seatReservation: never, options: Record<string, unknown> = {}) {
+    delete options['_authToken'];
+    return super.buildEndpoint(seatReservation, options);
   }
 
   protected override createRoom<T>(roomName: string, rootSchema?: RootSchema<T>) {
@@ -201,6 +219,8 @@ class BearerClient extends Client {
 
 export type GameClientErrorCode =
   | Extract<ErrorCode, 'ROOM_NOT_FOUND' | 'TOKEN_EXPIRED'>
+  /** Sem sessão local (nunca iniciou ou fez logout): a UI manda para o início. */
+  | 'SESSION_REQUIRED'
   | 'UNAVAILABLE'
   | 'JOIN_FAILED';
 
@@ -275,8 +295,19 @@ export function createGameClient(session: Session, options: GameClientOptions = 
   client.http.options.credentials = 'omit';
   const unsubscribe = session.onAccessTokenChange(syncHeaders);
 
+  /** Traduz falhas de sessão para o vocabulário da UI; indisponibilidade (rede/503) sobe como `ApiError`. */
+  async function withSession(renew: () => Promise<string>): Promise<void> {
+    try {
+      await renew();
+    } catch (e) {
+      if (e instanceof SessionRequiredError) throw new GameClientError('SESSION_REQUIRED', e);
+      if (isApiError(e) && e.status === 401) throw new GameClientError('TOKEN_EXPIRED', e);
+      throw e;
+    }
+  }
+
   async function joinWithReservation(reservation: SeatReservation): Promise<Room> {
-    await session.ensureAccessToken();
+    await withSession(() => session.ensureAccessToken());
     try {
       return await client.consumeSeatReservation(
         reservation as unknown as Parameters<Client['consumeSeatReservation']>[0],
@@ -289,7 +320,7 @@ export function createGameClient(session: Session, options: GameClientOptions = 
   async function reconnect(source: string | { reconnectionToken: string }): Promise<Room> {
     const token = typeof source === 'string' ? source : source.reconnectionToken;
     if (!/^[^:]+:[^:]+$/.test(token)) throw new GameClientError('ROOM_NOT_FOUND');
-    await session.ensureAccessToken();
+    await withSession(() => session.ensureAccessToken());
     let refreshed = false;
     for (;;) {
       try {
@@ -299,7 +330,7 @@ export function createGameClient(session: Session, options: GameClientOptions = 
         if (kind === 'gone') throw new GameClientError('ROOM_NOT_FOUND', e);
         if ((kind === 'unauthorized' || kind === 'upgrade') && !refreshed) {
           refreshed = true;
-          await session.forceRefresh(); // ApiError (503/rede) sobe: a sessão continua válida
+          await withSession(() => session.forceRefresh()); // 503/rede sobe como ApiError: sessão intacta
           continue;
         }
         throw new GameClientError(kind === 'unauthorized' ? 'TOKEN_EXPIRED' : 'UNAVAILABLE', e);

@@ -13,7 +13,27 @@ import type { TokenStorage } from './tokenStorageCore';
 
 export * from './tokenStorageCore';
 
+interface StorageEventLike {
+  key: string | null;
+  newValue: string | null;
+}
+
 const local: TokenStorage = {
+  /** O evento `storage` só dispara nas OUTRAS abas do mesmo origin: exatamente o aviso que queremos. */
+  subscribe: (listener) => {
+    const target = globalThis as unknown as {
+      addEventListener?: (type: string, cb: (e: StorageEventLike) => void) => void;
+      removeEventListener?: (type: string, cb: (e: StorageEventLike) => void) => void;
+    };
+    if (target.addEventListener === undefined) return () => undefined;
+    const onStorage = (e: StorageEventLike): void => {
+      if (e.key !== STORAGE_KEY) return;
+      const s = parseStoredSession(e.newValue);
+      if (s !== null) listener(s);
+    };
+    target.addEventListener('storage', onStorage);
+    return () => target.removeEventListener?.('storage', onStorage);
+  },
   load: () => Promise.resolve(parseStoredSession(globalThis.localStorage.getItem(STORAGE_KEY))),
   save: (s) => {
     globalThis.localStorage.setItem(STORAGE_KEY, serializeSession(s));

@@ -40,7 +40,44 @@ export async function startServer(extraEnv: Record<string, string> = {}): Promis
   const pid = child.pid;
   if (pid === undefined) throw new Error('não foi possível iniciar o servidor');
 
-  const port = await new Promise<number>((resolvePort, reject) => {
+  // O filho nunca pode sobreviver ao teste: mata por PID (SIGKILL) se o processo de teste sair,
+  // se o "listening" estourar o prazo ou se o servidor cair antes de ficar pronto.
+  const killChild = (): void => {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // já saiu
+      }
+    }
+  };
+  process.once('exit', killChild);
+
+  let port: number;
+  try {
+    port = await waitListening(child);
+  } catch (e) {
+    killChild();
+    process.removeListener('exit', killChild);
+    throw e;
+  }
+
+  return {
+    url: `http://127.0.0.1:${port}`,
+    pid,
+    stop: () =>
+      new Promise<void>((done) => {
+        process.removeListener('exit', killChild);
+        if (child.exitCode !== null || child.signalCode !== null) return done();
+        child.once('exit', () => done());
+        process.kill(pid, 'SIGTERM'); // por PID, nunca pkill -f
+        setTimeout(killChild, 5000).unref();
+      }),
+  };
+}
+
+function waitListening(child: ChildProcess): Promise<number> {
+  return new Promise<number>((resolvePort, reject) => {
     const timer = setTimeout(() => reject(new Error('servidor não ficou pronto em 20 s')), 20_000);
     let buffer = '';
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -60,18 +97,4 @@ export async function startServer(extraEnv: Record<string, string> = {}): Promis
       reject(new Error(`servidor saiu antes de ficar pronto (código ${String(code)}): ${errText}`));
     });
   });
-
-  return {
-    url: `http://127.0.0.1:${port}`,
-    pid,
-    stop: () =>
-      new Promise<void>((done) => {
-        if (child.exitCode !== null) return done();
-        child.once('exit', () => done());
-        process.kill(pid, 'SIGTERM'); // por PID, nunca pkill -f
-        setTimeout(() => {
-          if (child.exitCode === null) process.kill(pid, 'SIGKILL');
-        }, 5000).unref();
-      }),
-  };
 }

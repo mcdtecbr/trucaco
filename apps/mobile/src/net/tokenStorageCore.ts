@@ -14,6 +14,11 @@ export interface TokenStorage {
   load(): Promise<StoredSession | null>;
   save(session: StoredSession): Promise<void>;
   clear(): Promise<void>;
+  /**
+   * Opcional (web): avisa quando OUTRA aba grava uma sessão nova, para esta aba adotar o refresh
+   * rotacionado sem renovar. Nativo tem processo único e não implementa.
+   */
+  subscribe?(listener: (session: StoredSession) => void): () => void;
 }
 
 export const STORAGE_KEY = 'trucaco.session.v1';
@@ -66,7 +71,9 @@ export function createMemoryTokenStorage(initial: StoredSession | null = null): 
 export function withMemoryFallback(primary: TokenStorage): TokenStorage {
   const memory = createMemoryTokenStorage();
   let degraded = false;
+  const subscribe = primary.subscribe?.bind(primary);
   return {
+    ...(subscribe !== undefined ? { subscribe } : {}),
     async load() {
       if (!degraded) {
         try {
@@ -85,6 +92,13 @@ export function withMemoryFallback(primary: TokenStorage): TokenStorage {
         await primary.save(s);
       } catch {
         degraded = true;
+        // O primário pode ter ficado com o refresh ANTERIOR (já rotacionado/morto): apaga para o próximo
+        // início não restaurar um token inválido.
+        try {
+          await primary.clear();
+        } catch {
+          // Nada a fazer.
+        }
       }
     },
     async clear() {

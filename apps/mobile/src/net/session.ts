@@ -9,11 +9,21 @@
 import { createApiClient, isApiError } from './api';
 import type { ApiClient, FetchLike } from './api';
 import { getServerUrl } from './config';
+import { webRefreshLock } from './refreshLock';
+import type { RefreshLock } from './refreshLock';
 import type { StoredSession, TokenStorage } from './tokenStorageCore';
 import type { TokenPairResponse } from '@trucaco/protocol';
 
 /** Renova o access se faltar menos que isto para expirar. */
 export const REFRESH_AHEAD_MS = 60_000;
+
+/** `ensureAccessToken` sem refresh token local (nunca iniciou, logout ou refresh recusado). */
+export class SessionRequiredError extends Error {
+  constructor() {
+    super('SESSION_REQUIRED');
+    this.name = 'SessionRequiredError';
+  }
+}
 
 export type SessionStatus =
   | 'idle'
@@ -40,6 +50,10 @@ export interface SessionOptions {
   fetch?: FetchLike;
   timeoutMs?: number;
   now?: () => number;
+  /** Exclusão mútua da renovação entre abas. Padrão: Web Locks no navegador, nada no nativo. */
+  refreshLock?: RefreshLock;
+  /** Renova se faltar menos que isto para o access expirar (padrão `REFRESH_AHEAD_MS`). */
+  refreshAheadMs?: number;
 }
 
 export interface Session {
@@ -59,17 +73,24 @@ export interface Session {
   /** Encerra no servidor (melhor esforço) e SEMPRE limpa o armazenamento local. */
   logout(): Promise<void>;
   setNickname(nickname: string): Promise<void>;
+  /** Cancela a escuta do armazenamento (outras abas). */
+  dispose(): void;
 }
 
 export function createSession(options: SessionOptions): Session {
   const { storage } = options;
   const now = options.now ?? (() => Date.now());
+  const refreshLock = options.refreshLock ?? webRefreshLock;
+  const refreshAheadMs = options.refreshAheadMs ?? REFRESH_AHEAD_MS;
 
   let state: SessionState = { status: 'idle', user: null };
   let accessToken: string | null = null;
   let accessExpiresAt = 0;
   let refreshToken: string | null = null;
   let starting: Promise<SessionState> | null = null;
+  /** Sobe a cada logout: o resultado de um `start()` anterior ao logout é descartado. */
+  let generation = 0;
+  let unsubscribeStorage: (() => void) | null = null;
   const listeners = new Set<(s: SessionState) => void>();
   const tokenListeners = new Set<(t: string | null) => void>();
 
@@ -87,6 +108,38 @@ export function createSession(options: SessionOptions): Session {
   function dropSession(): void {
     refreshToken = null;
     setAccess(null);
+  }
+
+  /** Adota o par guardado por OUTRA aba (refresh mais novo e, se mudou, o usuário). */
+  function adoptStored(stored: StoredSession): void {
+    refreshToken = stored.refreshToken;
+    const u = state.user;
+    if (u === null || u.id !== stored.userId || u.nickname !== stored.nickname) {
+      setState({ status: state.status, user: { id: stored.userId, nickname: stored.nickname } });
+    }
+  }
+
+  /**
+   * Dentro do lock, antes de renovar: se outra aba já rotacionou, o refresh em memória é o ANTIGO e
+   * reapresentá-lo é reuso (revoga a família). Relê o armazenamento e adota o que estiver lá.
+   */
+  async function syncFromStorage(): Promise<void> {
+    if (refreshToken === null) return; // sem sessão aqui: não adota a de outro usuário
+    let stored: StoredSession | null;
+    try {
+      stored = await storage.load();
+    } catch {
+      return;
+    }
+    if (stored === null || stored.refreshToken === refreshToken) return;
+    adoptStored(stored);
+  }
+
+  function watchStorage(): void {
+    if (unsubscribeStorage !== null || storage.subscribe === undefined) return;
+    unsubscribeStorage = storage.subscribe((stored) => {
+      if (refreshToken !== null && stored.refreshToken !== refreshToken) adoptStored(stored);
+    });
   }
 
   async function adopt(pair: TokenPairResponse, user: SessionUser): Promise<void> {
@@ -111,8 +164,14 @@ export function createSession(options: SessionOptions): Session {
       async setTokens(pair) {
         const user = state.user;
         if (user === null) throw new Error('sessão sem usuário');
+        // Logout (ou refresh recusado) durante o voo: não ressuscita a sessão no armazenamento.
+        if (refreshToken === null) throw new SessionRequiredError();
         await adopt(pair, user);
+        // Renovação bem-sucedida depois de `unavailable`: a sessão voltou.
+        if (state.status === 'unavailable') setState({ status: 'authenticated', user });
       },
+      exclusive: (fn) => refreshLock(fn),
+      beforeRefresh: syncFromStorage,
       async onRefreshRejected() {
         dropSession();
         await storage.clear();
@@ -121,39 +180,52 @@ export function createSession(options: SessionOptions): Session {
     },
   });
 
-  async function createGuest(): Promise<void> {
+  async function createGuest(gen: number): Promise<void> {
     const res = await api.guest();
+    if (gen !== generation) return; // logout durante a criação: não grava nada
     const user = { id: res.user.id, nickname: res.user.nickname };
     // `state.user` precisa existir antes de qualquer refresh futuro; adopt grava o par.
     state = { ...state, user };
     await adopt(res, user);
+    if (gen !== generation) {
+      dropSession();
+      await storage.clear();
+      return;
+    }
     setState({ status: 'authenticated', user });
   }
 
-  async function run(): Promise<SessionState> {
+  async function run(gen: number): Promise<SessionState> {
+    const stale = (): boolean => gen !== generation;
     setState({ status: 'restoring', user: state.user });
     try {
       const stored = await storage.load();
+      if (stale()) return state;
       if (stored !== null) {
         refreshToken = stored.refreshToken;
         const user = { id: stored.userId, nickname: stored.nickname };
         state = { ...state, user };
         try {
           await api.refreshSession();
-          setState({ status: 'authenticated', user });
+          if (stale()) return state;
+          // A renovação pode ter adotado outro usuário (outra aba): `state.user` é a fonte.
+          setState({ status: 'authenticated', user: state.user ?? user });
           return state;
         } catch (e) {
+          if (stale()) return state;
           if (isApiError(e) && e.status === 401) {
             // Já tratado em onRefreshRejected (storage limpo): cai para convidado.
           } else {
+            // Timeout/rede/503/corpo inválido: o refresh guardado NÃO é descartado.
             setState({ status: 'unavailable', user });
             return state;
           }
         }
       }
-      await createGuest();
+      await createGuest(gen);
       return state;
     } catch {
+      if (stale()) return state;
       setState({ status: 'unavailable', user: state.user });
       return state;
     }
@@ -162,17 +234,18 @@ export function createSession(options: SessionOptions): Session {
   function start(): Promise<SessionState> {
     if (starting !== null) return starting;
     if (state.status === 'authenticated') return Promise.resolve(state);
-    const p = run().finally(() => {
-      starting = null;
+    watchStorage();
+    const p = run(generation).finally(() => {
+      if (starting === p) starting = null;
     });
     starting = p;
     return p;
   }
 
   async function ensureAccessToken(): Promise<string> {
-    if (accessToken !== null && accessExpiresAt - now() > REFRESH_AHEAD_MS) return accessToken;
+    if (accessToken !== null && accessExpiresAt - now() > refreshAheadMs) return accessToken;
     if (refreshToken === null) {
-      throw new Error('SESSION_REQUIRED');
+      throw new SessionRequiredError();
     }
     return api.refreshSession();
   }
@@ -195,8 +268,17 @@ export function createSession(options: SessionOptions): Session {
     },
     start,
     ensureAccessToken,
-    forceRefresh: () => api.refreshSession(),
+    forceRefresh: () => {
+      if (refreshToken === null) return Promise.reject(new SessionRequiredError());
+      return api.refreshSession();
+    },
+    dispose() {
+      unsubscribeStorage?.();
+      unsubscribeStorage = null;
+    },
     async logout() {
+      generation += 1; // invalida um start() em voo
+      starting = null;
       try {
         // Access vencido faria o logout levar 401: renova ANTES e lê o refresh já rotacionado.
         await ensureAccessToken();

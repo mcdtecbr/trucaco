@@ -11,6 +11,8 @@ import {
   trackEvents,
 } from './colyseus';
 import type { WebSocketFactory, WebSocketLike } from './colyseus';
+import { ApiError } from './api';
+import { SessionRequiredError } from './session';
 import type { Session } from './session';
 
 const JWT = 'eyJhbGciOi.PAYLOAD-SECRETO.assinatura';
@@ -138,10 +140,10 @@ describe('BearerWebSocketTransport (shim)', () => {
     t.connect('ws://h/a');
     const s = sockets[0] as FakeSocket;
     s.onerror?.({});
-    s.onerror?.({}); // segundo erro é ignorado pelo SDK-like
+    s.onerror?.({}); // segundo erro é ignorado
     await new Promise((r) => setTimeout(r, 5));
     expect(closes).toEqual([CloseCode.ABNORMAL_CLOSURE]);
-    expect(errors).toHaveLength(1);
+    expect(errors).toHaveLength(0); // o erro cru não é repassado antes de abrir
   });
 
   it('erro depois de aberto não sintetiza close', async () => {
@@ -330,12 +332,6 @@ describe('reconnect', () => {
     expect(raw.forceRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it('upgrade recusado (1006) também renova e tenta de novo', async () => {
-    const { gc, raw } = setup([new ServerError(CloseCode.ABNORMAL_CLOSURE, 'x'), 'ok']);
-    await gc.reconnect('r:t');
-    expect(raw.forceRefresh).toHaveBeenCalledTimes(1);
-  });
-
   it('401 duas vezes vira TOKEN_EXPIRED, sem laço', async () => {
     const { gc, calls, raw } = setup([new MatchMakeError('x', 401), new MatchMakeError('x', 401)]);
     await expect(gc.reconnect('r:t')).rejects.toMatchObject({ code: 'TOKEN_EXPIRED' });
@@ -368,6 +364,89 @@ describe('reconnect', () => {
     const { gc, raw } = setup([new MatchMakeError('x', 401)]);
     raw.forceRefresh.mockRejectedValueOnce(new Error('503'));
     await expect(gc.reconnect('r:t')).rejects.toThrow('503');
+  });
+});
+
+describe('reconnect com o SDK real e upgrade recusado (1006)', () => {
+  /** Socket que nunca abre: o erro chega ANTES do close, sem código (como no navegador e no undici). */
+  function failingFactory() {
+    const sockets: FakeSocket[] = [];
+    const factory: WebSocketFactory = (url, protocols) => {
+      const s = new FakeSocket(url, protocols);
+      sockets.push(s);
+      setTimeout(() => s.onerror?.({ type: 'error' }), 0);
+      setTimeout(() => s.onclose?.({ code: CloseCode.ABNORMAL_CLOSURE, reason: '' }), 3);
+      return s;
+    };
+    return { sockets, factory };
+  }
+
+  function arrange() {
+    const { sockets, factory } = failingFactory();
+    const f = fakeSession();
+    const gc = createGameClient(f.session, {
+      serverUrl: 'http://localhost:2567',
+      webSocketFactory: factory,
+    });
+    const post = vi
+      .spyOn(gc.client.http, 'post')
+      .mockResolvedValue({ data: { ...RESERVATION } } as never);
+    return { gc, sockets, post, ...f };
+  }
+
+  it('erro cru antes do close não vira "other": 1 refresh e 1 nova tentativa', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { gc, sockets, post, raw } = arrange();
+    const err = await gc.reconnect('room1:tok').catch((e: unknown) => e);
+    expect(raw.forceRefresh).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(2);
+    // A 2a falha não gera laço: vira UNAVAILABLE.
+    expect(err).toMatchObject({ code: 'UNAVAILABLE' });
+    expect(((err as GameClientError).cause as { code?: number }).code).toBe(
+      CloseCode.ABNORMAL_CLOSURE,
+    );
+    gc.dispose();
+    vi.restoreAllMocks();
+  });
+});
+
+describe('erros de sessão no reconnect e no join', () => {
+  const RECON = { reconnectionToken: 'r:t' };
+
+  it('sem sessão local: SESSION_REQUIRED (reconnect e join), sem tocar a rede', async () => {
+    const f = fakeSession();
+    f.raw.ensureAccessToken.mockRejectedValue(new SessionRequiredError());
+    const gc = createGameClient(f.session, { webSocketFactory: recordingFactory().factory });
+    const spy = vi.spyOn(gc.client, 'reconnect');
+    await expect(gc.reconnect(RECON)).rejects.toMatchObject({ code: 'SESSION_REQUIRED' });
+    await expect(gc.joinWithReservation(RESERVATION)).rejects.toMatchObject({
+      code: 'SESSION_REQUIRED',
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('refresh recusado (401) antes de reconectar: TOKEN_EXPIRED', async () => {
+    const f = fakeSession();
+    f.raw.ensureAccessToken.mockRejectedValue(
+      new ApiError({ status: 401, code: 'INVALID_REFRESH_TOKEN', kind: 'http' }),
+    );
+    const gc = createGameClient(f.session, { webSocketFactory: recordingFactory().factory });
+    await expect(gc.reconnect(RECON)).rejects.toMatchObject({ code: 'TOKEN_EXPIRED' });
+  });
+
+  it('refresh recusado (401) no meio do reconnect: TOKEN_EXPIRED; 503 segue como ApiError', async () => {
+    const f = fakeSession();
+    const gc = createGameClient(f.session, { webSocketFactory: recordingFactory().factory });
+    vi.spyOn(gc.client, 'reconnect').mockRejectedValue(new MatchMakeError('x', 401));
+    f.raw.forceRefresh.mockRejectedValueOnce(
+      new ApiError({ status: 401, code: 'INVALID_REFRESH_TOKEN', kind: 'http' }),
+    );
+    await expect(gc.reconnect(RECON)).rejects.toMatchObject({ code: 'TOKEN_EXPIRED' });
+    f.raw.forceRefresh.mockRejectedValueOnce(
+      new ApiError({ status: 503, code: 'SERVICE_UNAVAILABLE', kind: 'unavailable' }),
+    );
+    await expect(gc.reconnect(RECON)).rejects.toBeInstanceOf(ApiError);
   });
 });
 
