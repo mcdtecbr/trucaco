@@ -69,6 +69,34 @@ interface TransportEvents {
 
 const WS_OPEN = 1;
 
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * A reserva vem do servidor, mas vira URL de WebSocket que recebe o JWT: só aceitamos ids simples e, se
+ * houver `publicAddress`, o MESMO host do servidor configurado (senão o JWT iria para terceiros).
+ */
+export function isSafeReservation(reservation: SeatReservation, serverUrl: string): boolean {
+  const ids = [reservation.name, reservation.sessionId, reservation.roomId];
+  if (reservation.processId !== undefined) ids.push(reservation.processId);
+  if (!ids.every((id) => typeof id === 'string' && SAFE_ID.test(id))) return false;
+  const token = reservation.reconnectionToken;
+  if (token !== undefined && !/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$/.test(token)) return false;
+  const addr = reservation.publicAddress;
+  if (addr !== undefined) {
+    if (typeof addr !== 'string' || /[/@\\?#\s]/.test(addr)) return false;
+    if (hostnameOf(`http://${addr}`) !== hostnameOf(serverUrl)) return false;
+  }
+  return true;
+}
+
 /** Implementa a mesma interface do transporte do SDK (`ITransport`) com o JWT no subprotocolo. */
 export class BearerWebSocketTransport {
   ws: WebSocketLike | undefined;
@@ -77,6 +105,8 @@ export class BearerWebSocketTransport {
     private readonly events: TransportEvents,
     private readonly getAccessToken: () => string | null,
     private readonly factory: WebSocketFactory = defaultWebSocketFactory,
+    /** Defesa em profundidade: se definido, o JWT só vai para um socket deste host. */
+    private readonly allowedHostname?: string,
   ) {}
 
   send(data: Uint8Array): void {
@@ -90,6 +120,9 @@ export class BearerWebSocketTransport {
 
   /** O 2º argumento (cabeçalhos do SDK) é ignorado de propósito: o JWT segue só pelo subprotocolo. */
   connect(url: string): void {
+    if (this.allowedHostname !== undefined && hostnameOf(url) !== this.allowedHostname) {
+      throw new Error('HOST_NOT_ALLOWED'); // nunca entrega o JWT a outro host
+    }
     const jwt = this.getAccessToken();
     if (jwt === null) throw new Error('SESSION_REQUIRED');
     const ws = this.factory(url, [WS_BEARER_PROTOCOL, jwt]);
@@ -154,6 +187,7 @@ export class BearerWebSocketTransport {
 interface Wiring {
   getAccessToken: () => string | null;
   factory: WebSocketFactory;
+  allowedHostname?: string;
   /** Avisa uma queda (o SDK vai tentar reconectar sozinho): hora de garantir um access fresco. */
   onDrop: () => void;
 }
@@ -177,6 +211,7 @@ class BearerRoom<T> extends Room<unknown, T> {
           conn.events,
           wiring.getAccessToken,
           wiring.factory,
+          wiring.allowedHostname,
         );
         current = conn;
       },
@@ -275,6 +310,8 @@ export function classifyFailure(e: unknown): FailureKind {
 }
 
 export function createGameClient(session: Session, options: GameClientOptions = {}): GameClient {
+  const serverUrl = options.serverUrl ?? getServerUrl();
+  const serverHost = hostnameOf(serverUrl);
   const headers: Record<string, string> = {};
   const syncHeaders = (token: string | null): void => {
     if (token === null) delete headers['authorization'];
@@ -285,12 +322,13 @@ export function createGameClient(session: Session, options: GameClientOptions = 
   const wiring: Wiring = {
     getAccessToken: () => session.getAccessToken(),
     factory: options.webSocketFactory ?? defaultWebSocketFactory,
+    ...(serverHost !== null ? { allowedHostname: serverHost } : {}),
     onDrop: () => {
       // Em segundo plano: a próxima tentativa do SDK lê o access renovado. Falha (503) não é fatal.
       session.ensureAccessToken().catch(() => undefined);
     },
   };
-  const client = new BearerClient(options.serverUrl ?? getServerUrl(), headers, wiring);
+  const client = new BearerClient(serverUrl, headers, wiring);
   // O servidor não envia Access-Control-Allow-Credentials: o padrão do SDK ("include") quebraria o CORS.
   client.http.options.credentials = 'omit';
   const unsubscribe = session.onAccessTokenChange(syncHeaders);
@@ -307,6 +345,8 @@ export function createGameClient(session: Session, options: GameClientOptions = 
   }
 
   async function joinWithReservation(reservation: SeatReservation): Promise<Room> {
+    // Antes de qualquer rede ou token: reserva adulterada nunca chega ao SDK.
+    if (!isSafeReservation(reservation, serverUrl)) throw new GameClientError('JOIN_FAILED');
     await withSession(() => session.ensureAccessToken());
     try {
       return await client.consumeSeatReservation(

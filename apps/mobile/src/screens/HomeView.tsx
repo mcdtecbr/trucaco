@@ -41,6 +41,8 @@ export interface HomeViewProps {
   remainingSeconds: number;
   busy: LobbyBusy;
   error: LobbyError | null;
+  /** Segundos de `Retry-After` que faltam para o erro atual (0 = livre). */
+  retryRemaining: number;
   on: {
     dismissLost(): void;
     table(next: TableForm): void;
@@ -54,11 +56,11 @@ export interface HomeViewProps {
   };
 }
 
-function errorFor(error: LobbyError | null, scope: LobbyScope) {
+function errorFor(error: LobbyError | null, scope: LobbyScope, retryRemaining: number) {
   if (error === null || error.scope !== scope) return null;
   return (
     <ErrorText testID={`error-${scope}`}>
-      {withRetry(error.code, error.retryAfterSeconds)}
+      {withRetry(error.code, error.retryUntil !== undefined ? retryRemaining : undefined)}
     </ErrorText>
   );
 }
@@ -67,6 +69,7 @@ function errorFor(error: LobbyError | null, scope: LobbyScope) {
 export function HomeView(p: HomeViewProps) {
   const inQueue = p.queue.status === 'queued' || p.queue.status === 'matched';
   const locked = p.busy !== 'none' || inQueue;
+  const waiting = (scope: LobbyScope): boolean => p.error?.scope === scope && p.retryRemaining > 0;
   return (
     <Screen testID="home">
       <View style={styles.header}>
@@ -108,11 +111,11 @@ export function HomeView(p: HomeViewProps) {
           disabled={locked}
           testID="create-iron"
         />
-        {errorFor(p.error, 'create')}
+        {errorFor(p.error, 'create', p.retryRemaining)}
         <Button
           label={p.busy === 'create' ? 'Criando…' : 'Criar mesa'}
           onPress={p.on.create}
-          disabled={locked}
+          disabled={locked || waiting('create')}
           testID="create-submit"
         />
       </Card>
@@ -130,11 +133,11 @@ export function HomeView(p: HomeViewProps) {
           onSubmit={p.on.join}
           testID="join-code"
         />
-        {errorFor(p.error, 'join')}
+        {errorFor(p.error, 'join', p.retryRemaining)}
         <Button
           label={p.busy === 'join' ? 'Entrando…' : 'Entrar na mesa'}
           onPress={p.on.join}
-          disabled={locked}
+          disabled={locked || waiting('join')}
           testID="join-submit"
         />
       </Card>
@@ -161,7 +164,7 @@ export function HomeView(p: HomeViewProps) {
           disabled={locked}
           testID="queue-iron"
         />
-        {errorFor(p.error, 'queue')}
+        {errorFor(p.error, 'queue', p.retryRemaining)}
         <QueueStatus queue={p.queue} remainingSeconds={p.remainingSeconds} />
         {p.queue.status === 'queued' ? (
           <Button
@@ -175,7 +178,7 @@ export function HomeView(p: HomeViewProps) {
           <Button
             label={p.busy === 'queue' ? 'Entrando na fila…' : 'Entrar na fila'}
             onPress={p.on.queueStart}
-            disabled={locked}
+            disabled={locked || waiting('queue')}
             testID="queue-start"
           />
         )}
@@ -185,7 +188,7 @@ export function HomeView(p: HomeViewProps) {
         label="Configurações"
         variant="secondary"
         onPress={p.on.settings}
-        disabled={p.busy !== 'none'}
+        disabled={locked}
         testID="open-settings"
       />
     </Screen>

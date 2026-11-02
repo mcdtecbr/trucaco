@@ -15,7 +15,7 @@ const apiError = (status: number, code: string, retryAfterSeconds?: number) =>
   });
 const unavailable = () => new ApiError({ status: 0, code: 'NETWORK', kind: 'network' });
 
-function setup() {
+function setup(now?: () => number) {
   const store: LobbyStore = createLobbyStore();
   const api = {
     createTable: vi.fn(),
@@ -33,6 +33,7 @@ function setup() {
     enter,
     onEntered: (c) => entered.push(c),
     abandon,
+    ...(now !== undefined ? { now } : {}),
   });
   return { store, api, entered, enter, abandon, controller };
 }
@@ -91,6 +92,16 @@ describe('criar mesa', () => {
     expect(t.enter).not.toHaveBeenCalled();
   });
 
+  it('sem código de sala válido NÃO navega (nunca onEntered vazio) e larga a sala', async () => {
+    const t = setup();
+    t.api.createTable.mockResolvedValue({ code: 'ABCDEFGH', reservation });
+    t.enter.mockResolvedValue('');
+    await t.controller.createTable({ variant: 'paulista', format: 'single', ironHand: true });
+    expect(t.entered).toEqual([]);
+    expect(t.abandon).toHaveBeenCalledTimes(1);
+    expect(t.store.getState().error?.code).toBe('INVALID_RESPONSE');
+  });
+
   it('falha ao consumir a reserva mostra o erro e não navega', async () => {
     const t = setup();
     t.api.createTable.mockResolvedValue({ code: 'ABCDEFGH', reservation });
@@ -127,14 +138,15 @@ describe('entrar por código', () => {
     expect(t.store.getState().error).toEqual({ scope: 'join', code: 'TABLE_UNAVAILABLE' });
   });
 
-  it('429 guarda o Retry-After', async () => {
-    const t = setup();
+  it('429 guarda o Retry-After e o instante em que ele vence (relógio injetado)', async () => {
+    const t = setup(() => 1_000_000);
     t.api.joinTable.mockRejectedValue(apiError(429, 'RATE_LIMITED', 30));
     await t.controller.joinByCode('ABCDEFGH');
     expect(t.store.getState().error).toEqual({
       scope: 'join',
       code: 'RATE_LIMITED',
       retryAfterSeconds: 30,
+      retryUntil: 1_030_000,
     });
   });
 });
@@ -205,11 +217,12 @@ describe('fila pública', () => {
     const t = setup();
     t.api.joinQueue.mockRejectedValue(apiError(429, 'QUEUE_COOLDOWN', 42));
     await t.controller.startQueue(choices);
-    expect(t.store.getState().error).toEqual({
+    expect(t.store.getState().error).toMatchObject({
       scope: 'queue',
       code: 'QUEUE_COOLDOWN',
       retryAfterSeconds: 42,
     });
+    expect(t.store.getState().error?.retryUntil).toBeGreaterThan(Date.now());
     expect(t.store.getState().queue).toEqual({ status: 'idle' });
     await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 3);
     expect(t.api.queueStatus).not.toHaveBeenCalled();
@@ -286,6 +299,36 @@ describe('fila pública', () => {
     expect(t.api.leaveQueue).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 5);
     expect(t.api.queueStatus).not.toHaveBeenCalled();
+  });
+
+  it('dispose com o POST /queue em voo: a resposta tardia `queued` é seguida de /queue/leave', async () => {
+    const t = setup();
+    let resolveJoin!: (v: unknown) => void;
+    t.api.joinQueue.mockReturnValue(new Promise((r) => (resolveJoin = r)));
+    t.api.leaveQueue.mockResolvedValue({ status: 'idle' });
+    const run = t.controller.startQueue(choices);
+    await flush();
+    t.controller.dispose(); // sai da tela com a requisição ainda em voo
+    expect(t.api.leaveQueue).not.toHaveBeenCalled(); // ainda não sabemos que entrou
+    resolveJoin({ status: 'queued', expiresAt: 99_000 });
+    await run;
+    expect(t.api.leaveQueue).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 3);
+    expect(t.api.queueStatus).not.toHaveBeenCalled(); // e nada de polling
+  });
+
+  it('dispose com o POST em voo e resposta `matched` também sai da fila', async () => {
+    const t = setup();
+    let resolveJoin!: (v: unknown) => void;
+    t.api.joinQueue.mockReturnValue(new Promise((r) => (resolveJoin = r)));
+    t.api.leaveQueue.mockResolvedValue({ status: 'idle' });
+    const run = t.controller.startQueue(choices);
+    await flush();
+    t.controller.dispose();
+    resolveJoin({ status: 'matched', reservation });
+    await run;
+    expect(t.api.leaveQueue).toHaveBeenCalledTimes(1);
+    expect(t.enter).not.toHaveBeenCalled();
   });
 
   it('dispose sem estar na fila não chama /queue/leave', () => {

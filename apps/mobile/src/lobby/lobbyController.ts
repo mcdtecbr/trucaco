@@ -4,7 +4,7 @@
  * em voo (`busy`), resposta validada por guard, polling cancelável e mensagem de erro única para
  * mesa inexistente/cheia/fechada.
  */
-import { validateRoomOptions } from '@trucaco/protocol';
+import { isValidRoomCode, validateRoomOptions } from '@trucaco/protocol';
 import type {
   CreateTableRequest,
   QueueRequest,
@@ -37,6 +37,8 @@ export interface LobbyDeps {
   /** Saiu da tela no meio da entrada: larga a sala recém-aberta. */
   abandon?(): void;
   pollMs?: number;
+  /** Relógio injetável (epoch ms), usado no `retryUntil` do Retry-After. */
+  now?: () => number;
 }
 
 export interface TableChoices {
@@ -62,6 +64,7 @@ export interface LobbyController {
 export function createLobbyController(deps: LobbyDeps): LobbyController {
   const { api, store } = deps;
   const pollMs = deps.pollMs ?? QUEUE_POLL_MS;
+  const now = deps.now ?? (() => Date.now());
   /** Sobe a cada início/cancelamento: respostas e timers de uma geração antiga são descartados. */
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +79,9 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
     state().setError({
       scope,
       code: errorCodeOf(e),
-      ...(retry !== undefined ? { retryAfterSeconds: retry } : {}),
+      ...(retry !== undefined && retry > 0
+        ? { retryAfterSeconds: retry, retryUntil: now() + retry * 1000 }
+        : {}),
     });
   }
 
@@ -92,8 +97,15 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
     try {
       const code = await deps.enter(reservation);
       state().setQueue({ status: 'idle' });
-      if (disposed) deps.abandon?.();
-      else deps.onEntered(code);
+      if (disposed) {
+        deps.abandon?.();
+      } else if (!isValidRoomCode(code)) {
+        // Sem código válido não há para onde navegar: larga a sala em vez de abrir `/table/`.
+        deps.abandon?.();
+        throw invalidResponse();
+      } else {
+        deps.onEntered(code);
+      }
     } catch (e) {
       state().setQueue({ status: 'idle' });
       fail(scope, e);
@@ -228,7 +240,13 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
       state().setBusy('queue');
       try {
         const res = asQueue(await api.joinQueue(request));
-        if (gen !== generation) return;
+        if (gen !== generation) {
+          // Saiu da tela com o POST em voo: o servidor já nos pôs na fila (ou casou). Sai dela agora.
+          if (disposed && (res.status === 'queued' || res.status === 'matched')) {
+            api.leaveQueue().catch(() => undefined);
+          }
+          return;
+        }
         // Libera o `busy` antes de aplicar: `matched` abre o próprio `entering`.
         state().setBusy('none');
         await applyQueue(res, gen);

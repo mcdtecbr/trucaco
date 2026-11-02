@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createLobbyStore, queueRemainingSeconds, selectInQueue, selectIsBusy } from './lobbyStore';
-import { createRoomStore, projectWaiting, selectSeatedCount } from './roomStore';
+import { createLobbyStore, queueRemainingSeconds, retryRemainingSeconds } from './lobbyStore';
+import { createRoomStore, projectWaiting } from './roomStore';
 import { bindSession, createSessionStore, selectIsReady, selectNickname } from './sessionStore';
 import type { Session, SessionState } from '../net/session';
 
@@ -90,16 +90,30 @@ describe('sessionStore', () => {
 describe('lobbyStore', () => {
   it('seletores e reset', () => {
     const store = createLobbyStore();
-    expect(selectIsBusy(store.getState())).toBe(false);
+    expect(store.getState().busy).toBe('none');
     store.getState().setBusy('create');
     store.getState().setQueue({ status: 'queued', expiresAt: 10_000 });
-    expect(selectIsBusy(store.getState())).toBe(true);
-    expect(selectInQueue(store.getState())).toBe(true);
+    expect(store.getState().busy).toBe('create');
+    expect(store.getState().queue.status).toBe('queued');
     store.getState().setError({ scope: 'queue', code: 'QUEUE_COOLDOWN', retryAfterSeconds: 3 });
     store.getState().reset();
     expect(store.getState().busy).toBe('none');
     expect(store.getState().queue).toEqual({ status: 'idle' });
     expect(store.getState().error).toBeNull();
+  });
+
+  it('Retry-After: restante a partir de retryUntil', () => {
+    const e = {
+      scope: 'queue',
+      code: 'QUEUE_COOLDOWN',
+      retryAfterSeconds: 30,
+      retryUntil: 30_000,
+    } as const;
+    expect(retryRemainingSeconds(e, 0)).toBe(30);
+    expect(retryRemainingSeconds(e, 29_100)).toBe(1);
+    expect(retryRemainingSeconds(e, 30_000)).toBe(0);
+    expect(retryRemainingSeconds({ scope: 'join', code: 'INVALID_CODE' }, 0)).toBe(0);
+    expect(retryRemainingSeconds(null, 0)).toBe(0);
   });
 
   it('tempo restante da fila vem de expiresAt', () => {
@@ -131,6 +145,11 @@ describe('roomStore e projeção da espera', () => {
     expect(p.seats.map((s) => s.seat)).toEqual([0, 1, 2, 3]);
     expect(p.mySeat).toBe(1);
   });
+  it('roomCode inválido (fora do alfabeto, tamanho, tipo) vira vazio', () => {
+    for (const bad of ['abc', 'ABCDEFG0', '../admin', 'ABCDEFGHI', 42, null]) {
+      expect(projectWaiting({ ...json, roomCode: bad }).roomCode).toBe('');
+    }
+  });
   it('é tolerante a lixo e estado parcial', () => {
     expect(projectWaiting(undefined).seats).toEqual([]);
     expect(projectWaiting({ players: [null, 5, { seat: 'x' }] }).seats).toEqual([]);
@@ -139,7 +158,7 @@ describe('roomStore e projeção da espera', () => {
   it('conta assentos ocupados e reseta', () => {
     const store = createRoomStore();
     store.getState().patch({ ...projectWaiting(json), connection: 'connected' });
-    expect(selectSeatedCount(store.getState())).toBe(3);
+    expect(store.getState().seats.filter((p) => p.status !== 'empty')).toHaveLength(3);
     store.getState().reset();
     expect(store.getState().connection).toBe('none');
     expect(store.getState().seats).toEqual([]);

@@ -17,6 +17,8 @@ export interface WaitingRoomViewProps {
   connection: RoomConnection;
   errorCode: string | null;
   shareLabel: string;
+  shareDoneText: string;
+  shareFailedText: string;
   shareFeedback: 'idle' | 'done' | 'failed';
   on: { share(): void; leave(): void };
 }
@@ -53,10 +55,8 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
           disabled={p.roomCode === ''}
           testID="share-code"
         />
-        {p.shareFeedback === 'done' ? <Body testID="share-done">Pronto!</Body> : null}
-        {p.shareFeedback === 'failed' ? (
-          <ErrorText>Não foi possível copiar. Anote o código acima.</ErrorText>
-        ) : null}
+        {p.shareFeedback === 'done' ? <Body testID="share-done">{p.shareDoneText}</Body> : null}
+        {p.shareFeedback === 'failed' ? <ErrorText>{p.shareFailedText}</ErrorText> : null}
       </Card>
 
       {p.connection === 'reconnecting' ? (

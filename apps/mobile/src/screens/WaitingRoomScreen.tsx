@@ -1,17 +1,36 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { shareCode, SHARE_LABEL } from '../platform/shareCode';
+import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
 import { useRoomStore } from '../store/roomStore';
 import { TablePlaceholderView, WaitingRoomView } from './WaitingRoomView';
+import { decideWaitingRoute, exitTable } from './waitingRoute';
 
 /**
- * Sala de espera de `/table/[code]`. A sala já foi aberta pelo início (`roomService.enter`). Sem sala
- * (recarregou a página, deep link): volta ao início com o campo preenchido, sem entrar sozinho.
+ * Rota `/table/[code]`. A sala já foi aberta pelo início (`roomService.enter`). Sem sala (recarregou,
+ * deep link) ou com sala de OUTRO código, só redireciona: o componente que faz `leave()` no cleanup
+ * (`JoinedTable`) nem chega a montar, então um redirect nunca derruba a sala atual.
  */
 export function WaitingRoomScreen() {
-  const router = useRouter();
   const params = useLocalSearchParams<{ code?: string }>();
+  const connection = useRoomStore((s) => s.connection);
+  const roomCode = useRoomStore((s) => s.roomCode);
+  const route = decideWaitingRoute({ connection, paramCode: params.code, roomCode });
+  if (route.kind === 'toHome') {
+    return (
+      <Redirect
+        href={{ pathname: '/home', params: route.code !== '' ? { code: route.code } : {} }}
+      />
+    );
+  }
+  if (route.kind === 'toCurrent') {
+    return <Redirect href={{ pathname: '/table/[code]', params: { code: route.code } }} />;
+  }
+  return <JoinedTable />;
+}
+
+function JoinedTable() {
+  const router = useRouter();
   const connection = useRoomStore((s) => s.connection);
   const roomCode = useRoomStore((s) => s.roomCode);
   const seats = useRoomStore((s) => s.seats);
@@ -27,21 +46,11 @@ export function WaitingRoomScreen() {
     };
   }, []);
 
-  const leave = useCallback(() => {
-    void getApp().rooms.leave();
-    // Volta para o início que está embaixo na pilha (evita um segundo `/home` empilhado).
-    if (router.canGoBack()) router.back();
-    else router.replace('/home');
-  }, [router]);
+  const leave = useCallback(() => exitTable(getApp().rooms, router), [router]);
 
   const share = useCallback(() => {
-    void shareCode(roomCode).then((ok) => setFeedback(ok ? 'done' : 'failed'));
+    void shareCode(roomCode).then((o) => setFeedback(o === 'dismissed' ? 'idle' : o));
   }, [roomCode]);
-
-  if (connection === 'none') {
-    const code = typeof params.code === 'string' ? params.code : '';
-    return <Redirect href={{ pathname: '/home', params: code !== '' ? { code } : {} }} />;
-  }
 
   if (tablePhase === 'playing' || tablePhase === 'finished') {
     return (
@@ -57,6 +66,8 @@ export function WaitingRoomScreen() {
       connection={connection}
       errorCode={errorCode}
       shareLabel={SHARE_LABEL}
+      shareDoneText={SHARE_DONE_TEXT}
+      shareFailedText={SHARE_FAILED_TEXT}
       shareFeedback={feedback}
       on={{ share, leave }}
     />

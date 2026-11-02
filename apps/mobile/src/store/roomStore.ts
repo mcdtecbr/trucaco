@@ -2,6 +2,7 @@
  * Projeção mínima da sala de espera (apelidos, status, fase). NÃO guarda regra de jogo nem cartas: a mesa
  * jogável (3H) terá a própria projeção. A fonte de verdade continua sendo `room.state`.
  */
+import { isValidRoomCode } from '@trucaco/protocol';
 import { createStore, useStore } from 'zustand';
 
 export type RoomConnection = 'none' | 'joining' | 'connected' | 'reconnecting' | 'closed';
@@ -52,9 +53,6 @@ export function useRoomStore<T>(selector: (s: RoomStoreState) => T): T {
   return useStore(roomStore, selector);
 }
 
-export const selectSeatedCount = (s: RoomStoreState): number =>
-  s.seats.filter((p) => p.status !== 'empty').length;
-
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
 }
@@ -98,7 +96,8 @@ export function projectWaiting(json: unknown): WaitingProjection {
     }
   }
   return {
-    roomCode: typeof json['roomCode'] === 'string' ? json['roomCode'] : '',
+    // Código inválido (adulterado ou de servidor diferente) vira '': nunca vai para uma rota.
+    roomCode: isValidRoomCode(json['roomCode']) ? json['roomCode'] : '',
     tablePhase: typeof json['phase'] === 'string' ? json['phase'] : '',
     seats,
     mySeat,

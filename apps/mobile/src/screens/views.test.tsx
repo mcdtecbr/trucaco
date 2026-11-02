@@ -21,6 +21,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
     remainingSeconds: 0,
     busy: 'none',
     error: null,
+    retryRemaining: 0,
     on: {
       dismissLost: noop,
       table: noop,
@@ -52,6 +53,8 @@ function waiting(over: Partial<WaitingRoomViewProps> = {}): string {
       connection="connected"
       errorCode={null}
       shareLabel="Copiar código"
+      shareDoneText="Código copiado."
+      shareFailedText="Não foi possível copiar. Anote o código acima."
       shareFeedback="idle"
       on={{ share: noop, leave: noop }}
       {...over}
@@ -102,13 +105,43 @@ describe('HomeView', () => {
 
   it('erros por escopo, com Retry-After e sem revelar existência da mesa', () => {
     const cool = home({
-      error: { scope: 'queue', code: 'QUEUE_COOLDOWN', retryAfterSeconds: 30 },
+      error: { scope: 'queue', code: 'QUEUE_COOLDOWN', retryAfterSeconds: 30, retryUntil: 1 },
+      retryRemaining: 30,
     });
     expect(cool).toContain('(30 s)');
     const a = home({ error: { scope: 'join', code: 'TABLE_UNAVAILABLE' } });
     expect(a).toContain('Mesa indisponível. Confira o código.');
     expect(a).not.toContain('error-create');
     expect(home({ error: { scope: 'join', code: 'INVALID_CODE' } })).toContain('Código inválido');
+  });
+
+  it('Configurações fica desabilitado na fila e enquanto algo está em voo', () => {
+    const settingsBtn = (html: string): string =>
+      /<[^>]*data-testid="open-settings"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(settingsBtn(home())).not.toContain('aria-disabled="true"');
+    expect(settingsBtn(home({ queue: { status: 'queued', expiresAt: 1 } }))).toContain(
+      'aria-disabled="true"',
+    );
+    expect(settingsBtn(home({ queue: { status: 'matched' } }))).toContain('aria-disabled="true"');
+    expect(settingsBtn(home({ busy: 'entering' }))).toContain('aria-disabled="true"');
+  });
+
+  it('Retry-After: contagem regressiva no texto e botão do escopo desabilitado até zerar', () => {
+    const btn = (html: string, id: string): string =>
+      new RegExp(`<[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? '';
+    const err = {
+      scope: 'queue',
+      code: 'QUEUE_COOLDOWN',
+      retryAfterSeconds: 30,
+      retryUntil: 99,
+    } as const;
+    const waitingHtml = home({ error: err, retryRemaining: 17 });
+    expect(waitingHtml).toContain('(17 s)');
+    expect(btn(waitingHtml, 'queue-start')).toContain('aria-disabled="true"');
+    expect(btn(waitingHtml, 'create-submit')).not.toContain('aria-disabled="true"'); // outro escopo
+    expect(btn(home({ error: err, retryRemaining: 0 }), 'queue-start')).not.toContain(
+      'aria-disabled="true"',
+    );
   });
 
   it('aviso de fila expirada e estado seated', () => {
@@ -150,7 +183,8 @@ describe('WaitingRoomView', () => {
   });
 
   it('feedback do botão de copiar', () => {
-    expect(waiting({ shareFeedback: 'done' })).toContain('Pronto!');
+    expect(waiting({ shareFeedback: 'done' })).toContain('Código copiado.');
+    expect(waiting({ shareFeedback: 'idle' })).not.toContain('Código copiado.');
     expect(waiting({ shareFeedback: 'failed' })).toContain('Não foi possível copiar');
   });
 

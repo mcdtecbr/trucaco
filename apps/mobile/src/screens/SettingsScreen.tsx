@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { messageForError } from '../i18n/errors';
 import { errorMessage } from '../i18n/errors';
+import { performLogout } from '../lobby/logout';
 import { checkNickname } from '../lobby/nickname';
 import { getApp } from '../services/app';
 import { lobbyStore } from '../store/lobbyStore';
@@ -41,11 +42,15 @@ export function SettingsScreen() {
   const logout = async (): Promise<void> => {
     if (busy) return;
     setBusy(true);
-    sessionStore.getState().beginLogout();
+    const app = getApp();
     try {
-      await getApp().session.logout();
+      await performLogout({
+        beginLogout: () => sessionStore.getState().beginLogout(),
+        leaveQueue: () => app.session.api.leaveQueue(),
+        logout: () => app.session.logout(),
+        resetLobby: () => lobbyStore.getState().reset(),
+      });
     } finally {
-      lobbyStore.getState().reset();
       setBusy(false);
       router.replace('/');
     }

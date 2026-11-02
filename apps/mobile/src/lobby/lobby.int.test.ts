@@ -169,11 +169,15 @@ describe('mesa privada: criar e entrar por código', () => {
   }, 40_000);
 
   it('quem já está numa mesa recebe ALREADY_IN_TABLE ao criar outra', async () => {
+    await freshPlayers(); // pré-condição montada aqui: o teste passa isolado (-t)
     const owner = players[0]!;
+    await owner.controller.createTable({ variant: 'paulista', format: 'single', ironHand: true });
+    expect(owner.lobbyStore.getState().error).toBeNull();
+    expect(owner.entered).toHaveLength(1);
     await owner.controller.createTable({ variant: 'mineiro', format: 'single', ironHand: false });
     expect(owner.lobbyStore.getState().error?.code).toBe('ALREADY_IN_TABLE');
     expect(owner.lobbyStore.getState().busy).toBe('none');
-  });
+  }, 20_000);
 });
 
 describe('fila pública com 4 convidados', () => {

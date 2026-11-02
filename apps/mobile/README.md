@@ -45,7 +45,13 @@ Rotas em `app/` (finas) e telas em `src/screens/` (`XScreen` com hooks e rede, `
 - `src/lobby/lobbyController.ts`: criar/entrar/fila (validação antes da rede, anti duplo clique, polling de 2 s cancelável, guards de resposta). `src/room/roomService.ts`: uma sala por vez, `leave(true)`, reconexão manual quando o SDK desiste. `src/services/app.ts` monta tudo sob demanda.
 - `src/i18n/errors.ts`: código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`). `src/theme.ts`: tokens simples (contraste AA testado); migram para `packages/ui` no 3F.
 - Política de apelido no cliente (`src/lobby/nickname.ts`) é só UX e espelha `apps/server/src/db/validation.ts`, que não está no protocol.
-- `typedRoutes` do Expo Router está desligado: o arquivo gerado em `.expo/types` só é atualizado por `expo start` e deixava o `typecheck` instável.
+- `typedRoutes` está DESLIGADO de propósito. Só o `expo start` gera `.expo/types/router.d.ts` (o `expo export` não), e um arquivo velho quebra o `typecheck` (7 erros medidos ao adicionar rotas). Gerar o arquivo dentro do `typecheck` exigia subir o Metro e matar processos por grupo (não portável para o Windows e nunca validado no CI), então a checagem de `router.push`/`Redirect` fica por conta dos testes das funções de rota. Reavaliar quando o CI do GitHub rodar.
+
+## Reserva, saída e a verificar
+
+- A reserva de assento é validada antes de qualquer rede (`isSafeReservation`): ids `[A-Za-z0-9_-]+` e `publicAddress`, se vier, com o mesmo host do servidor; o transporte também recusa host diferente. Reserva adulterada vira `JOIN_FAILED` sem enviar o JWT.
+- Sair da tela inicial, abrir Configurações (desabilitado na fila) e logout saem da fila no servidor (`leaveQueue` antes do logout, com o token ainda válido; resposta tardia de um POST em voo também sai).
+- **A verificar (Fase 7, builds nativos):** App Links/Universal Links (o `trucaco://` não autentica o domínio: `assetlinks.json` e `apple-app-site-association`); se o backup do SecureStore (Android Auto Backup, iCloud) leva o refresh token para outro aparelho e se isso precisa ser desligado; permissões Android e `AndroidManifest` gerados pelo `expo prebuild` (nenhuma além de internet é esperada).
 
 ## Limites
 

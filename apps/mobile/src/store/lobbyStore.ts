@@ -15,6 +15,8 @@ export interface LobbyError {
   readonly scope: LobbyScope;
   readonly code: string;
   readonly retryAfterSeconds?: number;
+  /** Epoch ms até quando o `Retry-After` vale (botões do escopo ficam desabilitados). */
+  readonly retryUntil?: number;
 }
 
 export type LobbyNotice = 'queueExpired' | null;
@@ -56,8 +58,11 @@ export function useLobbyStore<T>(selector: (s: LobbyStoreState) => T): T {
   return useStore(lobbyStore, selector);
 }
 
-export const selectIsBusy = (s: LobbyStoreState): boolean => s.busy !== 'none';
-export const selectInQueue = (s: LobbyStoreState): boolean => s.queue.status === 'queued';
+/** Segundos que faltam do `Retry-After` do erro (0 se não há ou já passou). */
+export function retryRemainingSeconds(error: LobbyError | null, nowMs: number): number {
+  if (error?.retryUntil === undefined) return 0;
+  return Math.max(0, Math.ceil((error.retryUntil - nowMs) / 1000));
+}
 
 /** Segundos que faltam para a entrada na fila expirar (0 se já passou ou fora da fila). */
 export function queueRemainingSeconds(queue: QueueView, nowMs: number): number {

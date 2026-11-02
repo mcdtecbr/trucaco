@@ -455,9 +455,44 @@ describe('joinWithReservation', () => {
     const { session } = fakeSession();
     const gc = createGameClient(session, { webSocketFactory: recordingFactory().factory });
     const spy = vi.spyOn(gc.client, 'consumeSeatReservation').mockRejectedValue(new Error('x'));
-    const full = { ...RESERVATION, devMode: true, publicAddress: 'h:1' };
+    const full = { ...RESERVATION, devMode: true, publicAddress: 'localhost:2567' };
     await expect(gc.joinWithReservation(full)).rejects.toMatchObject({ code: 'JOIN_FAILED' });
     expect(spy.mock.calls[0]?.[0]).toBe(full);
+  });
+});
+
+describe('reserva adulterada (Vitor-1)', () => {
+  const bad: Array<[string, Partial<SeatReservation>]> = [
+    ['publicAddress de outro host', { publicAddress: 'evil.com' }],
+    ['publicAddress com userinfo', { publicAddress: 'localhost:2567@evil.com' }],
+    ['publicAddress com caminho', { publicAddress: 'evil.com/localhost' }],
+    ['processId com caracteres perigosos', { processId: 'p/../x' }],
+    ['roomId com query', { roomId: 'r?x=1' }],
+    ['sessionId vazio', { sessionId: '' }],
+  ];
+  it.each(bad)('%s: erro tipado, sem socket e sem JWT', async (_label, patch) => {
+    const { sockets, factory } = recordingFactory();
+    const { session, raw } = fakeSession();
+    const gc = createGameClient(session, {
+      serverUrl: 'http://localhost:2567',
+      webSocketFactory: factory,
+    });
+    const spy = vi.spyOn(gc.client, 'consumeSeatReservation');
+    await expect(gc.joinWithReservation({ ...RESERVATION, ...patch })).rejects.toMatchObject({
+      code: 'JOIN_FAILED',
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(0);
+    expect(raw.ensureAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('o transporte recusa host diferente do servidor, sem abrir socket', () => {
+    const { sockets, factory } = recordingFactory();
+    const t = new BearerWebSocketTransport({}, () => JWT, factory, 'localhost');
+    expect(() => t.connect('wss://evil.com/p/r')).toThrow('HOST_NOT_ALLOWED');
+    expect(sockets).toHaveLength(0);
+    t.connect('ws://localhost:2567/p/r');
+    expect(sockets).toHaveLength(1);
   });
 });
 

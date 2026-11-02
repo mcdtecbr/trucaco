@@ -1,8 +1,14 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { normalizeCodeInput } from '../lobby/codeInput';
+import { prefillCode, startHome } from '../lobby/homeLifecycle';
 import { createLobbyController } from '../lobby/lobbyController';
-import { lobbyStore, queueRemainingSeconds, useLobbyStore } from '../store/lobbyStore';
+import {
+  lobbyStore,
+  queueRemainingSeconds,
+  retryRemainingSeconds,
+  useLobbyStore,
+} from '../store/lobbyStore';
 import { sessionStore, useSessionStore, selectNickname } from '../store/sessionStore';
 import { getApp } from '../services/app';
 import { HomeView } from './HomeView';
@@ -26,9 +32,7 @@ export function HomeScreen() {
   });
   const [queueForm, setQueueForm] = useState<QueueForm>({ variant: 'paulista', ironHand: true });
   // Deep link `trucaco://table/CODE` só PREENCHE o campo; entrar é sempre ação do usuário.
-  const [code, setCode] = useState(() =>
-    typeof params.code === 'string' ? normalizeCodeInput(params.code) : '',
-  );
+  const [code, setCode] = useState(() => prefillCode(params.code));
 
   const controller = useMemo(() => {
     const app = getApp();
@@ -42,15 +46,16 @@ export function HomeScreen() {
     });
   }, [router]);
 
-  useEffect(() => {
-    // Ao entrar na tela, nada de erro ou aviso de uma visita anterior.
-    lobbyStore.getState().setError(null);
-    lobbyStore.getState().setNotice(null);
-    return () => controller.dispose();
-  }, [controller]);
+  useEffect(() => startHome(controller, lobbyStore), [controller]);
 
   const queued = queue.status === 'queued';
-  const now = useNow(queued);
+  const retrying = error?.retryUntil !== undefined;
+  const now = useNow(queued || retrying);
+  const retryRemaining = retryRemainingSeconds(error, now);
+  // Terminou o Retry-After: o erro some e o botão volta.
+  useEffect(() => {
+    if (retrying && retryRemaining === 0) lobbyStore.getState().setError(null);
+  }, [retrying, retryRemaining]);
 
   return (
     <HomeView
@@ -64,6 +69,7 @@ export function HomeScreen() {
       remainingSeconds={queueRemainingSeconds(queue, now)}
       busy={busy}
       error={error}
+      retryRemaining={retryRemaining}
       on={{
         dismissLost: () => sessionStore.getState().dismissLost(),
         table: setTable,
