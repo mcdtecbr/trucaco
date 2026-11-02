@@ -15,6 +15,7 @@ import { PUBLIC_EVENT_TYPES, announcementFor } from '@trucaco/ui';
 import type { HandResult } from '@trucaco/ui';
 import { messageForAction } from './actionMessage';
 import { createClockOffset } from './clockOffset';
+import type { ClockOffset } from './clockOffset';
 import { isPresenceStatus, presenceText } from './presence';
 import { actionSignature, projectTable } from './projectTable';
 import type { PlayedView, TableViewModel } from './projectTable';
@@ -23,6 +24,8 @@ import type { ChatEntry, LingeringTrick, TableStore, TableStoreState } from './t
 /** Se o estado não reagir à ação em tanto tempo, o botão destrava (mensagem perdida). */
 export const BUSY_TIMEOUT_MS = 3000;
 export const NOTICE_MS = 3000;
+/** Balão de chat sobre o avatar (igual ao `CHAT_BUBBLE_MS` da UI). */
+export const BUBBLE_MS = 4000;
 export const PRESENCE_NOTE_MS = 5000;
 /** Teto do histórico em memória. */
 const MAX_HISTORY = 200;
@@ -84,6 +87,8 @@ export interface TableControllerOptions {
   send: (msg: ClientMessage) => boolean;
   now?: () => number;
   timers?: TableTimers;
+  /** Estimador de offset do relógio (injetável para os testes contarem amostras). */
+  clockOffset?: ClockOffset;
 }
 
 export interface TableController {
@@ -175,7 +180,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
   };
-  const offset = createClockOffset();
+  const offset = opts.clockOffset ?? createClockOffset();
   let announce: ((message: string) => void) | null = null;
   let busySignature = '';
   let busyTimer: unknown = null;
@@ -189,6 +194,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
   let trickPlays: PlayedView[] = [];
   let closedTrick: ClosedTrick | null = null;
   let chatId = 0;
+  const bubbleTimers = new Map<number, unknown>();
 
   const clear = (h: unknown): void => {
     if (h !== null) timers.clearTimeout(h);
@@ -377,7 +383,20 @@ export function createTableController(opts: TableControllerOptions): TableContro
         at: typeof m['at'] === 'number' ? m['at'] : 0,
       };
       const seen = cur.chatOpen && cur.chatTab === scope;
+      // Balão: um por assento; o novo substitui o anterior e reinicia os 4 s.
+      const prevTimer = bubbleTimers.get(seat);
+      if (prevTimer !== undefined) timers.clearTimeout(prevTimer);
+      bubbleTimers.set(
+        seat,
+        timers.setTimeout(() => {
+          bubbleTimers.delete(seat);
+          const rest = { ...store.getState().bubbles };
+          delete rest[seat];
+          store.getState().patch({ bubbles: rest });
+        }, BUBBLE_MS),
+      );
       cur.patch({
+        bubbles: { ...cur.bubbles, [seat]: { id: entry.id, scope, text } },
         chat: [...cur.chat, entry].slice(-MAX_CHAT),
         chatUnread: seen
           ? cur.chatUnread
@@ -510,6 +529,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       clear(presenceTimer);
       clear(lingerTimer);
       busyTimer = noticeTimer = presenceTimer = lingerTimer = null;
+      for (const h of bubbleTimers.values()) timers.clearTimeout(h);
+      bubbleTimers.clear();
       busySignature = '';
       handNumber = 0;
       replayUntil = 0;

@@ -9,6 +9,7 @@ import {
   AvatarPlaceholder,
   BetButtons,
   Card,
+  ChatBubble,
   HandFan,
   LiveRegion,
   MIN_TOUCH,
@@ -29,7 +30,7 @@ import {
 import type { HandResult, LayoutMode } from '@trucaco/ui';
 import type { SeatView, TableViewModel } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
-import type { LingeringTrick } from '../table/tableStore';
+import type { ChatBubbleEntry, LingeringTrick } from '../table/tableStore';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
@@ -57,6 +58,8 @@ export interface TableViewProps {
   /** Painel de chat aberto (props prontas) ou null. */
   chatPanel: ChatPanelProps | null;
   chatUnreadTotal: number;
+  /** Balão de chat por assento (4 s). */
+  bubbles: Readonly<Record<number, ChatBubbleEntry>>;
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
@@ -83,9 +86,43 @@ function seatCaption(s: SeatView, vm: TableViewModel): string {
   return '';
 }
 
-function Seat({ s, vm }: { s: SeatView; vm: TableViewModel }) {
+function Bubble({
+  seat,
+  vm,
+  bubbles,
+}: {
+  seat: number;
+  vm: TableViewModel;
+  bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+}) {
+  const b = bubbles[seat];
+  if (b === undefined) return null;
+  const author = seat === vm.mySeat ? 'Você' : vm.seats[seat]?.nickname || `Jogador ${seat + 1}`;
+  // Posição absoluta sobre o avatar: o balão aparece e some sem deslocar o layout.
   return (
-    <View testID={`table-seat-${s.seat}`}>
+    <View style={styles.bubbleSlot} pointerEvents="none">
+      <ChatBubble
+        author={author}
+        text={b.text}
+        partner={b.scope === 'partner'}
+        testID={`bubble-${seat}`}
+      />
+    </View>
+  );
+}
+
+function Seat({
+  s,
+  vm,
+  bubbles,
+}: {
+  s: SeatView;
+  vm: TableViewModel;
+  bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+}) {
+  return (
+    <View testID={`table-seat-${s.seat}`} style={styles.seatBox}>
+      <Bubble seat={s.seat} vm={vm} bubbles={bubbles} />
       <AvatarPlaceholder
         nickname={s.nickname || '—'}
         status={s.nickname === '' && s.status === 'connected' ? 'empty' : s.status}
@@ -225,11 +262,11 @@ export function TableView(p: TableViewProps) {
   const board = (
     <View style={styles.board}>
       <View style={styles.partner}>
-        <Seat s={vm.byPosition.partner} vm={vm} />
+        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} />
       </View>
       <View style={styles.middle}>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.left} vm={vm} />
+          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} />
         </View>
         <View style={styles.center} testID="trick">
           <PlayedCards
@@ -247,7 +284,7 @@ export function TableView(p: TableViewProps) {
           ) : null}
         </View>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.right} vm={vm} />
+          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} />
         </View>
       </View>
     </View>
@@ -350,13 +387,16 @@ export function TableView(p: TableViewProps) {
 
   const footer = (
     <View style={styles.footer}>
-      <AvatarPlaceholder
-        nickname={mineSeat.nickname || 'Você'}
-        status={mineSeat.status}
-        side="mine"
-        active={mineSeat.isTurn}
-        caption="você"
-      />
+      <View testID="my-seat" style={styles.seatBox}>
+        <Bubble seat={vm.mySeat} vm={vm} bubbles={p.bubbles} />
+        <AvatarPlaceholder
+          nickname={mineSeat.nickname || 'Você'}
+          status={mineSeat.status}
+          side="mine"
+          active={mineSeat.isTurn}
+          caption="você"
+        />
+      </View>
       <View style={styles.menuRow}>
         <Pressable
           accessibilityRole="button"
@@ -472,6 +512,15 @@ export function TableView(p: TableViewProps) {
 const SIDEBAR_WIDTH = 340;
 
 const styles = StyleSheet.create({
+  seatBox: { position: 'relative' },
+  bubbleSlot: {
+    position: 'absolute',
+    bottom: '100%',
+    left: -spacing.lg,
+    right: -spacing.lg,
+    alignItems: 'center',
+    zIndex: 1,
+  },
   root: { flex: 1, backgroundColor: colors.background },
   flex: { flex: 1 },
   partnerRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },

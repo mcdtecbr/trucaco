@@ -5,6 +5,8 @@
  * escolhe a primeira ação legal que não seja apostar.
  * Rode com `pnpm --filter @trucaco/mobile test:int` (precisa de `pnpm build` antes).
  */
+import { CloseCode } from '@colyseus/sdk';
+import type { Room } from '@colyseus/sdk';
 import { ERROR_CODES } from '@trucaco/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createLobbyController } from '../lobby/lobbyController';
@@ -20,6 +22,7 @@ import type { RoomLike, RoomService } from '../room/roomService';
 import { createLobbyStore } from '../store/lobbyStore';
 import { createRoomStore } from '../store/roomStore';
 import type { RoomStore } from '../store/roomStore';
+import { createClockOffset } from './clockOffset';
 import { createTableController } from './tableController';
 import type { EventEnvelope, TableController } from './tableController';
 import { createTableStore } from './tableStore';
@@ -51,6 +54,10 @@ interface Player {
   /** Cartas jogadas segundo os EVENTOS públicos (fonte independente do estado). */
   playedByEvents: Set<string>;
   rawStates: number;
+  /** Gancho antes de cada `reconnect` manual (o teste de replay gera eventos durante a queda). */
+  beforeReconnect: (() => Promise<void>) | null;
+  /** Quantas amostras entraram no estimador de offset do relógio (replay não pode somar). */
+  offsetSamples: number;
 }
 
 let server: RunningServer;
@@ -79,7 +86,19 @@ async function newPlayer(): Promise<Player> {
   const roomStore = createRoomStore();
   const tableStore = createTableStore();
   let rooms: RoomService | null = null;
-  const table = createTableController({ store: tableStore, send: (m) => rooms?.send(m) ?? false });
+  const realOffset = createClockOffset();
+  let countSample: () => void = () => undefined;
+  const table = createTableController({
+    store: tableStore,
+    send: (m) => rooms?.send(m) ?? false,
+    clockOffset: {
+      ...realOffset,
+      add(serverAt, clientNow) {
+        countSample();
+        return realOffset.add(serverAt, clientNow);
+      },
+    },
+  });
   const p: Player = {
     session,
     gameClient,
@@ -99,6 +118,8 @@ async function newPlayer(): Promise<Player> {
     pendingActed: 0,
     playedByEvents: new Set(),
     rawStates: 0,
+    beforeReconnect: null,
+    offsetSamples: 0,
   };
   // Sorvedouro que registra o que chega e repassa ao controlador real.
   const sink = {
@@ -151,9 +172,15 @@ async function newPlayer(): Promise<Player> {
     getClient: () => ({
       joinWithReservation: async (r) =>
         (await gameClient.joinWithReservation(r)) as unknown as RoomLike,
-      reconnect: async (s) => (await gameClient.reconnect(s)) as unknown as RoomLike,
+      reconnect: async (s) => {
+        await p.beforeReconnect?.();
+        return (await gameClient.reconnect(s)) as unknown as RoomLike;
+      },
     }),
   });
+  countSample = () => {
+    p.offsetSamples += 1;
+  };
   p.rooms = rooms;
   p.controller = createLobbyController({
     api: session.api,
@@ -371,4 +398,84 @@ describe('mesa jogável contra o servidor real', () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(idle.errors).toEqual([]);
   }, 40_000);
+
+  it('replay de reconexão: eventos velhos não entram no offset do relógio nem refazem anúncios', async () => {
+    const ps = await seatedAndPlaying();
+    const actor1 = ps.find((p) => p.tableStore.getState().vm?.canAct === true)!;
+    // Ordem de jogo por assento: o terceiro a jogar não age nas duas primeiras cartas.
+    const victim = ps.find(
+      (p) =>
+        p.tableStore.getState().vm!.mySeat === (actor1.tableStore.getState().vm!.mySeat + 2) % 4,
+    )!;
+    const announced: string[] = [];
+    victim.table.setAnnouncer((m) => announced.push(m));
+
+    // Controle: um evento AO VIVO mede o relógio e é anunciado (prova que a fiação funciona).
+    const card1 = actor1.tableStore.getState().vm!.legalActions.find((a) => a.startsWith('play:'))!;
+    expect(actor1.table.act(card1)).toBe(true);
+    await waitFor(() => announced.length > 0, 'anúncio ao vivo da primeira carta');
+    const liveSeqs = victim.seqs.length;
+    const announcedLive = announced.length;
+
+    // O próximo a jogar DURANTE a queda: quem tem `play:` em legalActions (não a vítima nem o primeiro).
+    // O replay sai velho (> 2 s).
+    const canPlay = (p: Player): boolean =>
+      p.tableStore.getState().vm?.legalActions.some((a) => a.startsWith('play:')) === true &&
+      !p.tableStore.getState().busy;
+    const others = ps.filter((p) => p !== victim && p !== actor1);
+    await waitFor(() => others.some(canPlay), 'próximo jogador tem carta legal');
+    const actor2 = others.find(canPlay)!;
+    const seqBeforeGap = victim.seqs.at(-1)!;
+    victim.beforeReconnect = async () => {
+      victim.beforeReconnect = null; // roda uma vez só
+      await new Promise((r) => setTimeout(r, 300)); // respeita o intervalo mínimo entre ações
+      const card2 = actor2.tableStore
+        .getState()
+        .vm!.legalActions.find((a) => a.startsWith('play:'))!;
+      expect(actor2.table.act(card2)).toBe(true);
+      await waitFor(() => actor2.seqs.at(-1)! > seqBeforeGap, 'o evento da queda foi publicado');
+      await new Promise((r) => setTimeout(r, 2400)); // envelhece o evento além de REPLAY_MIN_AGE_MS
+    };
+
+    const room = victim.rooms.current() as unknown as Room;
+    const offsetBefore = victim.tableStore.getState().clockOffsetMs;
+    const samplesBefore = victim.offsetSamples;
+    // Depende de internos do SDK (@colyseus/sdk 0.18.9): `room.reconnection.enabled = false` desliga a
+    // reconexão automática e `room.connection.close(MAY_TRY_RECONNECT)` simula a queda sem consentimento,
+    // o que leva o roomService ao caminho manual (`recover` -> client.reconnect). Se o SDK mudar, ajustar aqui.
+    room.reconnection.enabled = false;
+    room.connection.close(CloseCode.MAY_TRY_RECONNECT);
+
+    const why = (): string =>
+      `conexão ${victim.roomStore.getState().connection}, erro ${String(victim.roomStore.getState().errorCode)}, errors ${victim.errors.join(',')}`;
+    await waitFor(
+      () =>
+        victim.rooms.current() !== room && victim.roomStore.getState().connection === 'connected',
+      'reconectou: ' + why(),
+      30_000,
+    ).catch((e: unknown) => {
+      throw new Error(`${String(e)} | ${why()}`);
+    });
+    await waitFor(() => victim.seqs.length > liveSeqs, 'replay entregue');
+    await new Promise((r) => setTimeout(r, 300));
+
+    // O replay chegou (seq contínuo, sem salto) ...
+    expect(victim.desyncs).toBe(0);
+    victim.seqs.forEach((s, i) => {
+      if (i > 0) expect(s).toBe(victim.seqs[i - 1]! + 1);
+    });
+    expect(victim.rooms.current()).not.toBe(room);
+    expect(victim.roomStore.getState().connection).toBe('connected');
+    // ... mas não mexeu no offset do relógio nem foi anunciado de novo.
+    expect(victim.tableStore.getState().clockOffsetMs).toBe(offsetBefore);
+    // Prova direta: nenhuma amostra nova entrou no estimador (a mediana poderia mascarar uma).
+    expect(victim.offsetSamples).toBe(samplesBefore);
+    // Só a carta ao vivo foi falada; a do replay não. (Presença, 'X voltou', é outro canal e é falada.)
+    expect(announced.filter((m) => m.includes('jogou'))).toHaveLength(1);
+    expect(announced.length).toBeGreaterThanOrEqual(announcedLive);
+    // O estado reprojetado mostra as duas cartas na mesa (a fonte de verdade é o estado).
+    expect(victim.tableStore.getState().vm!.current.length).toBeGreaterThanOrEqual(2);
+    expect(victim.errors).toEqual([]);
+    victim.beforeReconnect = null;
+  }, 60_000);
 });

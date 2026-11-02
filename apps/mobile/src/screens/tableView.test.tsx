@@ -31,6 +31,7 @@ function html(state: unknown, over: Partial<TableViewProps> = {}): string {
     probe: true,
     chatPanel: null,
     chatUnreadTotal: 0,
+    bubbles: {},
     deadlineAt: 0,
     clockOffsetMs: 0,
     leaveConfirm: false,

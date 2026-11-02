@@ -17,5 +17,6 @@ export * from './Vira';
 export * from './AvatarPlaceholder';
 export * from './TurnTimer';
 export * from './BetButtons';
+export * from './ChatBubble';
 export * from './ChatText';
 export * from './ScoreLayers';

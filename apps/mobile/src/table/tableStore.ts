@@ -26,6 +26,13 @@ export interface ChatEntry {
   readonly at: number;
 }
 
+/** Balão de chat ativo sobre um assento (o mais novo substitui o anterior). */
+export interface ChatBubbleEntry {
+  readonly id: number;
+  readonly scope: ChatScope;
+  readonly text: string;
+}
+
 export interface TableStoreState {
   readonly vm: TableViewModel | null;
   /** Histórico das mãos, derivado de eventos. Descartado em salto de `seq`. */
@@ -39,6 +46,8 @@ export interface TableStoreState {
   readonly chatOpen: boolean;
   readonly chatTab: ChatScope;
   readonly chat: readonly ChatEntry[];
+  /** Balão por assento (some sozinho após ~4 s). */
+  readonly bubbles: Readonly<Record<number, ChatBubbleEntry>>;
   readonly chatUnread: Readonly<Record<ChatScope, number>>;
   readonly chatDraft: Readonly<Record<ChatScope, string>>;
   /** Código do último erro de chat (traduzido na tela). */
@@ -71,6 +80,7 @@ const INITIAL = {
   chatOpen: false,
   chatTab: 'table' as ChatScope,
   chat: [] as readonly ChatEntry[],
+  bubbles: {} as Readonly<Record<number, ChatBubbleEntry>>,
   chatUnread: { table: 0, partner: 0 } as Readonly<Record<ChatScope, number>>,
   chatDraft: { table: '', partner: '' } as Readonly<Record<ChatScope, string>>,
   chatError: null as string | null,

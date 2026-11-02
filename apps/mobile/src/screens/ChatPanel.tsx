@@ -21,6 +21,8 @@ export interface ChatPanelProps {
   connected: boolean;
   nicknameOf(seat: number): string;
   mySeat: number;
+  /** Abas disponíveis (padrão: Mesa e Dupla). Na sala de espera só há a Mesa. */
+  scopes?: readonly ChatScope[];
   on: {
     setTab(scope: ChatScope): void;
     setDraft(text: string): void;
@@ -37,11 +39,12 @@ const TABS: readonly { scope: ChatScope; label: string }[] = [
 
 export function ChatPanel(p: ChatPanelProps) {
   const lines = p.chat.filter((c) => c.scope === p.tab);
+  const tabs = TABS.filter((t) => p.scopes === undefined || p.scopes.includes(t.scope));
   return (
     <View style={styles.panel} testID="chat-panel" accessibilityViewIsModal>
       <View style={styles.header}>
         <View style={styles.tabs} accessibilityRole="tablist">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             const selected = p.tab === t.scope;
             const n = p.unread[t.scope];
             return (

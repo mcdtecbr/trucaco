@@ -2,3 +2,4 @@
 - [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
 - [Git: modo atual](feedback_git_convencao.md) — commit e push DIRETO na develop, sem PR, até o usuário avisar; nunca mexer na master
 - [Handoff Fase 3](handoff-fase-3.md) — estado completo, pendências (3H2), decisões, o que não foi validado, riscos e armadilhas para retomar em outra máquina
+- [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
