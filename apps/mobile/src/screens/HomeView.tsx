@@ -82,7 +82,7 @@ export function HomeView(p: HomeViewProps) {
   return (
     <Screen testID="home">
       <View style={styles.header}>
-        <Title>Trucaco</Title>
+        <Title>Trucaço</Title>
         {p.nickname !== null ? <Body muted>{`Jogando como ${p.nickname}`}</Body> : null}
       </View>
 

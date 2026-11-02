@@ -10,7 +10,7 @@ export const SHARE_FAILED_TEXT = 'Não foi possível compartilhar. Anote o códi
 export async function shareCode(code: string): Promise<ShareOutcome> {
   try {
     const res = await Share.share({
-      message: `Venha jogar truco comigo no Trucaco! Código da mesa: ${code}`,
+      message: `Venha jogar truco comigo no Trucaço! Código da mesa: ${code}`,
     });
     return outcomeFromShareAction(res.action);
   } catch {

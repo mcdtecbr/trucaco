@@ -1,4 +1,4 @@
-# Trucaco
+# Trucaço
 
 Truco online, Paulista e Mineiro, para web, iOS e Android. Mesas de 4 (e depois 6) jogadores, cada um no seu dispositivo, com avatar animado que faz os **sinais de truco** para toda a mesa ver, chat privado da dupla para combinar os sinais e balões de conversa durante a partida.
 

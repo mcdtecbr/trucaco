@@ -19,7 +19,7 @@ export function BootView({ phase, onRetry }: { phase: BootPhase; onRetry(): void
 
   return (
     <View style={styles.root} testID="boot">
-      <Title>Trucaco</Title>
+      <Title>Trucaço</Title>
       {phase === 'loading' ? (
         <>
           <ActivityIndicator color={colors.primary} accessibilityLabel="Carregando" />
