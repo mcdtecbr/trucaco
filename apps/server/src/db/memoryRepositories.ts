@@ -1,3 +1,5 @@
+import { parseAvatarParts } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
 import { randomUUID } from 'node:crypto';
 import {
   InvalidInputError,
@@ -8,7 +10,6 @@ import {
   ProviderSubjectTakenError,
   type AuthProviderId,
   type FinishedMatchInput,
-  type JsonObject,
   type MatchPage,
   type MatchRepository,
   type MatchSummary,
@@ -40,7 +41,7 @@ import {
  */
 export class MemoryStore {
   readonly users = new Map<string, UserRecord>();
-  readonly avatars = new Map<string, JsonObject>();
+  readonly avatars = new Map<string, unknown>();
   readonly blocks = new Set<string>();
   readonly reports: ReportRecord[] = [];
   readonly partnerCodes = new Map<string, PartnerCodesMap>();
@@ -116,15 +117,16 @@ export class MemoryUserRepository implements UserRepository {
     this.store.users.set(id, { ...user, nickname });
   }
 
-  async getAvatar(userId: string): Promise<JsonObject | null> {
-    return this.store.avatars.get(normalizeId(userId)) ?? null;
+  async getAvatar(userId: string): Promise<AvatarParts | null> {
+    // Avatar gravado fora do catálogo (formato antigo) volta como `null`: o cliente usa o padrão.
+    return parseAvatarParts(this.store.avatars.get(normalizeId(userId)));
   }
 
-  async saveAvatar(userId: string, parts: JsonObject): Promise<void> {
+  async saveAvatar(userId: string, parts: AvatarParts): Promise<void> {
     const id = normalizeId(userId);
-    assertAvatarParts(parts);
+    const valid = assertAvatarParts(parts);
     this.requireUser(id);
-    this.store.avatars.set(id, parts);
+    this.store.avatars.set(id, valid);
   }
 
   async addBlock(blockerId: string, blockedId: string): Promise<void> {

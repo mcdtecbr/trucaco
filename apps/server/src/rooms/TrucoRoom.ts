@@ -28,6 +28,7 @@ import {
   RECONNECT_SECONDS,
   SFX_COOLDOWN_MS,
   SIGNAL_COOLDOWN_MS,
+  SIGNAL_IDS,
   TURN_TIMEOUT_MS,
   parseClientMessage,
   validateRoomOptions,
@@ -38,6 +39,7 @@ import type {
   PresenceStatus,
   RoomOptions,
   ServerMessage,
+  SignalId,
 } from '@trucaco/protocol';
 import {
   applySeriesAction,
@@ -119,6 +121,8 @@ export const DEFAULT_MAX_RECONNECTS = 20;
  * ~1800 eventos / ~270 KB, então 5000 aqui também cobre uma bo3 com folga.
  */
 export const DEFAULT_EVENT_LOG_MAX = 5000;
+/** Chance de cada bot dar um sinal no início de uma mão (a mesa com bot não fica morta). */
+export const DEFAULT_BOT_SIGNAL_CHANCE = 0.3;
 /** Expirações de turno seguidas que marcam o assento como ausente (`away`). */
 export const IDLE_TIMEOUTS = 2;
 
@@ -160,6 +164,13 @@ export interface TrucoRoomConfig {
   readonly eventLogMax?: number;
   /** Intervalo mínimo entre sinais do mesmo assento. Padrão `SIGNAL_COOLDOWN_MS`. */
   readonly signalCooldownMs?: number;
+  /**
+   * Chance (0 a 1) de um bot dar 1 sinal aleatório quando uma mão começa. Padrão
+   * `DEFAULT_BOT_SIGNAL_CHANCE`. O bot NUNCA pede nem aumenta aposta; sinal é só decoração.
+   */
+  readonly botSignalChance?: number;
+  /** Fonte de aleatoriedade do sinal do bot. Separada do RNG da partida (não altera sorteios). */
+  readonly botSignalRandom?: () => number;
   /** Intervalo mínimo entre sfx do mesmo assento. Padrão `SFX_COOLDOWN_MS`. */
   readonly sfxCooldownMs?: number;
   /** Intervalo mínimo entre mensagens de chat do mesmo assento. Padrão `CHAT_COOLDOWN_MS`. */
@@ -1082,6 +1093,39 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     return !this.botSeats.has(to) && !this.droppedSeats.has(to);
   }
 
+  /** Broadcast público de um sinal (humano ou bot) aos 4 assentos, com o assento do servidor. */
+  private broadcastSignal(seat: Seat, signalId: SignalId, at: number): void {
+    const payload: Omit<Extract<ServerMessage, { type: 'signal' }>, 'type'> = {
+      seat,
+      signalId,
+      at,
+    };
+    this.broadcast('signal', payload);
+    log.info('truco: sinal', { room: this.roomId, seat, signalId });
+  }
+
+  /**
+   * Sinais dos bots: ao começar uma mão, cada assento de bot sorteia (chance `botSignalChance`) 1 sinal
+   * do catálogo. Respeita o MESMO cooldown dos humanos (`lastSignalAt`) e só vale com a série em jogo.
+   * Usa aleatoriedade própria: nunca consome o RNG da partida (sorteio e replay seguem iguais).
+   */
+  private botSignals(): void {
+    const series = this.series;
+    if (this.closing || series === null || isSeriesOver(series)) return;
+    const chance = this.config.botSignalChance ?? DEFAULT_BOT_SIGNAL_CHANCE;
+    if (chance <= 0) return;
+    const random = this.config.botSignalRandom ?? Math.random;
+    const cooldown = this.config.signalCooldownMs ?? SIGNAL_COOLDOWN_MS;
+    for (const seat of [...this.botSeats].sort((a, b) => a - b)) {
+      if (random() >= chance) continue;
+      const signalId =
+        SIGNAL_IDS[Math.min(SIGNAL_IDS.length - 1, Math.floor(random() * SIGNAL_IDS.length))];
+      if (signalId === undefined) continue;
+      if (!this.cooldownPassed(this.lastSignalAt, seat, cooldown)) continue;
+      this.broadcastSignal(seat, signalId, Date.now());
+    }
+  }
+
   /**
    * Sinais, sfx e chat (2F). O assento é SEMPRE o do servidor (`seatBySession`); a mensagem de saída
    * leva `seat` do remetente. Decisões:
@@ -1093,8 +1137,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * - `chat` `partner`: só à dupla (`isChatRecipient`) e eco ao remetente; `table`: aos 4. Parceiro bot ou
    *   com socket caído: descartado em silêncio. Chat NUNCA entra em `eventLog`, estado, replay,
    *   persistência nem log (só metadados em debug: assento, escopo, tamanho).
-   * - Bot ainda não sinaliza, mas nada aqui impede: um futuro `emitSignal(seat, id)` pode reusar o
-   *   broadcast com o assento do bot.
+   * - Bot sinaliza por `botSignals` (início de mão), reusando `broadcastSignal` e o cooldown.
    */
   private social(
     client: Client,
@@ -1150,13 +1193,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         this.reject(client, 'RATE_LIMITED');
         return;
       }
-      const payload: Omit<Extract<ServerMessage, { type: 'signal' }>, 'type'> = {
-        seat,
-        signalId: msg.signalId,
-        at,
-      };
-      this.broadcast('signal', payload);
-      log.info('truco: sinal', { room: this.roomId, seat, signalId: msg.signalId });
+      this.broadcastSignal(seat, msg.signalId, at);
       return;
     }
     if (!this.cooldownPassed(this.lastSfxAt, seat, this.config.sfxCooldownMs ?? SFX_COOLDOWN_MS)) {
@@ -1447,6 +1484,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.cancelVotes.clear();
       this.publishVotes();
     }
+    if (events.some((e) => e.type === 'handStarted')) this.botSignals();
   }
 
   // ---------------------------------------------------------------- registro da partida (2H)

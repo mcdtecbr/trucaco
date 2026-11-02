@@ -3,6 +3,7 @@
  * Só assinaturas e tipos de domínio: sem lógica de auth. Implementações: Prisma (produção) e
  * memória (testes de sala). Modelo e política de retenção: docs/banco-de-dados.md.
  */
+import type { AvatarParts } from '@trucaco/protocol';
 
 export type JsonValue =
   | string
@@ -131,8 +132,8 @@ export interface UserRepository {
   updateNickname(id: string, nickname: string): Promise<void>;
 
   /** `AvatarParts` como JSON (objeto plano, até 32 chaves, valores escalares curtos); o significado das partes é do servidor (2G). */
-  getAvatar(userId: string): Promise<JsonObject | null>;
-  saveAvatar(userId: string, parts: JsonObject): Promise<void>;
+  getAvatar(userId: string): Promise<AvatarParts | null>;
+  saveAvatar(userId: string, parts: AvatarParts): Promise<void>;
 
   /** Idempotente. `InvalidInputError` se blocker === blocked ou usuário inexistente. */
   addBlock(blockerId: string, blockedId: string): Promise<void>;

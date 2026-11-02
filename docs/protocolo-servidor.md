@@ -33,7 +33,7 @@ Toda resposta de erro tem o formato `{ "error": { "code": "..." } }`. Corpo JSON
 | `POST /auth/google`, `/auth/apple`  | não    | —                                                                      | `501 NOT_IMPLEMENTED` (stub, Fase 3)                                                                       |
 | `GET /me`                           | Bearer | `200 { id, nickname, provider, avatar, createdAt }`                    | `401 UNAUTHORIZED`                                                                                         |
 | `PUT /me`                           | Bearer | `200 { nickname }`                                                     | `400 INVALID_BODY` ou `INVALID_NICKNAME`; `409 NICKNAME_TAKEN`                                             |
-| `PUT /me/avatar`                    | Bearer | `200 { avatar }`                                                       | `400 INVALID_BODY` ou `INVALID_AVATAR` (objeto plano, até 32 chaves)                                       |
+| `PUT /me/avatar`                    | Bearer | `200 { avatar }`                                                       | `400 INVALID_BODY` ou `INVALID_AVATAR` (fora do catálogo de partes, ver "Avatar")                          |
 | `GET /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`; `403 NOT_PARTNERS` (sem partida finalizada juntos)                                  |
 | `PUT /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`, `INVALID_BODY` ou `INVALID_CODES`; `403 NOT_PARTNERS`                               |
 | `GET /health`                       | não    | `200 { status, protocol }`                                             | —                                                                                                          |
@@ -180,6 +180,8 @@ Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e
 
 `voteRematch` também passa por esse limite de 150 ms (o servidor aplica o controle antes de tratar `voteCancel` e `voteRematch`). Pendência de produto: isentar o voto de revanche.
 
+**Bot sinaliza.** Ao começar cada mão (`handStarted`), cada assento de bot sorteia com 30 % de chance (`DEFAULT_BOT_SIGNAL_CHANCE`) 1 sinal aleatório de `SIGNAL_IDS` e o transmite como qualquer `signal`, com o `seat` do bot. Respeita o mesmo cooldown de 3 s do assento (em cooldown, não sinaliza) e só vale com a série em jogo. O sorteio não usa o RNG da partida (baralho e replay não mudam). O bot continua sem pedir nem aumentar aposta.
+
 Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora disso, são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase.
 
 ## 9. Chat e texto livre
@@ -210,3 +212,11 @@ Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora di
 5. Salto de `seq` → resincronizar pelo estado.
 6. Chat com `<Text>`, validado com `parseClientMessage`.
 7. Não guarde nem exiba `userId` como identidade da mesa: a identidade pública é `seat` + `nickname`.
+
+## Avatar
+
+`AvatarParts` (`packages/protocol/src/avatar.ts`): 8 partes inteiras, índice `0..n-1`, mais `voice` opcional. Contagens (`AVATAR_PART_COUNTS`): `face_shape` 4, `skin` 6, `hair` 8, `eyes` 4, `mouth` 4, `outfit` 6, `accessory` 5, `bg_color` 8; `voice` em `VOICE_IDS` (Fase 5b). O catálogo só cresce.
+
+- `PUT /me/avatar { parts }`: validado por `parseAvatarParts` (chaves exatas, sem chave extra, inteiros no intervalo, `voice` do catálogo). Qualquer outra coisa (texto livre incluso) é `400 INVALID_AVATAR`. A resposta devolve a cópia canônica.
+- `GET /me`: `avatar` é `AvatarParts | null`. Avatar gravado fora do catálogo (formato antigo) volta como `null`, sem erro; o cliente usa `DEFAULT_AVATAR_PARTS`. Não há migração de dados: não existe produção e a coluna `parts` (JSON) não mudou.
+- `players[i].avatar` no estado da mesa segue sendo o JSON em texto das partes do banco (`'{}'` sem avatar ou com avatar inválido). O cliente faz `parseAvatarParts(JSON.parse(...)) ?? DEFAULT_AVATAR_PARTS`.

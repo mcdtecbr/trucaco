@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
 import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
-import { MAX_MESSAGE_BYTES, QUICK_PHRASE_IDS, SFX_IDS } from '@trucaco/protocol';
+import { MAX_MESSAGE_BYTES, QUICK_PHRASE_IDS, SFX_IDS, SIGNAL_IDS } from '@trucaco/protocol';
 import type { ErrorCode, RoomOptions } from '@trucaco/protocol';
 import { mulberry32, nextSeat, pendingSeat } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
@@ -28,6 +28,8 @@ const FAST: TrucoRoomConfig = {
   actionMinIntervalMs: 0,
   finishDelayMs: 60_000,
   maxMessagesPerSecond: 10_000,
+  // Bots só sinalizam nos testes que pedem (sinal aleatório quebraria contagens exatas).
+  botSignalChance: 0,
 };
 
 /** Repositório falso: guarda o que a sala gravar (testes de revanche). */
@@ -141,6 +143,7 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
   },
   'truco-rec-rate': {
     patchRateMs: 5,
+    botSignalChance: 0,
     rngSeed: 35,
     finishDelayMs: 60_000,
     reconnectSeconds: 5,
@@ -191,6 +194,25 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     signalCooldownMs: 30_000,
     sfxCooldownMs: 30_000,
     chatCooldownMs: 30_000,
+  },
+  // 4B: bot sinaliza no início da mão (chance 1 para ser determinístico).
+  'truco-botsig': {
+    ...FAST,
+    rngSeed: 44,
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    botSignalChance: 1,
+    signalCooldownMs: 50,
+  },
+  'truco-botsig-long': {
+    ...FAST,
+    rngSeed: 45,
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    botSignalChance: 1,
+    signalCooldownMs: 30_000,
   },
   'truco-rec-onze': {
     ...FAST,
@@ -2409,5 +2431,52 @@ describe('TrucoRoom: onze/dez decidido pela dupla', () => {
     await until(() => logCount(game, 'specialDecided') === 1, 'bot do 2 ainda aceita', 4000);
     expect(lastEventOf(game, 'specialDecided')?.seat).toBe(2);
     expect(game.server.series?.match.hand.phase).toBe('specialDecision');
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// 4B: o bot dá sinais (só no início da mão, com o cooldown dos humanos)
+// ------------------------------------------------------------------------------------------------
+
+describe('TrucoRoom: sinais do bot (4B)', () => {
+  it('bot sinaliza no handStarted e o sinal chega aos clientes com o seat do bot', async () => {
+    const game = await startedRec('truco-botsig');
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    // Antes de existir bot, nenhum sinal.
+    expect(inboxOf(p0).signals).toEqual([]);
+    p3.gone = true;
+    await p3.room.leave();
+    await until(() => statusOf(game, 3) === 'bot', 'assento 3 bot');
+    const hands = logCount(game, 'handStarted');
+    await drive(game, () => logCount(game, 'handStarted') > hands, 'nova mão');
+    await until(
+      () => [p0, p1, p2].every((p) => inboxOf(p).signals.length >= 1),
+      'sinal do bot nos 3 vivos',
+    );
+    for (const p of [p0, p1, p2]) {
+      for (const m of inboxOf(p).signals) {
+        expect(m.seat).toBe(3);
+        expect(SIGNAL_IDS as readonly string[]).toContain(m.signalId);
+      }
+    }
+    // Sinal não entra no log de eventos do motor.
+    expect(game.server.eventLog.some((e) => JSON.stringify(e).includes('signalId'))).toBe(false);
+    assertNoLeaks(game);
+  });
+
+  it('sem sinal do bot enquanto o assento está em cooldown', async () => {
+    const game = await startedRec('truco-botsig-long');
+    const [p0, , , p3] = game.players as [Player, Player, Player, Player];
+    // Humano do assento 3 gasta o cooldown (30 s) e sai: o bot herda o cooldown do assento.
+    p3.room.send('signal', { signalId: 'wink' });
+    await until(() => inboxOf(p0).signals.length === 1, 'sinal do humano');
+    p3.gone = true;
+    await p3.room.leave();
+    await until(() => statusOf(game, 3) === 'bot', 'assento 3 bot');
+    const hands = logCount(game, 'handStarted');
+    await drive(game, () => logCount(game, 'handStarted') > hands, 'nova mão');
+    await sleep(100);
+    expect(inboxOf(p0).signals).toHaveLength(1);
+    expect(inboxOf(p0).signals[0]?.signalId).toBe('wink');
   });
 });

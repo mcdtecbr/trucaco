@@ -9,6 +9,7 @@ import express from 'express';
 import type { Application, NextFunction, Request, RequestHandler, Response } from 'express';
 import { AuthError, bearerFromHeader, type AuthService } from '../auth/authService';
 import type { RestLimits } from '../auth/config';
+import { parseAvatarParts } from '@trucaco/protocol';
 import { log } from '../logger';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
 import {
@@ -16,7 +17,6 @@ import {
   NicknameTakenError,
   NotPartnersError,
   PersistenceError,
-  type JsonObject,
   type PartnerCodesMap,
   type UserRecord,
   type UserRepository,
@@ -302,8 +302,14 @@ export function mountRest(app: Application, opts: RestOptions): void {
         fail(res, 400, 'INVALID_BODY');
         return;
       }
+      // Só o catálogo do protocolo passa (chaves exatas, índices no intervalo); texto livre -> 400.
+      const parts = parseAvatarParts(body['parts']);
+      if (parts === null) {
+        fail(res, 400, 'INVALID_AVATAR');
+        return;
+      }
       try {
-        await users.saveAvatar(locals(res).user.id, body['parts'] as JsonObject);
+        await users.saveAvatar(locals(res).user.id, parts);
       } catch (err) {
         if (err instanceof InvalidInputError) {
           fail(res, 400, 'INVALID_AVATAR');
@@ -311,7 +317,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
         }
         throw err;
       }
-      res.json({ avatar: body['parts'] });
+      res.json({ avatar: parts });
     }),
   );
 

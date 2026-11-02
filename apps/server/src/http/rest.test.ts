@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server as HttpServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import express from 'express';
-import { SIGNAL_IDS } from '@trucaco/protocol';
+import { DEFAULT_AVATAR_PARTS, SIGNAL_IDS } from '@trucaco/protocol';
 import { SignJWT } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthService, hashRefresh } from '../auth/authService';
@@ -319,27 +319,41 @@ describe('GET/PUT /me', () => {
     ).toBe(415);
   });
 
-  it('PUT /me/avatar valida e limita', async () => {
+  it('PUT /me/avatar valida pelo catálogo; texto livre -> 400 INVALID_AVATAR', async () => {
     const { call, guest } = await start();
     const g = await guest();
-    const ok = await call('PUT', '/me/avatar', {
-      token: g.accessToken,
-      body: { parts: { hat: 'cap', skin: 3, glasses: false } },
-    });
+    const parts = { ...DEFAULT_AVATAR_PARTS, skin: 3, hair: 7, voice: 'masc_2' };
+    const ok = await call('PUT', '/me/avatar', { token: g.accessToken, body: { parts } });
     expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { avatar: unknown }).avatar).toEqual(parts);
     const me = (await (await call('GET', '/me', { token: g.accessToken })).json()) as {
       avatar: unknown;
     };
-    expect(me.avatar).toEqual({ hat: 'cap', skin: 3, glasses: false });
+    expect(me.avatar).toEqual(parts);
     const many = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, 1]));
-    for (const parts of [many, { nested: { a: 1 } }, { long: 'x'.repeat(200) }]) {
-      const res = await call('PUT', '/me/avatar', { token: g.accessToken, body: { parts } });
+    const bad = [
+      { hat: 'cap', skin: 3, glasses: false },
+      many,
+      { nested: { a: 1 } },
+      { long: 'x'.repeat(200) },
+      { ...DEFAULT_AVATAR_PARTS, extra: 1 },
+      { ...DEFAULT_AVATAR_PARTS, hair: 8 },
+      { ...DEFAULT_AVATAR_PARTS, eyes: '1' },
+      { ...DEFAULT_AVATAR_PARTS, voice: 'robo' },
+    ];
+    for (const p of bad) {
+      const res = await call('PUT', '/me/avatar', { token: g.accessToken, body: { parts: p } });
       expect(res.status).toBe(400);
       expect(await code(res)).toBe('INVALID_AVATAR');
     }
     for (const body of [{ parts: 'x' }, { parts: [] }, {}, { parts: {}, extra: 1 }]) {
       expect((await call('PUT', '/me/avatar', { token: g.accessToken, body })).status).toBe(400);
     }
+    // o avatar bom continua gravado
+    const again = (await (await call('GET', '/me', { token: g.accessToken })).json()) as {
+      avatar: unknown;
+    };
+    expect(again.avatar).toEqual(parts);
   });
 
   it('códigos do parceiro: id inválido 400, sem vínculo 403, leitura vazia', async () => {

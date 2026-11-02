@@ -1,3 +1,5 @@
+import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaClient } from '../generated/prisma/client';
@@ -225,9 +227,9 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
 
     it('avatar: um por usuário (upsert) e removido junto com o usuário', async () => {
       const u = await guest('Gil');
-      await users.saveAvatar(u.id, { skin: 1 });
-      await users.saveAvatar(u.id, { skin: 2, hat: 'cap' });
-      expect(await users.getAvatar(u.id)).toEqual({ skin: 2, hat: 'cap' });
+      await users.saveAvatar(u.id, { ...DEFAULT_AVATAR_PARTS, skin: 1 });
+      await users.saveAvatar(u.id, { ...DEFAULT_AVATAR_PARTS, skin: 2 });
+      expect(await users.getAvatar(u.id)).toEqual({ ...DEFAULT_AVATAR_PARTS, skin: 2 });
       expect(await db().avatar.count()).toBe(1);
       await expect(
         db().$executeRawUnsafe(`UPDATE avatars SET parts = '[]'::jsonb`),
@@ -236,16 +238,17 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       expect(await db().avatar.count()).toBe(0);
     });
 
-    it('avatar: teto de tamanho no banco e no repositório', async () => {
+    it('avatar: catálogo no repositório, teto de tamanho no banco, formato antigo vira null', async () => {
       const u = await guest('Gil');
-      await expect(users.saveAvatar(u.id, { hat: 'x'.repeat(141) })).rejects.toBeInstanceOf(
-        InvalidInputError,
-      );
+      await expect(
+        users.saveAvatar(u.id, { hat: 'x'.repeat(141) } as unknown as AvatarParts),
+      ).rejects.toBeInstanceOf(InvalidInputError);
       await expect(
         db().$executeRaw`INSERT INTO avatars (user_id, parts, updated_at)
           VALUES (${u.id}::uuid, jsonb_build_object('k', repeat('x', 5000000)), now())`,
       ).rejects.toThrow(/avatars_parts_size_check/);
-      await users.saveAvatar(u.id, { hat: 'x'.repeat(140) });
+      await db().avatar.create({ data: { userId: u.id, parts: { hat: 'cap' } } });
+      expect(await users.getAvatar(u.id)).toBeNull();
     });
   });
 
@@ -555,7 +558,7 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       const matchId = await matches.saveMatch(
         matchInput([a.id, b.id, null, null], new Date('2026-11-01T12:00:00Z')),
       );
-      await users.saveAvatar(a.id, { skin: 1 });
+      await users.saveAvatar(a.id, DEFAULT_AVATAR_PARTS);
       await users.addBlock(a.id, b.id);
       await users.addBlock(b.id, a.id);
       const [lo, hi] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];

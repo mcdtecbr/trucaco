@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
 import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
+import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import type { RoomOptions } from '@trucaco/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AuthService, hashRefresh } from '../auth/authService';
@@ -133,11 +134,11 @@ describe('entrada na sala com JWT', () => {
   it('guest -> JWT -> senta; apelido e avatar vêm do banco, userId/nickname do payload são ignorados', async () => {
     const server = await t.createRoom<TrucoRoom>('truco', OPTS);
     const s = await auth.createGuest();
-    await repos.users.saveAvatar(s.user.id, { hat: 'cap' });
+    await repos.users.saveAvatar(s.user.id, { ...DEFAULT_AVATAR_PARTS, hair: 3 });
     await joinAs(server, s, { userId: 'hacker', nickname: 'Hacker' });
     const p = server.state.players[0] as { nickname: string; avatar: string };
     expect(p.nickname).toBe(s.user.nickname);
-    expect(JSON.parse(p.avatar)).toEqual({ hat: 'cap' });
+    expect(JSON.parse(p.avatar)).toEqual({ ...DEFAULT_AVATAR_PARTS, hair: 3 });
     const internal = server as unknown as {
       seatBySession: Map<string, number>;
       userBySeat: Map<number, string>;

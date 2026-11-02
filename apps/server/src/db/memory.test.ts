@@ -1,4 +1,5 @@
-import { SIGNAL_IDS } from '@trucaco/protocol';
+import { DEFAULT_AVATAR_PARTS, SIGNAL_IDS } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { createMemoryRepositories } from './memoryRepositories';
 import { invalidMatchCases } from './parityCases';
@@ -7,7 +8,6 @@ import {
   NicknameTakenError,
   NotPartnersError,
   type FinishedMatchInput,
-  type JsonObject,
   type PartnerCodesMap,
 } from './types';
 import {
@@ -143,27 +143,33 @@ describe('repositórios em memória (espelham as regras do SQL)', () => {
     expect(await users.listBlockerIds(b.id)).toEqual([a.id]);
   });
 
-  it('avatar: objeto plano, poucas chaves, valores escalares curtos', async () => {
-    const { users } = createMemoryRepositories();
+  it('avatar: só o catálogo do protocolo; formato antigo gravado volta como null', async () => {
+    const { users, store } = createMemoryRepositories();
     const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
-    await users.saveAvatar(a.id, { skin: 1, hat: 'cap', glasses: null, beard: false });
+    await users.saveAvatar(a.id, { ...DEFAULT_AVATAR_PARTS, skin: 5, voice: 'fem_2' });
     expect(await users.getAvatar(a.id)).toEqual({
-      skin: 1,
-      hat: 'cap',
-      glasses: null,
-      beard: false,
+      ...DEFAULT_AVATAR_PARTS,
+      skin: 5,
+      voice: 'fem_2',
     });
-    const many = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, 1]));
-    const badParts: JsonObject[] = [
-      many,
-      { hat: 'x'.repeat(141) },
+    const badParts: unknown[] = [
+      { skin: 1, hat: 'cap', glasses: null, beard: false },
+      { ...DEFAULT_AVATAR_PARTS, extra: 1 },
+      { ...DEFAULT_AVATAR_PARTS, skin: 6 },
+      { ...DEFAULT_AVATAR_PARTS, hair: '1' },
       { nested: { a: 1 } },
-      { list: [1] },
     ];
     for (const bad of badParts) {
-      await expect(users.saveAvatar(a.id, bad)).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(users.saveAvatar(a.id, bad as AvatarParts)).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
     }
-    await expect(users.saveAvatar(GHOST, { skin: 1 })).rejects.toBeInstanceOf(InvalidInputError);
+    // Gravado antes do catálogo (texto livre): leitura devolve null, sem erro.
+    store.avatars.set(a.id, { hat: 'cap', skin: 3 });
+    expect(await users.getAvatar(a.id)).toBeNull();
+    await expect(users.saveAvatar(GHOST, DEFAULT_AVATAR_PARTS)).rejects.toBeInstanceOf(
+      InvalidInputError,
+    );
   });
 
   it('todo id de entrada é UUID, normalizado para minúsculas; o resto é InvalidInputError', async () => {
@@ -176,7 +182,9 @@ describe('repositórios em memória (espelham as regras do SQL)', () => {
       await expect(users.findById(id)).rejects.toBeInstanceOf(InvalidInputError);
       await expect(users.touchLastSeen(id, new Date())).rejects.toBeInstanceOf(InvalidInputError);
       await expect(users.getAvatar(id)).rejects.toBeInstanceOf(InvalidInputError);
-      await expect(users.saveAvatar(id, {})).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(users.saveAvatar(id, DEFAULT_AVATAR_PARTS)).rejects.toBeInstanceOf(
+        InvalidInputError,
+      );
       await expect(users.addBlock(a.id, id)).rejects.toBeInstanceOf(InvalidInputError);
       await expect(users.addBlock(id, a.id)).rejects.toBeInstanceOf(InvalidInputError);
       await expect(users.removeBlock(a.id, id)).rejects.toBeInstanceOf(InvalidInputError);

@@ -1,3 +1,5 @@
+import { parseAvatarParts } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
 import { Prisma, type PrismaClient } from '../generated/prisma/client';
 import {
   InvalidInputError,
@@ -102,19 +104,20 @@ export class PrismaUserRepository implements UserRepository {
     if (result.count === 0) throw new InvalidInputError('Usuário inexistente.');
   }
 
-  async getAvatar(userId: string): Promise<JsonObject | null> {
+  async getAvatar(userId: string): Promise<AvatarParts | null> {
     const row = await this.db.avatar.findUnique({ where: { userId: normalizeId(userId) } });
-    return row !== null && isJsonObject(row.parts) ? row.parts : null;
+    // Linha fora do catálogo (formato antigo) vira `null`: o cliente usa o padrão, sem erro.
+    return row === null ? null : parseAvatarParts(row.parts);
   }
 
-  async saveAvatar(userId: string, parts: JsonObject): Promise<void> {
+  async saveAvatar(userId: string, parts: AvatarParts): Promise<void> {
     const id = normalizeId(userId);
-    assertAvatarParts(parts);
+    const valid = assertAvatarParts(parts);
     await guarded(() =>
       this.db.avatar.upsert({
         where: { userId: id },
-        create: { userId: id, parts: asJson(parts) },
-        update: { parts: asJson(parts) },
+        create: { userId: id, parts: asJson({ ...valid } as JsonObject) },
+        update: { parts: asJson({ ...valid } as JsonObject) },
       }),
     );
   }

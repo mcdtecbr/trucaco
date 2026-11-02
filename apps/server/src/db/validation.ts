@@ -1,17 +1,11 @@
-import { CHAT_MAX_LENGTH, SIGNAL_IDS } from '@trucaco/protocol';
-import {
-  InvalidInputError,
-  type FinishedMatchInput,
-  type JsonObject,
-  type PartnerCodesMap,
-} from './types';
+import { CHAT_MAX_LENGTH, SIGNAL_IDS, parseAvatarParts } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
+import { InvalidInputError, type FinishedMatchInput, type PartnerCodesMap } from './types';
 
 export const NICKNAME_MIN = 3;
 export const NICKNAME_MAX = 16;
 export const PARTNER_CODE_MAX = CHAT_MAX_LENGTH;
 export const REPORT_TEXT_MAX = 500;
-/** Chaves de `AvatarParts` (tamanho dos valores: `PARTNER_CODE_MAX`). Subir aqui se o rig crescer. */
-export const AVATAR_PARTS_MAX_KEYS = 32;
 export const UINT32_MAX = 4294967295;
 /** Tetos de tamanho (bytes de JSON) por coluna; os mesmos valores dos CHECKs `*_size_check`. */
 export const JSON_LIMITS = {
@@ -88,27 +82,14 @@ export function assertPartnerCodes(codes: PartnerCodesMap): void {
   }
 }
 
-/** Objeto plano com poucas chaves e valores escalares curtos (strings até 140 caracteres). */
-export function assertAvatarParts(parts: JsonObject): void {
-  if (!isPlainObject(parts)) throw new InvalidInputError('Avatar inválido.');
-  const entries = Object.entries(parts);
-  if (entries.length > AVATAR_PARTS_MAX_KEYS)
-    throw new InvalidInputError('Avatar com partes demais.');
-  for (const [key, value] of entries) {
-    const scalar =
-      value === null ||
-      typeof value === 'number' ||
-      typeof value === 'boolean' ||
-      typeof value === 'string';
-    if (
-      key === '' ||
-      length(key) > PARTNER_CODE_MAX ||
-      !scalar ||
-      (typeof value === 'string' && length(value) > PARTNER_CODE_MAX)
-    ) {
-      throw new InvalidInputError('Avatar inválido.');
-    }
-  }
+/**
+ * Valida o avatar pelo catálogo do protocolo (`parseAvatarParts`: chaves exatas, índices no
+ * intervalo, `voice` opcional) e devolve a cópia canônica. Texto livre não passa mais.
+ */
+export function assertAvatarParts(parts: unknown): AvatarParts {
+  const parsed = parseAvatarParts(parts);
+  if (parsed === null) throw new InvalidInputError('Avatar inválido.');
+  return parsed;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

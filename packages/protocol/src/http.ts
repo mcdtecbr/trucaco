@@ -4,6 +4,7 @@
  * `lobbyRoutes.ts`, `lobby/lobby.ts` e `auth/authService.ts`; o teste de contrato do servidor
  * (`http/httpContract.test.ts`) quebra se um código novo aparecer no servidor sem entrada aqui.
  */
+import type { AvatarParts } from './avatar';
 import type { Format, RoomOptions, Visibility } from './room';
 
 /**
@@ -103,7 +104,8 @@ export interface MeResponse {
   readonly id: string;
   readonly nickname: string;
   readonly provider: AuthProvider;
-  readonly avatar: Record<string, unknown> | null;
+  /** `null` quando não há avatar gravado ou o gravado é inválido (o cliente usa `DEFAULT_AVATAR_PARTS`). */
+  readonly avatar: AvatarParts | null;
   /** ISO 8601. */
   readonly createdAt: string;
 }
@@ -115,7 +117,7 @@ export interface UpdateNicknameResponse {
 
 /** `PUT /me/avatar` (corpo `{ parts }`) -> 200. */
 export interface UpdateAvatarResponse {
-  readonly avatar: Record<string, unknown>;
+  readonly avatar: AvatarParts;
 }
 
 /** `GET|PUT /me/partners/:partnerId/codes` -> 200. */

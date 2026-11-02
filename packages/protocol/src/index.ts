@@ -1,4 +1,12 @@
 export * from './catalogs';
+export {
+  AVATAR_PART_COUNTS,
+  AVATAR_PART_KEYS,
+  DEFAULT_AVATAR_PARTS,
+  VOICE_IDS,
+  parseAvatarParts,
+} from './avatar';
+export type { AvatarPartKey, AvatarParts, VoiceId } from './avatar';
 export { RANKS, SUITS } from './cards';
 export type { Card, Rank, Suit } from './cards';
 
