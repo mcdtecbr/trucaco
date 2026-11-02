@@ -2,18 +2,37 @@
   "name": "@trucaco/mobile",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "expo-router/entry",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "dev": "expo start --web",
+    "start": "expo start",
+    "web": "expo start --web",
+    "export:web": "EXPO_NO_TELEMETRY=1 CI=1 expo export --platform web",
+    "build": "pnpm run export:web",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint src"
+    "lint": "eslint app src"
   },
   "dependencies": {
+    "@expo/metro-runtime": "58.0.16",
     "@trucaco/avatar": "workspace:*",
     "@trucaco/protocol": "workspace:*",
-    "@trucaco/ui": "workspace:*"
+    "@trucaco/ui": "workspace:*",
+    "expo": "58.0.22",
+    "expo-constants": "58.0.14",
+    "expo-linking": "58.0.15",
+    "expo-router": "58.0.29",
+    "expo-secure-store": "58.0.2",
+    "expo-status-bar": "58.0.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "5.10.1",
+    "react-native-screens": "4.30.1",
+    "react-native-web": "0.21.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
   }
 }

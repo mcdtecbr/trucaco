@@ -3,19 +3,19 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build", "db:generate"],
-      "inputs": ["src/**", "tsconfig*.json", "package.json"],
+      "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"],
       "outputs": ["dist/**"]
     },
     "typecheck": {
       "dependsOn": ["^build", "db:generate"],
-      "inputs": ["src/**", "tsconfig*.json", "package.json"]
+      "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"]
     },
     "test": {
       "dependsOn": ["^build", "db:generate"],
-      "inputs": ["src/**", "tsconfig*.json", "package.json"]
+      "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"]
     },
     "lint": {
-      "inputs": ["src/**", "../../eslint.config.mjs", "package.json"],
+      "inputs": ["src/**", "app/**", "../../eslint.config.mjs", "package.json"],
       "dependsOn": ["db:generate"]
     },
     "dev": {
