@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-**Trucaco**: truco online Paulista e Mineiro para web, iOS e Android. Pasta `E:\Sources\trucaco`, remoto `https://github.com/mcdtecbr/trucaco.git` (público no início; o usuário vai fechar após o levantamento). O nome tem "c": **trucaco**.
+**Trucaço** (nome do jogo, decidido pelo usuário em 2026-11-02; identificadores técnicos seguem sem cedilha, `trucaco`): truco online Paulista e Mineiro para web, iOS e Android. Pasta `E:\Sources\trucaco`, remoto `https://github.com/mcdtecbr/trucaco.git` (público no início; o usuário vai fechar após o levantamento). **Nome**: o jogo se chama **Trucaço** (com cedilha) em tudo que o jogador vê (título, tela de carregamento, lojas, textos). Repositório, pastas, pacotes `@trucaco/*`, bundle `com.mcdtec.trucaco` e scheme `trucaco://` ficam **sem** cedilha, por segurança de identificadores.
 
 **Decisões (brainstorming 2026-11-01)**, detalhadas em `docs/specs/2026-11-01-trucaco-design.md`: produto público; cliente React Native + Expo (web/iOS/Android); servidor Node/TS + Colyseus com Postgres (Prisma) e Redis; avatar Rive (partes trocáveis + um trigger por sinal); MVP = Paulista e Mineiro com mesa de 4, mesa de 6 na fase 8; login Google/Apple + convidado; GitHub Actions + Fly.io + Expo EAS. Sinais de truco são públicos na mesa (todos veem); chat da dupla é privado; balões de chat na mesa.
 
