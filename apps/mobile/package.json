@@ -7,7 +7,7 @@
     "dev": "expo start --web",
     "start": "expo start",
     "web": "expo start --web",
-    "export:web": "EXPO_NO_TELEMETRY=1 CI=1 expo export --platform web",
+    "export:web": "expo export --platform web",
     "build": "pnpm run export:web",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

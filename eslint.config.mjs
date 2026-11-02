@@ -34,8 +34,15 @@ export default tseslint.config(
   {
     files: ['apps/mobile/**/*.{ts,tsx}', 'packages/ui/**/*.{ts,tsx}', 'packages/avatar/**/*.ts'],
     rules: internalImports(
-      ['@trucaco/rules'],
-      'O cliente não decide regra de jogo: o servidor é a fonte de verdade.',
+      [
+        '@trucaco/rules',
+        '@trucaco/rules/*',
+        '@trucaco/server',
+        '@trucaco/server/*',
+        '**/packages/rules/**',
+        '**/apps/server/**',
+      ],
+      'O cliente não decide regra de jogo nem importa o servidor: o servidor é a fonte de verdade.',
     ),
   },
 );

@@ -3,7 +3,16 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build", "db:generate"],
-      "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"],
+      "inputs": [
+        "src/**",
+        "app/**",
+        "assets/**",
+        "app.json",
+        "metro.config.js",
+        "tsconfig*.json",
+        "package.json"
+      ],
+      "env": ["EXPO_PUBLIC_*"],
       "outputs": ["dist/**"]
     },
     "typecheck": {
