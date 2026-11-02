@@ -33,6 +33,8 @@ export interface PendingBet {
   readonly fromTeam: Team;
   /** Índice na escada de apostas que está sendo pedido. */
   readonly toLevel: number;
+  /** Único assento que responde (aceitar, correr ou aumentar); o parceiro dele só assiste. */
+  readonly responderSeat: Seat;
 }
 
 export type HandEndReason = 'tricks' | 'betRun' | 'specialRun' | 'draw';
@@ -57,6 +59,10 @@ export interface HandState {
   readonly special: SpecialKind;
   /** Dupla que decide jogar/correr na mão de onze. */
   readonly specialTeam: Team | null;
+  /** Mão de onze/dez: assentos da dupla que já aceitaram jogar (aceitar é definitivo). */
+  readonly specialAccepted: readonly Seat[];
+  /** Assento que fez o último pedido de aposta aceito (responde ao próximo aumento); null sem aposta. */
+  readonly lastBetSeat: Seat | null;
   readonly phase: HandPhase;
   readonly tricks: readonly Trick[];
   readonly current: readonly PlayedCard[];
@@ -131,6 +137,8 @@ export function startHandFromCards(p: StartHandFromCards): HandState {
     scores: [scores[0], scores[1]],
     special,
     specialTeam,
+    specialAccepted: [],
+    lastBetSeat: null,
     phase: special === 'maoDeOnze' ? 'specialDecision' : 'playing',
     tricks: [],
     current: [],
@@ -263,7 +271,13 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
         ...state,
         phase: 'betPending',
         lastRaiserTeam: team,
-        pending: { fromSeat: seat, fromTeam: team, toLevel: state.level + 1 },
+        pending: {
+          fromSeat: seat,
+          fromTeam: team,
+          toLevel: state.level + 1,
+          // truco: o adversário que joga depois de quem pediu; aumentos: quem fez o pedido anterior
+          responderSeat: state.lastBetSeat ?? nextSeat(seat, state.seats),
+        },
       });
     }
     case 'acceptBet':
@@ -272,8 +286,8 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
       const pending = state.pending;
       if (state.phase !== 'betPending' || pending === null)
         return fail('NO_PENDING_BET', 'não há aposta pendente');
-      if (team === pending.fromTeam)
-        return fail('NOT_YOUR_TURN', 'quem responde é a dupla adversária');
+      if (seat !== pending.responderSeat)
+        return fail('NOT_YOUR_TURN', 'quem responde é outro jogador');
       if (action.type === 'runBet')
         return ok(
           finish(state, { winnerTeam: pending.fromTeam, points: state.value, reason: 'betRun' }),
@@ -283,6 +297,7 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
           ...state,
           phase: 'playing',
           pending: null,
+          lastBetSeat: pending.fromSeat,
           level: pending.toLevel,
           value: state.variant.betLadder[pending.toLevel] ?? state.value,
         });
@@ -291,10 +306,16 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
       return ok({
         ...state,
         lastRaiserTeam: team,
+        lastBetSeat: pending.fromSeat,
         // aumentar equivale a aceitar o pedido anterior: ele vira o valor vigente
         level: pending.toLevel,
         value: state.variant.betLadder[pending.toLevel] ?? state.value,
-        pending: { fromSeat: seat, fromTeam: team, toLevel: pending.toLevel + 1 },
+        pending: {
+          fromSeat: seat,
+          fromTeam: team,
+          toLevel: pending.toLevel + 1,
+          responderSeat: pending.fromSeat,
+        },
       });
     }
     case 'playSpecial':
@@ -303,6 +324,8 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
         return fail('NO_SPECIAL_DECISION', 'não há decisão de mão de onze pendente');
       if (team !== state.specialTeam)
         return fail('NOT_YOUR_TURN', 'quem decide é a dupla na frente');
+      if (state.specialAccepted.includes(seat))
+        return fail('NOT_YOUR_TURN', 'você já aceitou jogar; aguarde o parceiro');
       if (action.type === 'runSpecial')
         return ok(
           finish(state, {
@@ -311,8 +334,11 @@ export function applyHandAction(state: HandState, action: HandAction): Result<Ha
             reason: 'specialRun',
           }),
         );
+      const specialAccepted = [...state.specialAccepted, seat];
+      if (specialAccepted.length < state.seats / 2) return ok({ ...state, specialAccepted });
       return ok({
         ...state,
+        specialAccepted,
         phase: 'playing',
         betsLocked: true,
         level: 0,

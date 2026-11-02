@@ -32,6 +32,8 @@ export interface HandView {
   readonly scores: readonly [number, number];
   readonly special: SpecialKind;
   readonly specialTeam: Team | null;
+  /** Onze/dez: assentos que já aceitaram jogar. */
+  readonly specialAccepted: readonly Seat[];
   readonly phase: HandPhase;
   readonly tricks: readonly TrickView[];
   readonly current: readonly PlayedCardView[];
@@ -69,6 +71,7 @@ export function viewFor(state: HandState, seat: Seat): HandView {
     scores: state.scores,
     special: state.special,
     specialTeam: state.specialTeam,
+    specialAccepted: [...state.specialAccepted],
     phase: state.phase,
     tricks: state.tricks.map((t) => ({ ...t, plays: t.plays.map(hide) })),
     current: state.current.map(hide),

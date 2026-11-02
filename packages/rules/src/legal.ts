@@ -1,7 +1,7 @@
 import type { HandAction, HandState } from './hand';
 import type { MatchState } from './match';
 import type { SeriesState } from './series';
-import { otherTeam, teamOf } from './types';
+import { teamOf } from './types';
 import type { Seat } from './types';
 
 function legalHandActions(state: HandState, seat: Seat): HandAction[] {
@@ -9,7 +9,7 @@ function legalHandActions(state: HandState, seat: Seat): HandAction[] {
     return [];
   const team = teamOf(seat);
   if (state.phase === 'specialDecision') {
-    if (team !== state.specialTeam) return [];
+    if (team !== state.specialTeam || state.specialAccepted.includes(seat)) return [];
     return [
       { type: 'playSpecial', seat },
       { type: 'runSpecial', seat },
@@ -17,7 +17,7 @@ function legalHandActions(state: HandState, seat: Seat): HandAction[] {
   }
   if (state.phase === 'betPending') {
     const p = state.pending;
-    if (p === null || team !== otherTeam(p.fromTeam)) return [];
+    if (p === null || seat !== p.responderSeat) return [];
     const out: HandAction[] = [
       { type: 'acceptBet', seat },
       { type: 'runBet', seat },

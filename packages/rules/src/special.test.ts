@@ -12,6 +12,8 @@ const R: Rank[][] = [
   ['J', 'Q', '7', '6'],
   ['K', '4', '4', '4'],
 ];
+const play2 = (s: HandState, a: number): HandState =>
+  must(must(s, { type: 'playSpecial', seat: a }), { type: 'playSpecial', seat: a + 2 });
 const code = (s: HandState, a: HandAction) => {
   const r = applyHandAction(s, a);
   return r.ok ? 'OK' : r.error.code;
@@ -37,7 +39,7 @@ describe.each([
   });
 
   it('decide jogar: mão vale o primeiro degrau e não aceita aumentos', () => {
-    let s = must(mk([limiar, 3]), { type: 'playSpecial', seat: 2 });
+    let s = play2(mk([limiar, 3]), 0);
     expect(s.value).toBe(primeiro);
     expect(s.phase).toBe('playing');
     expect(code(s, { type: 'callBet', seat: s.turn })).toBe('BET_NOT_ALLOWED');
@@ -58,7 +60,7 @@ describe.each([
     expect(Object.keys(viewFor(s, 0).partnerHands)).toEqual(['2']);
     expect(viewFor(s, 0).partnerHands[2]).toEqual(s.hands[2]);
     expect(viewFor(s, 1).partnerHands).toEqual({});
-    const playing = must(s, { type: 'playSpecial', seat: 0 });
+    const playing = play2(s, 0);
     expect(viewFor(playing, 0).partnerHands).toEqual({});
   });
 

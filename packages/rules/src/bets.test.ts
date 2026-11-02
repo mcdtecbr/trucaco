@@ -31,7 +31,7 @@ describe.each([
       let guard = 0;
       while (s.lastRaiserTeam === teamOf(s.turn) && guard++ < 3) s = playFirstCards(s, 1);
       s = must(s, { type: 'callBet', seat: s.turn });
-      const responder = (s.turn + 1) % 4;
+      const responder = s.pending?.responderSeat as number;
       s = must(s, { type: 'acceptBet', seat: responder });
       expect(s.value).toBe(value);
     }
@@ -49,20 +49,21 @@ describe.each([
     expect(ran.result).toEqual({ winnerTeam: 0, points: base, reason: 'betRun' });
 
     // aceito o primeiro, o adversário pede o segundo e a dupla 0 corre: dupla 1 leva o primeiro valor
-    let t = must(must(hand(variant), { type: 'callBet', seat: 0 }), { type: 'acceptBet', seat: 3 });
+    let t = must(must(hand(variant), { type: 'callBet', seat: 0 }), { type: 'acceptBet', seat: 1 });
     t = playFirstCards(t, 1);
     t = must(t, { type: 'callBet', seat: 1 });
-    const ran2 = must(t, { type: 'runBet', seat: 2 });
+    const ran2 = must(t, { type: 'runBet', seat: 0 });
     expect(ran2.result).toEqual({ winnerTeam: 1, points: ladder[0], reason: 'betRun' });
   });
 
   it('quem responde pode aumentar; a decisão volta a quem pediu primeiro', () => {
     let s = must(hand(variant), { type: 'callBet', seat: 0 });
-    s = must(s, { type: 'raiseBet', seat: 3 });
-    expect(s.pending).toMatchObject({ fromTeam: 1, toLevel: 1 });
+    s = must(s, { type: 'raiseBet', seat: 1 });
+    expect(s.pending).toMatchObject({ fromTeam: 1, toLevel: 1, responderSeat: 0 });
     expect(s.value).toBe(ladder[0]); // aumentar aceita o pedido anterior
-    expect(code(s, { type: 'acceptBet', seat: 3 })).toBe('NOT_YOUR_TURN');
-    const done = must(s, { type: 'acceptBet', seat: 2 });
+    expect(code(s, { type: 'acceptBet', seat: 1 })).toBe('NOT_YOUR_TURN');
+    expect(code(s, { type: 'acceptBet', seat: 2 })).toBe('NOT_YOUR_TURN');
+    const done = must(s, { type: 'acceptBet', seat: 0 });
     expect(done.value).toBe(ladder[1]);
     expect(done.phase).toBe('playing');
     // a dupla 0 não foi a última a aumentar: pode pedir o próximo

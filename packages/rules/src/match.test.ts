@@ -69,7 +69,11 @@ describe('partida', () => {
     void caller;
     const call = applyMatchAction(cur, { type: 'callBet', seat: cur.hand.turn }, rng);
     if (!call.ok) throw new Error('call');
-    const run = applyMatchAction(call.state, { type: 'runBet', seat: 1 }, rng);
+    const run = applyMatchAction(
+      call.state,
+      { type: 'runBet', seat: (cur.hand.turn + 1) % 4 },
+      rng,
+    );
     if (!run.ok) throw new Error('run');
     expect(run.state.scores).toEqual([11, 0]);
     expect(run.state.hand.special).toBe('maoDeOnze');
