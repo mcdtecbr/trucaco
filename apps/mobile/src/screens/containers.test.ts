@@ -1,5 +1,5 @@
 /**
- * Lógica dos containers (HomeScreen, WaitingRoomScreen, SettingsScreen) extraída para funções puras
+ * Lógica dos containers (HomeScreen, TableRoomScreen, SettingsScreen) extraída para funções puras
  * e testada em Vitest/node. Sem `@testing-library/react`+jsdom: o que os containers fazem além disso é
  * ligar hooks a estas funções (cobertura de interação fica para o E2E do 3I).
  */
@@ -32,7 +32,7 @@ describe('HomeScreen: ciclo de vida e deep link', () => {
   });
 });
 
-describe('WaitingRoomScreen: decisão da rota', () => {
+describe('TableRoomScreen: decisão da rota', () => {
   it('sem sala: volta ao início com o código da URL (normalizado) para preencher', () => {
     expect(
       decideWaitingRoute({ connection: 'none', paramCode: 'abcd-efgh', roomCode: '' }),

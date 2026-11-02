@@ -4,7 +4,7 @@ import { BootView } from './BootView';
 import { HomeView } from './HomeView';
 import type { HomeViewProps } from './HomeView';
 import { SettingsView } from './SettingsView';
-import { TablePlaceholderView, WaitingRoomView } from './WaitingRoomView';
+import { WaitingRoomView } from './WaitingRoomView';
 import type { WaitingRoomViewProps } from './WaitingRoomView';
 import { AvatarPlaceholder, initialOf } from '@trucaco/ui';
 
@@ -186,21 +186,6 @@ describe('WaitingRoomView', () => {
     expect(waiting({ shareFeedback: 'done' })).toContain('Código copiado.');
     expect(waiting({ shareFeedback: 'idle' })).not.toContain('Código copiado.');
     expect(waiting({ shareFeedback: 'failed' })).toContain('Não foi possível copiar');
-  });
-
-  it('placeholder da mesa não renderiza cartas', () => {
-    const html = renderToStaticMarkup(
-      <TablePlaceholderView
-        roomCode="ABCDEFGH"
-        seats={[seat(0, 'Ana'), seat(1, 'Bia')]}
-        mySeat={0}
-        onLeave={noop}
-      />,
-    );
-    expect(html).toContain('A partida começou.');
-    expect(html).toContain('table-seat-1');
-    expect(html).toContain('Conectado (você)');
-    expect(html).not.toMatch(/carta|naipe|zap/i);
   });
 });
 

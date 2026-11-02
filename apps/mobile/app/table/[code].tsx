@@ -1,10 +1,10 @@
 import { RequireSession } from '../../src/screens/RequireSession';
-import { WaitingRoomScreen } from '../../src/screens/WaitingRoomScreen';
+import { TableRoomScreen } from '../../src/screens/TableRoomScreen';
 
 export default function TableRoute() {
   return (
     <RequireSession>
-      <WaitingRoomScreen />
+      <TableRoomScreen />
     </RequireSession>
   );
 }

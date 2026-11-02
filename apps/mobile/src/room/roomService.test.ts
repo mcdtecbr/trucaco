@@ -24,6 +24,10 @@ class FakeRoom implements RoomLike {
   json: unknown = stateJson(1);
   reconnectionToken = 'r:tok';
   handlers: Record<string, Array<(...a: never[]) => void>> = {};
+  sent: Array<{ type: string; payload: unknown }> = [];
+  send(type: string, payload: unknown) {
+    this.sent.push({ type, payload });
+  }
   leave = vi.fn((consented?: boolean) => Promise.resolve(consented));
   get state() {
     return { toJSON: () => this.json };
@@ -73,8 +77,24 @@ function setup() {
       },
     ),
   } satisfies RoomClientLike;
-  const service = createRoomService({ getClient: () => client, store, firstStateTimeoutMs: 20 });
-  return { store, rooms, client, service };
+  const table = {
+    applyState: vi.fn(),
+    onEvent: vi.fn(),
+    onDesync: vi.fn(),
+    acknowledgeResync: vi.fn(),
+    onPresence: vi.fn(),
+    onTurnTimer: vi.fn(),
+    onServerError: vi.fn(),
+    onReconnected: vi.fn(),
+    reset: vi.fn(),
+  };
+  const service = createRoomService({
+    getClient: () => client,
+    store,
+    table,
+    firstStateTimeoutMs: 20,
+  });
+  return { store, rooms, client, service, table };
 }
 
 describe('roomService', () => {
@@ -183,5 +203,110 @@ describe('roomService', () => {
     expect(await entering).toBe('');
     expect(late.leave).toHaveBeenCalledWith(true);
     expect(t.service.current()).toBeNull();
+  });
+});
+
+describe('roomService alimentando a mesa', () => {
+  const ev = (seq: number) => ({
+    seq,
+    at: 1000 + seq,
+    event: { type: 'gameStarted', gameNumber: 1 },
+  });
+
+  it('cada patch de estado projeta a mesa uma vez, inclusive waiting -> playing SEM sair da sala', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const before = t.table.applyState.mock.calls.length;
+    t.rooms[0]!.setState(stateJson(4, 'playing'));
+    expect(t.table.applyState.mock.calls.length).toBe(before + 1);
+    expect(t.table.applyState).toHaveBeenLastCalledWith(stateJson(4, 'playing'));
+    expect(t.store.getState().tablePhase).toBe('playing');
+    expect(t.rooms[0]!.leave).not.toHaveBeenCalled();
+    expect(t.service.current()).toBe(t.rooms[0]);
+  });
+
+  it('encaminha event, presence, turnTimer e error', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const r = t.rooms[0]!;
+    r.emit('msg:event', ev(1));
+    r.emit('msg:presence', { seat: 1, status: 'away' });
+    r.emit('msg:turnTimer', { seat: 0, deadlineAt: 5 });
+    r.emit('msg:error', { code: 'NOT_YOUR_TURN' });
+    expect(t.table.onEvent).toHaveBeenCalledWith(ev(1));
+    expect(t.table.onPresence).toHaveBeenCalledWith({ seat: 1, status: 'away' });
+    expect(t.table.onTurnTimer).toHaveBeenCalledWith({ seat: 0, deadlineAt: 5 });
+    expect(t.table.onServerError).toHaveBeenCalledWith({ code: 'NOT_YOUR_TURN' });
+  });
+
+  it('salto de seq: avisa o desync, reprojeta pelo estado e reconhece a ressincronização', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const r = t.rooms[0]!;
+    r.emit('msg:event', ev(1));
+    const before = t.table.applyState.mock.calls.length;
+    r.emit('msg:event', ev(5));
+    expect(t.table.onDesync).toHaveBeenCalledWith({ expected: 2, got: 5 });
+    expect(t.table.applyState.mock.calls.length).toBe(before + 1);
+    expect(t.table.acknowledgeResync).toHaveBeenCalledTimes(1);
+    expect(t.table.onEvent).toHaveBeenCalledTimes(2);
+    // Contínuo depois do salto: sem novo desync.
+    r.emit('msg:event', ev(6));
+    expect(t.table.onDesync).toHaveBeenCalledTimes(1);
+  });
+
+  it('evento repetido (replay sobreposto) é ignorado', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('msg:event', ev(1));
+    t.rooms[0]!.emit('msg:event', ev(1));
+    expect(t.table.onEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('mensagens de uma sala antiga depois do leave são ignoradas', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const old = t.rooms[0]!;
+    await t.service.leave();
+    old.emit('msg:event', ev(1));
+    old.emit('msg:error', { code: 'X' });
+    expect(t.table.onEvent).not.toHaveBeenCalled();
+    expect(t.table.onServerError).not.toHaveBeenCalled();
+    expect(t.table.reset).toHaveBeenCalled();
+  });
+
+  it('onReconnect do SDK reprojeta e avisa a mesa', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('drop');
+    t.rooms[0]!.emit('reconnect');
+    expect(t.table.onReconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconexão manual continua o seq da sala anterior (replay só do que falta)', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('msg:event', ev(1));
+    t.rooms[0]!.emit('msg:event', ev(2));
+    t.rooms[0]!.emit('leave', 1006);
+    await vi.waitFor(() => expect(t.service.current()).toBe(t.rooms[1]));
+    expect(t.table.onReconnected).toHaveBeenCalledTimes(1);
+    t.rooms[1]!.emit('msg:event', ev(2)); // sobreposição
+    t.rooms[1]!.emit('msg:event', ev(3));
+    expect(t.table.onEvent).toHaveBeenCalledTimes(3);
+    expect(t.table.onDesync).not.toHaveBeenCalled();
+  });
+
+  it('send: sem payload de tipo/assento, só com sala conectada', async () => {
+    const t = setup();
+    expect(t.service.send({ type: 'bet' })).toBe(false);
+    await t.service.enter(reservation);
+    expect(t.service.send({ type: 'play', card: { rank: '3', suit: 'paus' } })).toBe(true);
+    expect(t.rooms[0]!.sent).toEqual([
+      { type: 'play', payload: { card: { rank: '3', suit: 'paus' } } },
+    ]);
+    t.rooms[0]!.emit('drop');
+    expect(t.service.send({ type: 'bet' })).toBe(false);
+    expect(t.rooms[0]!.sent).toHaveLength(1);
   });
 });

@@ -409,7 +409,7 @@ export interface EventTracker {
  * (reconexão manual): o replay do servidor só reenvia `seq` maiores.
  */
 export function trackEvents(
-  room: Pick<Room, 'onMessage'>,
+  room: { onMessage(type: string, cb: (payload: unknown) => void): unknown },
   handlers: EventTrackerHandlers,
   afterSeq: number | null = null,
 ): EventTracker {

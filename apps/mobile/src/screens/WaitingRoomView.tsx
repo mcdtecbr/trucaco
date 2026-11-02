@@ -90,40 +90,6 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
   );
 }
 
-/** Placeholder da mesa: a mesa jogável é o bloco 3H. Lista os 4 jogadores; sem cartas. */
-export function TablePlaceholderView({
-  roomCode,
-  seats,
-  mySeat,
-  onLeave,
-}: {
-  roomCode: string;
-  seats: readonly LobbySeat[];
-  mySeat: number;
-  onLeave(): void;
-}) {
-  return (
-    <Screen testID="table-placeholder">
-      <Title>Mesa</Title>
-      <Body testID="table-started">A partida começou.</Body>
-      <Body
-        muted
-      >{`Mesa ${formatCodeDisplay(roomCode)}. A mesa jogável chega no próximo bloco.`}</Body>
-      <Card>
-        {seats.map((s) => (
-          <View key={s.seat} testID={`table-seat-${s.seat}`}>
-            <AvatarPlaceholder
-              nickname={s.nickname || '—'}
-              caption={seatCaption(s, s.seat === mySeat)}
-            />
-          </View>
-        ))}
-      </Card>
-      <Button label="Sair da mesa" variant="secondary" onPress={onLeave} testID="leave-table" />
-    </Screen>
-  );
-}
-
 const styles = StyleSheet.create({
   code: {
     color: colors.primary,
