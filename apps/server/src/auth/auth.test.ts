@@ -261,6 +261,59 @@ describe('AuthService', () => {
     await expect(auth.authenticateAccess(third.accessToken)).rejects.toBeInstanceOf(AuthError);
   });
 
+  /** Segundo aparelho do mesmo usuário: outra família de refresh com o seu próprio access. */
+  const secondDevice = async (
+    auth: AuthService,
+    tokens: MemoryTokenStore,
+    userId: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> => {
+    const refreshToken = randomBytesB64();
+    const access = await auth.jwt.sign(userId);
+    await tokens.createFamily({
+      familyId: randomUUID(),
+      userId,
+      refreshHash: hashRefresh(refreshToken),
+      jti: access.jti,
+      ttlSec: 3600,
+    });
+    return { accessToken: access.token, refreshToken };
+  };
+  const randomBytesB64 = (): string =>
+    Buffer.from(randomUUID() + randomUUID())
+      .toString('base64url')
+      .slice(0, 43);
+
+  it('logout { all }: o access vigente de OUTRO aparelho morre junto (não espera o TTL)', async () => {
+    const { auth, tokens } = setup();
+    const g = await auth.createGuest();
+    const other = await secondDevice(auth, tokens, g.user.id);
+    const principal = await auth.authenticateAccess(g.pair.accessToken);
+    await auth.logout(principal, { all: true });
+    await expect(auth.authenticateAccess(g.pair.accessToken)).rejects.toBeInstanceOf(AuthError);
+    await expect(auth.authenticateAccess(other.accessToken)).rejects.toBeInstanceOf(AuthError);
+    await expect(auth.refresh(other.refreshToken)).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+  });
+
+  it('logout { all } NÃO derruba o access de outro usuário', async () => {
+    const { auth } = setup();
+    const a = await auth.createGuest();
+    const b = await auth.createGuest();
+    await auth.logout(await auth.authenticateAccess(a.pair.accessToken), { all: true });
+    await expect(auth.authenticateAccess(b.pair.accessToken)).resolves.toBeDefined();
+  });
+
+  it('logout por refreshToken depois de uma rotação: o access NOVO (lastJti) também morre', async () => {
+    const { auth } = setup();
+    const g = await auth.createGuest();
+    const rotated = await auth.refresh(g.pair.refreshToken);
+    // o logout chega com o access ANTIGO (principal) e o refresh novo: a rotação já tinha ocorrido
+    const principal = await auth.authenticateAccess(g.pair.accessToken);
+    await auth.logout(principal, { refreshToken: rotated.refreshToken });
+    await expect(auth.authenticateAccess(rotated.accessToken)).rejects.toBeInstanceOf(AuthError);
+  });
+
   it('refresh expirado, malformado ou de usuário removido é recusado', async () => {
     const { auth, repos } = setup();
     const g = await auth.createGuest();

@@ -58,8 +58,11 @@ return {'rotated', userId, fid, graced, tostring(ttl)}
 const REVOKE_LUA = `
 if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('HEXISTS', KEYS[1], 'revokedAt') == 0 then
   redis.call('HSET', KEYS[1], 'revokedAt', ARGV[1])
+  local last = redis.call('HGET', KEYS[1], 'lastJti')
+  if not last then last = '' end
+  return last
 end
-return 1
+return ''
 `;
 
 type RotateCommand = (
@@ -75,7 +78,8 @@ type RotateCommand = (
 
 interface RedisWithScripts {
   trucacoRotate: RotateCommand;
-  trucacoRevoke: (key: string, now: string) => Promise<number>;
+  /** `lastJti` da família recém-revogada, ou `''`. */
+  trucacoRevoke: (key: string, now: string) => Promise<string>;
 }
 
 export class RedisTokenStore implements TokenStore {
@@ -198,19 +202,29 @@ export class RedisTokenStore implements TokenStore {
     });
   }
 
-  async revokeFamily(familyId: string): Promise<void> {
-    await this.run(async () => {
-      await this.scripts.trucacoRevoke(`${REDIS_PREFIX}rtfam:${familyId}`, String(this.now()));
+  async revokeFamily(familyId: string): Promise<string | null> {
+    return this.run(async () => {
+      const last = await this.scripts.trucacoRevoke(
+        `${REDIS_PREFIX}rtfam:${familyId}`,
+        String(this.now()),
+      );
+      return last === '' ? null : last;
     });
   }
 
-  async revokeAllForUser(userId: string): Promise<void> {
-    await this.run(async () => {
+  async revokeAllForUser(userId: string): Promise<string[]> {
+    return this.run(async () => {
       const ids = await this.redis.smembers(`${REDIS_PREFIX}userfam:${userId}`);
+      const jtis: string[] = [];
       for (const id of ids) {
-        await this.scripts.trucacoRevoke(`${REDIS_PREFIX}rtfam:${id}`, String(this.now()));
+        const last = await this.scripts.trucacoRevoke(
+          `${REDIS_PREFIX}rtfam:${id}`,
+          String(this.now()),
+        );
+        if (last !== '') jtis.push(last);
       }
       await this.pruneUserFamilies(userId);
+      return jtis;
     });
   }
 

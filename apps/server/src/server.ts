@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Server, ServerError, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
-import { MAX_MESSAGE_BYTES } from '@trucaco/protocol';
+import { MAX_MESSAGE_BYTES, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { AuthService } from './auth/authService';
 import { DEFAULT_LIMITS, type RestLimits } from './auth/config';
 import type { AuthContext } from '@colyseus/core';
@@ -140,6 +140,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
     transport: new WebSocketTransport({
       maxPayload: MAX_MESSAGE_BYTES,
       beforeUpgrade: reconnectUpgradeGuard,
+      handleProtocols: selectBearerProtocol,
     }),
     express: (app) => {
       installBaseMiddleware(app, {
@@ -357,6 +358,18 @@ function tableGateway(): TableGateway {
       }
     },
   };
+}
+
+/**
+ * Escolha do subprotocolo WebSocket (defesa em profundidade). O `ws` seleciona por padrão o PRIMEIRO
+ * oferecido e o ecoa no 101; com `[jwt, 'trucaco.bearer']` o JWT voltaria no cabeçalho de resposta (logs
+ * de proxy). A recusa real (400) é do `reconnectUpgradeGuard`, ANTES do handshake (`handleProtocols`
+ * devolvendo `false` só omite o cabeçalho, o `ws` ainda completa o 101). Aqui: só `trucaco.bearer` pode
+ * ser selecionado, e só quando é o 1º item; o valor ofertado nunca é ecoado.
+ */
+export function selectBearerProtocol(protocols: Set<string>): string | false {
+  const first = protocols.values().next().value;
+  return first === WS_BEARER_PROTOCOL ? WS_BEARER_PROTOCOL : false;
 }
 
 /** Sobe Colyseus (WebSocketTransport + express) com `GET /health` e a sala `truco`. */

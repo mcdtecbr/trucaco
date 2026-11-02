@@ -144,7 +144,7 @@ API real do `@colyseus/core` 0.18 (confirmada nos fontes): `onDrop(client, code)
 **Sala e reconexão (para o cliente da Fase 3).**
 
 - Entrada: `Authorization: Bearer <access>` no `POST /matchmake/*`. Com o SDK 0.18: `client.http.options.headers = { authorization: 'Bearer ...' }` (vale para o HTTP e, em Node/React Native, para o upgrade do WebSocket). Evite `client.auth.token = ...`: o SDK copia esse valor para a QUERY (`_authToken`) da URL do WebSocket (vaza em log de proxy); o servidor o ignora como credencial.
-- Reconexão: o SDK reaproveita o token de reconexão, mas o JWT que vale é o do cabeçalho do momento. Se o access EXPIROU durante a queda (15 min), a reconexão volta `401`: o cliente chama `/auth/refresh`, atualiza o cabeçalho e chama `sdk.reconnect(reconnectionToken)` de novo. Navegador não consegue pôr `Authorization` no WebSocket: use o subprotocolo `trucaco.bearer, <jwt>` (`Sec-WebSocket-Protocol`); o servidor aceita os dois.
+- Reconexão: o SDK reaproveita o token de reconexão, mas o JWT que vale é o do cabeçalho do momento. Se o access EXPIROU durante a queda (15 min), a reconexão volta `401`: o cliente chama `/auth/refresh`, atualiza o cabeçalho e chama `sdk.reconnect(reconnectionToken)` de novo. Navegador não consegue pôr `Authorization` no WebSocket: use o subprotocolo `trucaco.bearer, <jwt>` (`Sec-WebSocket-Protocol`); o servidor aceita os dois. O `trucaco.bearer` TEM de ser o primeiro item oferecido (`['trucaco.bearer', jwt]`): `reconnectUpgradeGuard` recusa com 400, em qualquer upgrade, um `Sec-WebSocket-Protocol` cujo primeiro item seja outro (o `ws` selecionaria e ecoaria o JWT no 101), e `handleProtocols` (`selectBearerProtocol`, `src/server.ts`) só seleciona `trucaco.bearer`.
 - Assento de bot: só o dono (mesmo `userId`) retoma; estranho é recusado ANTES de reservar (`_reserveSeat` da sala), sem gastar vaga.
 - Stack de teste: salas com JWT em `src/rooms/authRoom.test.ts`; a suíte legada (`TrucoRoom.test.ts`) segue com `allowDevAuth: true`.
 
@@ -219,3 +219,15 @@ pnpm --filter @trucaco/server typecheck
 docker build -f infra/Dockerfile.server -t trucaco-server .
 docker run --rm -p 2567:2567 trucaco-server
 ```
+
+## Revogação de sessão (logout)
+
+`TokenStore.revokeFamily` e `revokeAllForUser` devolvem o `lastJti` (último access emitido) de cada família RECÉM-revogada (`REVOKE_LUA` no Redis; equivalente em memória), e `AuthService.logout`/o descarte de usuário removido chamam `revokeJti(lastJti, accessTtlSec)` para cada um. Assim `{ all: true }` derruba também o access vigente dos OUTROS aparelhos (antes sobrevivia até o TTL de 15 min) e, numa corrida logout x refresh, o access novo emitido pela rotação morre junto. Família já revogada ou inexistente devolve `null`/lista vazia (não há o que revogar de novo).
+
+## Estado da mesa para o cliente
+
+`TableStateSnapshot` (`packages/protocol/src/state.ts`) declara os campos como obrigatórios, então o schema (`game/schema.ts`) tem valores padrão coerentes: strings `''` (`hand.viraRank/viraSuit/special/phase`, `players[i].nickname/avatar`), `hand.value = 0`, `players[i].handSize = 0`, `isBot = false`, `status = 'empty'` e `turnDeadlineAt = 0`. Em `waiting` e em assento vazio nenhum campo obrigatório chega `undefined`; só `hand.pending` é opcional (testado em `game/stateContract.test.ts`). Os padrões são públicos e não carregam carta.
+
+## Contrato HTTP e reserva
+
+`SeatReservation` (`packages/protocol/src/http.ts`) aceita `reconnectionToken?` além de `processId`/`publicAddress`/`devMode`: o cliente repassa o objeto intacto a `consumeSeatReservation`. Os códigos dinâmicos de erro HTTP vêm de listas `as const` (`AUTH_ERROR_CODES` em `auth/authService.ts`, `ROOM_OPTIONS_ERRORS` no protocol); `errorCodeScan.contract.ts` confirma no código que o servidor ainda os emite (os testes `errorCodes.contract.test.ts` e `http/httpContract.test.ts` falham se deixar de emitir).

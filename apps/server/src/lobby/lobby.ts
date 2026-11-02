@@ -96,6 +96,7 @@ export interface SeatReservation {
   readonly name: string;
   readonly sessionId: string;
   readonly roomId: string;
+  readonly reconnectionToken?: string;
 }
 
 /** Costura com o Colyseus (trocada por um falso nos testes unitários). */

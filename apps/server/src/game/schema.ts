@@ -39,14 +39,14 @@ export const PendingBetSchema = schema(
 export const HandSchema = schema(
   {
     /** Vazio quando a variante não usa vira (Mineiro). */
-    viraRank: t.string(),
-    viraSuit: t.string(),
-    special: t.string(),
+    viraRank: t.string().default(''),
+    viraSuit: t.string().default(''),
+    special: t.string().default(''),
     specialTeam: t.int8(),
     /** '' antes da primeira mão. */
-    phase: t.string(),
+    phase: t.string().default(''),
     turn: t.int8(),
-    value: t.uint8(),
+    value: t.uint8().default(0),
     level: t.int8(),
     pending: t.ref(PendingBetSchema).optional(),
     tricks: t.array(TrickSchema),
@@ -79,12 +79,12 @@ export const OptionsSchema = schema(
 export const PlayerSchema = schema(
   {
     seat: t.int8(),
-    nickname: t.string(),
+    nickname: t.string().default(''),
     /** JSON do avatar (partes escolhidas). */
-    avatar: t.string(),
-    status: t.string(),
-    handSize: t.uint8(),
-    isBot: t.boolean(),
+    avatar: t.string().default(''),
+    status: t.string().default('empty'),
+    handSize: t.uint8().default(0),
+    isBot: t.boolean().default(false),
   },
   'Player',
 );
@@ -127,7 +127,7 @@ export const TableStateSchema = schema(
     game: t.ref(GameSchema),
     hand: t.ref(HandSchema),
     /** Epoch ms em que o turno atual expira; 0 se não há prazo. */
-    turnDeadlineAt: t.float64(),
+    turnDeadlineAt: t.float64().default(0),
     /** Assentos que votaram para cancelar a mesa. */
     cancelVotes: t.array('uint8'),
     /** Privado por assento (chave = número do assento como string). `.view()`: nunca vai a todos. */

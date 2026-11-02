@@ -182,13 +182,33 @@ describe('reconexão pelo subprotocolo, como no navegador (ws)', () => {
     expect((await connectWs(url, [WS_BEARER_PROTOCOL, own])).kind).toBe('open');
   });
 
-  it('ordem importa: oferecer [jwt, trucaco.bearer] faria o servidor selecionar o JWT (ele é o 1º) ou recusar', async () => {
+  it('ordem importa: oferecer [jwt, trucaco.bearer] é recusado (400), nunca ecoa o JWT', async () => {
     const { sessions, url, seat } = await droppedSeat();
     const jwt = (sessions[seat] as Session).pair.accessToken;
     const out = await connectWs(url, [jwt, WS_BEARER_PROTOCOL]);
     // Documenta o comportamento real para o cliente: a ordem correta é SEMPRE ['trucaco.bearer', jwt].
-    // Se o JWT vier antes, o guard não encontra o token (pega o item APÓS `trucaco.bearer`) -> 401.
-    expect(out).toEqual({ kind: 'rejected', status: 401 });
+    // Se o JWT vier antes, o upgrade é recusado (400) ANTES do handshake: o JWT nunca é ecoado.
+    expect(out).toEqual({ kind: 'rejected', status: 400 });
+  });
+
+  it('join comum (sem reconexão): [jwt, trucaco.bearer] é recusado (400) e o JWT nunca é ecoado; [trucaco.bearer, jwt] seleciona trucaco.bearer', async () => {
+    const { sessions, url, seat } = await droppedSeat();
+    const jwt = (sessions[seat] as Session).pair.accessToken;
+    // Sem `reconnectionToken` o guard deixa passar; só `handleProtocols` protege a escolha do subprotocolo.
+    const plain = url
+      .replace(/&reconnectionToken=[^&]*/, '')
+      .replace(/sessionId=[^&]*/, 'sessionId=x');
+    expect(await connectWs(plain, [jwt, WS_BEARER_PROTOCOL])).toEqual({
+      kind: 'rejected',
+      status: 400,
+    });
+    expect(await connectWs(plain, ['outro', WS_BEARER_PROTOCOL])).toEqual({
+      kind: 'rejected',
+      status: 400,
+    });
+    const ok = await connectWs(plain, [WS_BEARER_PROTOCOL, jwt]);
+    expect(ok).toEqual({ kind: 'open', selected: WS_BEARER_PROTOCOL, echoed: WS_BEARER_PROTOCOL });
+    expect(JSON.stringify(ok)).not.toContain(jwt);
   });
 
   it('o dono realmente volta ao assento (estado connected) após o upgrade por subprotocolo', async () => {

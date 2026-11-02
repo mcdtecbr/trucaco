@@ -1,11 +1,11 @@
 import type { AddressInfo } from 'node:net';
 import type { Server as HttpServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import express from 'express';
 import { SIGNAL_IDS } from '@trucaco/protocol';
 import { SignJWT } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AuthService } from '../auth/authService';
+import { AuthService, hashRefresh } from '../auth/authService';
 import { DEFAULT_LIMITS, type AuthConfig, type RestLimits } from '../auth/config';
 import { MemoryTokenStore, TokenStoreUnavailableError, type TokenStore } from '../auth/tokenStore';
 import { createMemoryRepositories } from '../db';
@@ -463,6 +463,27 @@ describe('POST /auth/logout', () => {
     expect(await refreshStatus(call, a.refreshToken)).toBe(401);
     expect(await refreshStatus(call, a2.refreshToken)).toBe(401);
     expect(await refreshStatus(call, other.refreshToken)).toBe(200);
+  });
+
+  it('{ all: true } invalida na hora o access vigente de OUTRO aparelho (/me 401), não só o apresentado', async () => {
+    const tokens = new MemoryTokenStore();
+    const { call, guest, auth } = await start({ tokens });
+    const g = await guest();
+    const refreshToken = randomBytes(32).toString('base64url');
+    const access = await auth.jwt.sign(g.user.id);
+    await tokens.createFamily({
+      familyId: randomUUID(),
+      userId: g.user.id,
+      refreshHash: hashRefresh(refreshToken),
+      jti: access.jti,
+      ttlSec: 3600,
+    });
+    expect((await call('GET', '/me', { token: access.token })).status).toBe(200);
+    const res = await call('POST', '/auth/logout', { token: g.accessToken, body: { all: true } });
+    expect(res.status).toBe(204);
+    expect((await call('GET', '/me', { token: access.token })).status).toBe(401);
+    expect((await call('GET', '/me', { token: g.accessToken })).status).toBe(401);
+    expect(await refreshStatus(call, refreshToken)).toBe(401);
   });
 
   it('corpo inválido: ausente, vazio, chaves extras, tipos errados, all diferente de true -> 400', async () => {

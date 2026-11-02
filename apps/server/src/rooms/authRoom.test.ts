@@ -3,6 +3,7 @@
  * com JWT (dono ok, outro usuário e query-string recusados); estranho não ocupa assento de bot ANTES de
  * reservar. Sem `allowDevAuth`: a sala só aceita JWT. UM `Server` por arquivo (matchmaker global).
  */
+import { randomBytes, randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
@@ -10,7 +11,7 @@ import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
 import type { RoomOptions } from '@trucaco/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { AuthService } from '../auth/authService';
+import { AuthService, hashRefresh } from '../auth/authService';
 import type { AuthConfig } from '../auth/config';
 import { AccessTokenService } from '../auth/jwt';
 import { MemoryTokenStore, TokenStoreUnavailableError } from '../auth/tokenStore';
@@ -289,6 +290,27 @@ describe('reconexão com JWT', () => {
     const fresh = await auth.refresh(s.pair.refreshToken);
     await reconnect(rooms, 2, fresh.accessToken);
     await until(() => statusOf(server, 2) === 'connected', 'reconectou com token novo');
+  });
+
+  it('logout { all } em outro aparelho: o access vigente do dono morre e a reconexão é recusada (401)', async () => {
+    const { server, sessions, rooms } = await table();
+    await until(() => server.series !== null, 'série');
+    const s = sessions[1] as Session;
+    // segundo aparelho do mesmo usuário (outra família), com o seu próprio access
+    const refreshToken = randomBytes(32).toString('base64url');
+    const second = await auth.jwt.sign(s.user.id);
+    await tokens.createFamily({
+      familyId: randomUUID(),
+      userId: s.user.id,
+      refreshHash: hashRefresh(refreshToken),
+      jti: second.jti,
+      ttlSec: 3600,
+    });
+    await dropSeat(server, rooms, 1);
+    await auth.logout(await auth.authenticateAccess(s.pair.accessToken), { all: true });
+    await expect(reconnect(rooms, 1, second.token)).rejects.toMatchObject({ code: 401 });
+    await expect(reconnect(rooms, 1, s.pair.accessToken)).rejects.toMatchObject({ code: 401 });
+    expect(statusOf(server, 1)).toBe('away');
   });
 
   it('upgrade cru: JWT só na QUERY é recusado (401); no cabeçalho e no subprotocolo é aceito', async () => {

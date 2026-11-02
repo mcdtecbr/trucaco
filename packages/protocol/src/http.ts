@@ -71,6 +71,8 @@ export interface SeatReservation {
   readonly processId?: string;
   readonly publicAddress?: string;
   readonly devMode?: boolean;
+  /** Presente em reservas de reconexão (`allowReconnection`); repassar intacto também. */
+  readonly reconnectionToken?: string;
 }
 
 /** Validade da reserva de assento, em segundos (padrão do core Colyseus; o servidor não o altera). */

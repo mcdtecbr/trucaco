@@ -67,9 +67,14 @@ export interface TokenStore {
   createFamily(input: CreateFamilyInput): Promise<void>;
   /** ATÔMICO: dois `rotate` com o mesmo hash nunca produzem dois `rotated`. */
   rotate(input: RotateInput): Promise<RotateResult>;
-  revokeFamily(familyId: string): Promise<void>;
-  /** "Sair de todos os aparelhos", banimento, remoção de conta. */
-  revokeAllForUser(userId: string): Promise<void>;
+  /**
+   * Revoga a família. Devolve o `lastJti` (último access emitido) se ela acabou de ser revogada AGORA;
+   * `null` se já estava revogada, não existe ou expirou. Quem chama revoga esse `jti` (senão o access
+   * vigente sobrevive até o TTL).
+   */
+  revokeFamily(familyId: string): Promise<string | null>;
+  /** "Sair de todos os aparelhos", banimento, remoção de conta. Devolve o `lastJti` de cada família recém-revogada. */
+  revokeAllForUser(userId: string): Promise<string[]>;
   /** Revoga um access JWT até o instante em que ele expiraria. */
   revokeJti(jti: string, ttlSec: number): Promise<void>;
   isJtiRevoked(jti: string): Promise<boolean>;
@@ -160,15 +165,23 @@ export class MemoryTokenStore implements TokenStore {
       : { status: 'rotated', userId, familyId };
   }
 
-  async revokeFamily(familyId: string): Promise<void> {
+  async revokeFamily(familyId: string): Promise<string | null> {
     const family = this.families.get(familyId);
-    if (family !== undefined && family.revokedAt === null) family.revokedAt = this.now();
+    if (family === undefined || family.revokedAt !== null || family.expiresAt <= this.now()) {
+      return null;
+    }
+    family.revokedAt = this.now();
+    return family.lastJti;
   }
 
-  async revokeAllForUser(userId: string): Promise<void> {
-    for (const family of this.families.values()) {
-      if (family.userId === userId && family.revokedAt === null) family.revokedAt = this.now();
+  async revokeAllForUser(userId: string): Promise<string[]> {
+    const jtis: string[] = [];
+    for (const [familyId, family] of this.families) {
+      if (family.userId !== userId) continue;
+      const jti = await this.revokeFamily(familyId);
+      if (jti !== null) jtis.push(jti);
     }
+    return jtis;
   }
 
   async revokeJti(jti: string, ttlSec: number): Promise<void> {

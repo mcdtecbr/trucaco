@@ -164,6 +164,41 @@ export function tokenStoreContract(name: string, make: (clock: () => number) => 
       await store.revokeFamily(randomUUID());
     });
 
+    it('revokeFamily/revokeAllForUser devolvem o lastJti das famílias RECÉM-revogadas', async () => {
+      const store = fresh();
+      const userId = randomUUID();
+      const mk = () => ({
+        familyId: randomUUID(),
+        userId,
+        refreshHash: hex(),
+        jti: randomUUID(),
+        ttlSec: 60,
+      });
+      const a = mk();
+      const b = mk();
+      await store.createFamily(a);
+      await store.createFamily(b);
+      // a rotação troca o lastJti da família a
+      const r = rot(store, a.refreshHash);
+      expect((await r.run()).status).toBe('rotated');
+      expect(await store.revokeFamily(a.familyId)).toBe(r.jti);
+      // repetir não revoga de novo: nada a devolver (e família inexistente também)
+      expect(await store.revokeFamily(a.familyId)).toBeNull();
+      expect(await store.revokeFamily(randomUUID())).toBeNull();
+      // all: só a família ainda viva (b) conta, com o jti dela
+      expect(await store.revokeAllForUser(userId)).toEqual([b.jti]);
+      expect(await store.revokeAllForUser(userId)).toEqual([]);
+    });
+
+    it('corrida rotate -> revokeFamily: o jti do access NOVO é o devolvido (e nenhum rotate depois passa)', async () => {
+      const store = fresh();
+      const f = await family(store);
+      const r = rot(store, f.refreshHash);
+      expect((await r.run()).status).toBe('rotated');
+      expect(await store.revokeFamily(f.familyId)).toBe(r.jti);
+      expect((await rot(store, r.to).run()).status).toBe('revoked');
+    });
+
     it('jti revogado vale até o TTL', async () => {
       const store = fresh();
       const jti = randomUUID();

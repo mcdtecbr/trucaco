@@ -3,9 +3,6 @@
  * que o servidor emite (varredura de `errorCodes.contract.test.ts`). Código novo no servidor sem entrada
  * no protocol (ou o inverso) quebra aqui.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ERROR_CODES, HTTP_ERROR_CODES, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type {
   CreateTableResponse,
@@ -21,46 +18,17 @@ import type {
 import { describe, expect, it } from 'vitest';
 import { WS_BEARER_PROTOCOL as SERVER_BEARER } from '../auth/authService';
 import type { AuthService, TokenPair } from '../auth/authService';
+import { emittedHttpCodes } from '../errorCodeScan.contract';
 import { buildHealth } from '../index';
 import type { SeatReservation as ServerReservation, QueueStatus } from '../lobby/lobby';
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), '..');
-
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const p = join(dir, name);
-    if (name === 'generated') return [];
-    if (statSync(p).isDirectory()) return sources(p);
-    return /\.ts$/.test(name) && !/\.test\.ts$|\.contract\.ts$|testkit|testRedis/.test(name)
-      ? [p]
-      : [];
-  });
-}
-
-function emittedCodes(): Set<string> {
-  const found = new Set<string>();
-  for (const file of sources(SRC)) {
-    const text = readFileSync(file, 'utf8');
-    for (const m of text.matchAll(/\bfail\(res, \d{3}, '([A-Z_]+)'\)/g)) found.add(m[1]!);
-    for (const m of text.matchAll(/new ServerError\(\d{3}, '([A-Z_]+)'\)/g)) found.add(m[1]!);
-    for (const m of text.matchAll(/failWith\(res, '([A-Z_]+)', \d{3}\)/g)) found.add(m[1]!);
-  }
-  const routes = readFileSync(join(SRC, 'http/lobbyRoutes.ts'), 'utf8');
-  const table = /const STATUS[^{]*\{([^}]*)\}/.exec(routes)?.[1] ?? '';
-  for (const m of table.matchAll(/([A-Z_]+): \d{3}/g)) found.add(m[1]!);
-  // Emitidos por variável (AuthError.code / validateRoomOptions), não visíveis à varredura literal.
-  found.add('INVALID_REFRESH_TOKEN');
-  found.add('BO3_REQUIRES_PRIVATE');
-  return found;
-}
-
 describe('contrato HTTP protocol <-> servidor', () => {
   it('HTTP_ERROR_CODES coincide com os códigos emitidos pelo servidor', () => {
-    expect([...HTTP_ERROR_CODES].sort()).toEqual([...emittedCodes()].sort());
+    expect([...HTTP_ERROR_CODES].sort()).toEqual([...emittedHttpCodes()].sort());
   });
 
   it('a varredura não ficou vazia', () => {
-    expect(emittedCodes().size).toBeGreaterThan(30);
+    expect(emittedHttpCodes().size).toBeGreaterThan(30);
   });
 
   it('códigos do canal WS e do HTTP só se sobrepõem nos de sentido igual', () => {
@@ -73,7 +41,12 @@ describe('contrato HTTP protocol <-> servidor', () => {
   });
 
   it('tipos de resposta são compatíveis com o que o servidor produz (compile-time)', () => {
-    const reservation: SeatReservation = { name: 'truco', sessionId: 's', roomId: 'r' };
+    const reservation: SeatReservation = {
+      name: 'truco',
+      sessionId: 's',
+      roomId: 'r',
+      reconnectionToken: 'rt',
+    };
     // Reserva do servidor (3 campos tipados) cabe no tipo do protocol.
     const fromServer: ServerReservation = reservation;
     const asProtocol: SeatReservation = fromServer;

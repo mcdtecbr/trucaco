@@ -41,7 +41,9 @@ export function isValidRoomCode(code: unknown): code is string {
   return typeof code === 'string' && CODE_RE.test(code);
 }
 
-export type RoomOptionsError = 'INVALID_OPTIONS' | 'BO3_REQUIRES_PRIVATE';
+/** Erros possíveis de `validateRoomOptions` (viram 400 no REST e recusa no `onCreate`). */
+export const ROOM_OPTIONS_ERRORS = ['INVALID_OPTIONS', 'BO3_REQUIRES_PRIVATE'] as const;
+export type RoomOptionsError = (typeof ROOM_OPTIONS_ERRORS)[number];
 
 export type RoomOptionsResult =
   | { readonly ok: true; readonly options: RoomOptions }

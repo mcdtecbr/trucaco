@@ -9,7 +9,7 @@ Ao divergir deste texto, o código vence e este documento deve ser corrigido. It
 - **Access token**: JWT HS256 de 15 min (`ACCESS_TOKEN_TTL_SECONDS`). O servidor aceita o JWT só em:
   - cabeçalho `Authorization: Bearer <jwt>` (REST, `POST /matchmake/*` e o upgrade do WebSocket em Node e React Native);
   - subprotocolo `Sec-WebSocket-Protocol: trucaco.bearer, <jwt>` (navegador, que não põe cabeçalho no WebSocket).
-    O `trucaco.bearer` DEVE vir primeiro (`new WebSocket(url, ['trucaco.bearer', jwt])`): o servidor seleciona e ecoa só `trucaco.bearer` no 101 (o JWT nunca volta); com a ordem invertida o guard não acha o token e responde 401. Coberto por `apps/server/src/rooms/wsHandshake.test.ts`.
+    O `trucaco.bearer` DEVE vir primeiro (`new WebSocket(url, ['trucaco.bearer', jwt])`): o servidor seleciona e ecoa só `trucaco.bearer` no 101 (o JWT nunca volta); com a ordem invertida (ou qualquer outro subprotocolo na frente) o upgrade é recusado com 400 antes do handshake, em qualquer entrada (join comum ou reconexão), para o `ws` nunca ecoar o JWT. Coberto por `apps/server/src/rooms/wsHandshake.test.ts`.
 - **Nunca** envie o JWT em `client.auth.token` nem na query. O SDK copia esse valor para `_authToken` na URL (vaza em log de proxy), e o servidor o ignora como credencial.
 - Com o SDK Colyseus 0.18: `client.http.options.headers = { authorization: 'Bearer <jwt>' }`.
 - **Refresh token**: opaco, rotativo a cada uso. Guarde o par novo assim que `/auth/refresh` responder: o token antigo morre.

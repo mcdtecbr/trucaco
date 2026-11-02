@@ -4,47 +4,9 @@
  * canal WS usa `ErrorCode` do protocolo. Este teste congela o conjunto conhecido (varrendo as fontes):
  * um código novo, ou um código existente com outro status HTTP, quebra aqui e exige decisão explícita.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ERROR_CODES, validateRoomOptions } from '@trucaco/protocol';
+import { ERROR_CODES, ROOM_OPTIONS_ERRORS } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
-
-const SRC = dirname(fileURLToPath(import.meta.url));
-
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const p = join(dir, name);
-    if (name === 'generated') return [];
-    if (statSync(p).isDirectory()) return sources(p);
-    return /\.ts$/.test(name) && !/\.test\.ts$|\.contract\.ts$|testkit|testRedis/.test(name)
-      ? [p]
-      : [];
-  });
-}
-
-/** Códigos HTTP literais -> conjunto de status em que aparecem. */
-function scanHttp(): Map<string, Set<number>> {
-  const found = new Map<string, Set<number>>();
-  const add = (code: string, status: number): void => {
-    found.set(code, (found.get(code) ?? new Set<number>()).add(status));
-  };
-  for (const file of sources(SRC)) {
-    const text = readFileSync(file, 'utf8');
-    for (const m of text.matchAll(/\bfail\(res, (\d{3}), '([A-Z_]+)'\)/g)) add(m[2]!, Number(m[1]));
-    for (const m of text.matchAll(/new ServerError\((\d{3}), '([A-Z_]+)'\)/g)) {
-      add(m[2]!, Number(m[1]));
-    }
-    for (const m of text.matchAll(/failWith\(res, '([A-Z_]+)', (\d{3})\)/g)) {
-      add(m[1]!, Number(m[2]));
-    }
-  }
-  // Tabela STATUS de lobbyRoutes.ts (LobbyError -> HTTP).
-  const routes = readFileSync(join(SRC, 'http/lobbyRoutes.ts'), 'utf8');
-  const table = /const STATUS[^{]*\{([^}]*)\}/.exec(routes)?.[1] ?? '';
-  for (const m of table.matchAll(/([A-Z_]+): (\d{3})/g)) add(m[1]!, Number(m[2]));
-  return found;
-}
+import { dynamicCodes, emittedRoomOptionErrors, scanHttp } from './errorCodeScan.contract';
 
 /** Catálogo congelado (Fase 2). Chave = código; valor = status HTTP possíveis. */
 const KNOWN: Record<string, number[]> = {
@@ -83,13 +45,11 @@ const KNOWN: Record<string, number[]> = {
 
 describe('catálogo de códigos de erro do servidor', () => {
   const found = scanHttp();
-  // Códigos que chegam por variável (não literal) e por isso a varredura não os vê com status.
-  const DYNAMIC = ['INVALID_REFRESH_TOKEN'];
+  // Códigos que chegam por variável (não literal): a varredura literal não os vê (ver `dynamicCodes`).
 
   it('todo código de erro HTTP/handshake emitido nas fontes está no catálogo congelado, com o mesmo status', () => {
     const actual = Object.fromEntries(
       [...found.entries()]
-        .filter(([c]) => !DYNAMIC.includes(c))
         .map(([c, s]) => [c, [...s].sort()])
         .sort(([a], [b]) => String(a).localeCompare(String(b))),
     );
@@ -125,20 +85,17 @@ describe('catálogo de códigos de erro do servidor', () => {
     }
   });
 
-  it('erros dinâmicos de validateRoomOptions (viram 400 em POST /tables, /queue e no onCreate) são só dois e conhecidos', () => {
-    const errors = new Set<string>();
-    const bad: unknown[] = [
-      null,
-      [],
-      {},
-      { variant: 'x', format: 'single', ironHand: true, visibility: 'private' },
-      { variant: 'paulista', format: 'bo3', ironHand: true, visibility: 'public' },
-      { variant: 'paulista', format: 'single', ironHand: true, visibility: 'private', extra: 1 },
-    ];
-    for (const raw of bad) {
-      const r = validateRoomOptions(raw);
-      if (!r.ok) errors.add(r.error);
-    }
-    expect([...errors].sort()).toEqual(['BO3_REQUIRES_PRIVATE', 'INVALID_OPTIONS']);
+  it('erros dinâmicos de validateRoomOptions (viram 400 em POST /tables, /queue e no onCreate) são só os da lista exportada', () => {
+    expect([...emittedRoomOptionErrors()].sort()).toEqual([...ROOM_OPTIONS_ERRORS].sort());
+  });
+
+  it('códigos dinâmicos (AuthError e validateRoomOptions) são todos confirmados no código', () => {
+    expect([...dynamicCodes()].sort()).toEqual([
+      'BO3_REQUIRES_PRIVATE',
+      'INVALID_OPTIONS',
+      'INVALID_REFRESH_TOKEN',
+      'SERVICE_UNAVAILABLE',
+      'UNAUTHORIZED',
+    ]);
   });
 });

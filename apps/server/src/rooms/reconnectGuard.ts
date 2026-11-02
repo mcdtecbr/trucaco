@@ -8,10 +8,13 @@
  * válido (401 se não for) e do dono do assento da sessão (403 se for de outro). O core ainda valida o
  * token de reconexão por sessão (`hasReservedSeat`), então token de um assento não abre outro.
  *
+ * Também recusa (400) qualquer upgrade que ofereça subprotocolo cujo 1º item não seja `trucaco.bearer`.
+ *
  * Entradas normais (sem `reconnectionToken` na URL) passam direto. Sala que não é `TrucoRoom` ou não
  * é local também passa: o core decide (e recusa se a reserva não existe).
  */
 import { matchMaker } from '@colyseus/core';
+import { WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { BeforeUpgradeHandler } from '@colyseus/core';
 import { log } from '../logger';
 import { bearerFromSubprotocol } from '../auth/authService';
@@ -34,6 +37,10 @@ const bad = (): Response => new Response(null, { status: 400 });
 export const reconnectUpgradeGuard: BeforeUpgradeHandler = async (request, context) => {
   const host = context.headers.get('host');
   if (host !== null && !SAFE_HOST.test(host)) return bad();
+  // Subprotocolo: se oferecido, o 1º item TEM de ser `trucaco.bearer` (`['trucaco.bearer', jwt]`). Com o JWT
+  // primeiro, o `ws` o selecionaria e o ecoaria no 101. Vale para TODO upgrade, não só reconexão.
+  const offered = context.headers.get('sec-websocket-protocol');
+  if (offered !== null && offered.split(',')[0]?.trim() !== WS_BEARER_PROTOCOL) return bad();
   let url: URL;
   try {
     const parsed = new URL(request.url);

@@ -15,7 +15,12 @@ import type { AuthConfig } from './config';
 import { AccessTokenService, InvalidTokenError } from './jwt';
 import type { TokenStore } from './tokenStore';
 
-export type AuthErrorCode = 'UNAUTHORIZED' | 'INVALID_REFRESH_TOKEN' | 'SERVICE_UNAVAILABLE';
+export const AUTH_ERROR_CODES = [
+  'UNAUTHORIZED',
+  'INVALID_REFRESH_TOKEN',
+  'SERVICE_UNAVAILABLE',
+] as const;
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
 
 export class AuthError extends Error {
   constructor(readonly code: AuthErrorCode) {
@@ -111,7 +116,7 @@ export class AuthService {
     if (owner === null) throw new AuthError('INVALID_REFRESH_TOKEN');
     const user = await this.users.findById(owner.userId);
     if (user === null) {
-      await this.tokens.revokeFamily(owner.familyId);
+      await this.revokeFamilyAndAccess(owner.familyId);
       throw new AuthError('INVALID_REFRESH_TOKEN');
     }
     const refreshToken = newRefresh();
@@ -156,14 +161,24 @@ export class AuthService {
     input: { readonly refreshToken: string } | { readonly all: true },
   ): Promise<void> {
     if ('all' in input) {
-      await this.tokens.revokeAllForUser(principal.userId);
+      // Também mata o access vigente (`lastJti`) de cada família: o de OUTROS aparelhos não pode
+      // sobreviver até o TTL.
+      for (const jti of await this.tokens.revokeAllForUser(principal.userId)) {
+        await this.tokens.revokeJti(jti, this.cfg.accessTtlSec);
+      }
     } else if (REFRESH_FORMAT.test(input.refreshToken)) {
       const owner = await this.tokens.lookup(hashRefresh(input.refreshToken));
       if (owner !== null && owner.userId === principal.userId) {
-        await this.tokens.revokeFamily(owner.familyId);
+        await this.revokeFamilyAndAccess(owner.familyId);
       }
     }
     await this.tokens.revokeJti(principal.jti, this.cfg.accessTtlSec);
+  }
+
+  /** Revoga a família e o access vigente dela (`lastJti`), se acabou de ser revogada. */
+  private async revokeFamilyAndAccess(familyId: string): Promise<void> {
+    const lastJti = await this.tokens.revokeFamily(familyId);
+    if (lastJti !== null) await this.tokens.revokeJti(lastJti, this.cfg.accessTtlSec);
   }
 
   /** Valida o access JWT (assinatura, `iss`, `aud`, `exp`) e a lista de `jti` revogados. */
