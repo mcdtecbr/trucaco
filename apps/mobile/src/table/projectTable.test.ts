@@ -18,9 +18,14 @@ describe('projectTable: entrada degenerada', () => {
   );
 
   it('campos com tipo errado caem nos padrões', () => {
-    const vm = projectTable({ phase: 7, players: 'x', hand: { turn: 'a', value: null }, game: [] });
+    const vm = projectTable({
+      phase: 7,
+      players: 'x',
+      hand: { actingSeat: 'a', value: null },
+      game: [],
+    });
     expect(vm.phase).toBe('');
-    expect(vm.turnSeat).toBe(-1);
+    expect(vm.actingSeat).toBe(-1);
     expect(vm.handValue).toBe(0);
     expect(vm.scores).toEqual([0, 0]);
   });
@@ -82,7 +87,7 @@ describe('projectTable: jogando (Paulista)', () => {
     expect(vm.myHand).toHaveLength(3);
     expect(vm.legalActions).toEqual(['play:3paus', 'play:7ouros', 'play:Acopas', 'bet']);
     expect(vm.canAct).toBe(true);
-    expect(vm.turnSeat).toBe(0);
+    expect(vm.actingSeat).toBe(0);
     expect(vm.seats[0]?.isTurn).toBe(true);
     expect(vm.turnDeadlineAt).toBe(1_700_000_000_000);
     expect(vm.current).toHaveLength(2);
@@ -136,7 +141,8 @@ describe('projectTable: aposta pendente', () => {
   const pending = snapshot({
     hand: {
       phase: 'betPending',
-      turn: 1,
+      turn: 0,
+      actingSeat: 1,
       pending: { fromSeat: 0, fromTeam: 0, toLevel: 1 },
       pendingValue: 3,
       nextBetValue: 6,
@@ -148,13 +154,10 @@ describe('projectTable: aposta pendente', () => {
     const vm = projectTable(pending);
     expect(vm.mySeat).toBe(1);
     expect(vm.handPhase).toBe('betPending');
-    expect(vm.pending).toEqual({
-      fromSeat: 0,
-      fromTeam: 0,
-      toLevel: 1,
-      value: 3,
-      fromMyTeam: false,
-    });
+    expect(vm.actingSeat).toBe(1);
+    expect(vm.seats[1]?.isTurn).toBe(true);
+    expect(vm.seats[0]?.isTurn).toBe(false);
+    expect(vm.pending).toEqual({ fromSeat: 0, fromTeam: 0, toLevel: 1, fromMyTeam: false });
     expect(vm.pendingValue).toBe(3);
     expect(vm.nextBetValue).toBe(6);
     expect(vm.legalActions).toEqual(['accept', 'run', 'bet']);
@@ -192,7 +195,26 @@ describe('projectTable: mão de onze/dez', () => {
     expect(vm.handPhase).toBe('specialDecision');
     expect(vm.partnerCards).toHaveLength(2);
     expect(vm.legalActions).toEqual(['specialPlay', 'specialRun']);
-    expect(vm.seats[0]?.isTurn).toBe(true);
+    expect(vm.decidingTeam).toBe(0);
+    expect(vm.seats[0]?.isTurn).toBe(false);
+  });
+
+  it('os dois da dupla têm ação legal, mas actingSeat é só o menor assento', () => {
+    const state = (seat: number) =>
+      snapshot({
+        hand: {
+          special: 'maoDeOnze',
+          specialTeam: 0,
+          phase: 'specialDecision',
+          turn: 0,
+          actingSeat: 0,
+        },
+        privates: priv(seat, { legalActions: ['specialPlay', 'specialRun'] }),
+      });
+    const partner = projectTable(state(2));
+    expect(partner.actingSeat).toBe(0);
+    expect(partner.canAct).toBe(true);
+    expect(partner.seats.some((x) => x.isTurn)).toBe(false);
   });
 });
 

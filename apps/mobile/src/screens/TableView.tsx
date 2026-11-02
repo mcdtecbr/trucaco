@@ -8,6 +8,7 @@ import type { LegalActionId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
   BetButtons,
+  Card,
   HandFan,
   LiveRegion,
   MIN_TOUCH,
@@ -16,17 +17,22 @@ import {
   SUIT_SYMBOL,
   TurnTimer,
   Vira,
+  canCover,
   cardName,
   colors,
   fontSize,
   fontWeight,
+  parseFace,
   radius,
   spacing,
 } from '@trucaco/ui';
 import type { HandResult, LayoutMode } from '@trucaco/ui';
 import type { SeatView, TableViewModel } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
+import type { LingeringTrick } from '../table/tableStore';
 import { Button } from '../ui/Button';
+import { ChatPanel } from './ChatPanel';
+import type { ChatPanelProps } from './ChatPanel';
 
 export interface TableViewProps {
   vm: TableViewModel;
@@ -40,6 +46,17 @@ export interface TableViewProps {
   errorText: string | null;
   presenceNote: string | null;
   history: readonly HandResult[];
+  /** Lances da mão em curso (histórico detalhado). */
+  handLog: readonly string[];
+  /** Última vaza fechada, mantida por um instante. */
+  lingering: LingeringTrick | null;
+  /** Modo "jogar coberta". */
+  coverMode: boolean;
+  /** Emite a sonda `table-state` (data-testid oculto) só em modo E2E. */
+  probe: boolean;
+  /** Painel de chat aberto (props prontas) ou null. */
+  chatPanel: ChatPanelProps | null;
+  chatUnreadTotal: number;
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
@@ -49,6 +66,9 @@ export interface TableViewProps {
     act(id: LegalActionId): void;
     confirmSelected(): void;
     dismissError(): void;
+    toggleCover(): void;
+    voteCancel(): void;
+    openChat(): void;
     askLeave(): void;
     cancelLeave(): void;
     leave(): void;
@@ -81,7 +101,7 @@ function Seat({ s, vm }: { s: SeatView; vm: TableViewModel }) {
 function pendingText(vm: TableViewModel): string | null {
   const p = vm.pending;
   if (p === null) return null;
-  const value = p.value > 0 ? p.value : vm.pendingValue;
+  const value = vm.pendingValue;
   const cry = value !== undefined ? betCry(value) : undefined;
   const what = cry !== undefined ? `${cry[0]?.toUpperCase()}${cry.slice(1)}` : 'aposta';
   const worth = value !== undefined ? ` (vale ${value})` : '';
@@ -90,20 +110,27 @@ function pendingText(vm: TableViewModel): string | null {
   return `${name !== undefined && name !== '' ? name : 'Adversário'} pediu ${what}${worth}.`;
 }
 
-function turnText(vm: TableViewModel): string | null {
-  if (vm.phase !== 'playing' || vm.turnSeat < 0) return null;
+/** "De quem é a vez": `actingSeat` do servidor (não `hand.turn`); decisão especial é da dupla. */
+export function turnText(vm: TableViewModel): string | null {
+  if (vm.phase !== 'playing') return null;
   if (vm.handPhase === 'finished' || vm.handPhase === '') return null;
-  if (vm.turnSeat === vm.mySeat) return 'Sua vez';
-  const n = vm.seats[vm.turnSeat]?.nickname;
+  if (vm.handPhase === 'specialDecision') {
+    if (vm.canAct) return 'Sua dupla decide';
+    return vm.decidingTeam >= 0 ? 'A dupla adversária decide' : null;
+  }
+  // Aposta pendente: os dois da dupla que responde têm ação legal (actingSeat é o menor assento).
+  if (vm.handPhase === 'betPending' && vm.canAct) return 'Sua dupla responde';
+  if (vm.actingSeat === vm.mySeat || vm.canAct) return 'Sua vez';
+  if (vm.actingSeat < 0) return null;
+  const n = vm.seats[vm.actingSeat]?.nickname;
   return `Vez de ${n !== undefined && n !== '' ? n : 'outro jogador'}`;
 }
 
 function selectedLabel(selected: string | null): string | null {
   const a = parseLegalAction(selected);
   if (a === null) return null;
-  if (a.kind === 'play' || a.kind === 'playCovered') {
-    return `Jogar ${cardName(a.card.rank, a.card.suit)}`;
-  }
+  if (a.kind === 'play') return `Jogar ${cardName(a.card.rank, a.card.suit)}`;
+  if (a.kind === 'playCovered') return `Jogar coberta: ${cardName(a.card.rank, a.card.suit)}`;
   if (a.kind === 'playBlind') return `Jogar a carta ${a.index + 1}`;
   return null;
 }
@@ -147,14 +174,15 @@ export function TableView(p: TableViewProps) {
   const playedSize = wide ? 'md' : 'sm';
   const handSize = 'lg';
   const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
-  const actionsOn = p.connected && !p.busy;
-  const legal = p.connected ? vm.legalActions : [];
+  const modalOpen = p.leaveConfirm;
+  const actionsOn = p.connected && !p.busy && !modalOpen;
+  const legal = p.connected && !modalOpen ? vm.legalActions : [];
   const label = selectedLabel(p.selected);
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
-  const probe = `${vm.phase}|turn=${vm.turnSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}`;
+  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}`;
 
   const score = (
     <ScoreLayers
@@ -166,6 +194,7 @@ export function TableView(p: TableViewProps) {
       special={vm.special}
       tricks={vm.tricks}
       history={p.history}
+      currentLog={p.handLog}
       variant={vm.variant}
       defaultHistoryOpen={wide}
     />
@@ -177,9 +206,18 @@ export function TableView(p: TableViewProps) {
       {...(vm.manilhaLabel !== undefined ? { manilhaLabel: vm.manilhaLabel } : {})}
     />
   );
+  const showLinger = vm.current.length === 0 && p.lingering !== null;
+  const trickPlays = showLinger ? (p.lingering?.plays ?? []) : vm.current;
+  const trickOwn = showLinger ? (p.lingering?.ownCovered ?? null) : vm.ownCoveredCurrent;
+  const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
+  const lingerWinner =
+    lingerSeat >= 0
+      ? `Vaza de ${lingerSeat === vm.mySeat ? 'você' : nicknameOf(lingerSeat) || 'outro jogador'}`
+      : null;
+  const showPartner = vm.handPhase === 'specialDecision' && vm.partnerCards.length > 0;
   const mineiroManilhas =
     vm.variant === 'mineiro' && vm.manilhas.length > 0 ? (
-      <Text style={styles.muted} testID="manilhas" accessibilityLabel="Manilhas fixas">
+      <Text style={styles.muted} testID="manilhas">
         Manilhas: {vm.manilhas.map((m) => `${m.rank}${SUIT_SYMBOL[m.suit]}`).join(' ')}
       </Text>
     ) : null;
@@ -195,13 +233,18 @@ export function TableView(p: TableViewProps) {
         </View>
         <View style={styles.center} testID="trick">
           <PlayedCards
-            plays={vm.current}
+            plays={trickPlays}
             mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
-            ownCovered={vm.ownCoveredCurrent}
+            ownCovered={trickOwn}
             manilhas={vm.manilhas}
             nicknameOf={nicknameOf}
             size={playedSize}
           />
+          {lingerWinner !== null ? (
+            <Text style={styles.muted} testID="trick-winner">
+              {lingerWinner}
+            </Text>
+          ) : null}
         </View>
         <View style={styles.side}>
           <Seat s={vm.byPosition.right} vm={vm} />
@@ -214,10 +257,7 @@ export function TableView(p: TableViewProps) {
     <View style={styles.controls}>
       <View style={styles.statusRow}>
         {turn !== null ? (
-          <Text
-            style={[styles.turn, vm.turnSeat === vm.mySeat && styles.turnMine]}
-            testID="turn-text"
-          >
+          <Text style={[styles.turn, vm.canAct && styles.turnMine]} testID="turn-text">
             {turn}
           </Text>
         ) : null}
@@ -249,6 +289,37 @@ export function TableView(p: TableViewProps) {
         pendingValue={vm.pendingValue}
         onPress={p.on.act}
       />
+      {showPartner ? (
+        <View testID="partner-cards" accessibilityLabel="Cartas do seu parceiro">
+          <Text style={styles.muted}>Cartas do seu parceiro</Text>
+          <View style={styles.partnerRow}>
+            {vm.partnerCards.map((c, i) => {
+              const face = parseFace(c);
+              return (
+                <Card
+                  key={i}
+                  size="sm"
+                  {...(face !== null ? { rank: face.rank, suit: face.suit } : {})}
+                />
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+      {canCover(legal) ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={p.coverMode ? 'Cobrir carta, ligado' : 'Cobrir carta, desligado'}
+          accessibilityHint="Quando ligado, a carta escolhida é jogada coberta"
+          accessibilityState={{ selected: p.coverMode }}
+          aria-pressed={p.coverMode}
+          onPress={p.on.toggleCover}
+          style={[styles.cover, p.coverMode && styles.coverOn]}
+          testID="cover-toggle"
+        >
+          <Text style={styles.menuText}>{p.coverMode ? 'Cobrir: ligado' : 'Cobrir'}</Text>
+        </Pressable>
+      ) : null}
       {label !== null && actionsOn ? (
         <Button label={label} onPress={p.on.confirmSelected} testID="confirm-play" />
       ) : null}
@@ -257,6 +328,7 @@ export function TableView(p: TableViewProps) {
           hand={vm.myHand}
           legalActions={actionsOn ? vm.legalActions : []}
           blindCount={vm.blindCount}
+          coverMode={p.coverMode}
           manilhas={vm.manilhas}
           selectedAction={p.selected}
           size={handSize}
@@ -265,6 +337,16 @@ export function TableView(p: TableViewProps) {
       </View>
     </View>
   );
+
+  const votes = vm.cancelVotes.length;
+  const cancelText = vm.iVotedCancel
+    ? `Cancelar: você votou (${votes})`
+    : votes > 0
+      ? `Cancelar mesa (${votes})`
+      : 'Cancelar mesa';
+  const cancelLabel = vm.iVotedCancel
+    ? `Você já votou para cancelar a mesa. ${votes} votos.`
+    : `Votar para cancelar a mesa. ${votes} votos até agora. Todos os jogadores humanos precisam concordar.`;
 
   const footer = (
     <View style={styles.footer}>
@@ -275,21 +357,47 @@ export function TableView(p: TableViewProps) {
         active={mineSeat.isTurn}
         caption="você"
       />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Sair da mesa"
-        onPress={p.on.askLeave}
-        style={styles.menu}
-        testID="leave-table"
-      >
-        <Text style={styles.menuText}>Sair da mesa</Text>
-      </Pressable>
+      <View style={styles.menuRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            p.chatUnreadTotal > 0 ? `Chat, ${p.chatUnreadTotal} mensagens novas` : 'Chat'
+          }
+          onPress={p.on.openChat}
+          style={styles.menu}
+          testID="open-chat"
+        >
+          <Text style={styles.menuText}>
+            {p.chatUnreadTotal > 0 ? `Chat (${p.chatUnreadTotal})` : 'Chat'}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={cancelLabel}
+          aria-disabled={vm.iVotedCancel || !p.connected}
+          disabled={vm.iVotedCancel || !p.connected}
+          onPress={p.on.voteCancel}
+          style={[styles.menu, vm.iVotedCancel && styles.menuOff]}
+          testID="vote-cancel"
+        >
+          <Text style={styles.menuText}>{cancelText}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sair da mesa"
+          onPress={p.on.askLeave}
+          style={styles.menu}
+          testID="leave-table"
+        >
+          <Text style={styles.menuText}>Sair da mesa</Text>
+        </Pressable>
+      </View>
     </View>
   );
 
   const confirm = p.leaveConfirm ? (
     <View style={styles.overlay} testID="leave-confirm" accessibilityViewIsModal>
-      <View style={styles.dialog} accessibilityRole="alert">
+      <View style={styles.dialog} accessibilityRole="alert" aria-modal>
         <Text style={styles.dialogTitle}>Sair da mesa?</Text>
         <Text style={styles.dialogBody}>Um bot assume o seu lugar e a partida continua.</Text>
         <Button label="Sair da mesa" onPress={p.on.leave} testID="leave-confirm-yes" />
@@ -305,46 +413,56 @@ export function TableView(p: TableViewProps) {
 
   return (
     <View style={styles.root} testID="table">
-      <Text
-        testID="table-state"
-        aria-hidden
-        importantForAccessibility="no-hide-descendants"
-        style={styles.probe}
-      >
-        {probe}
-      </Text>
-      <LiveRegion message={p.live.message} nonce={p.live.nonce} />
-      <Banner banner={p.banner} onLeave={p.on.leave} />
-      {p.presenceNote !== null ? (
-        <Text style={styles.presence} testID="presence-note">
-          {p.presenceNote}
+      {p.probe ? (
+        <Text
+          testID="table-state"
+          aria-hidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.probe}
+        >
+          {probe}
         </Text>
       ) : null}
-      {wide ? (
-        <View style={styles.wideRow}>
-          <ScrollView style={styles.wideMain} contentContainerStyle={styles.wideMainContent}>
+      <LiveRegion message={p.live.message} nonce={p.live.nonce} />
+      {/* O fundo some para o leitor de tela enquanto o diálogo está aberto. */}
+      <View
+        style={styles.flex}
+        aria-hidden={modalOpen}
+        importantForAccessibility={modalOpen ? 'no-hide-descendants' : 'auto'}
+      >
+        <Banner banner={p.banner} onLeave={p.on.leave} />
+        {wide ? (
+          <View style={styles.wideRow}>
+            <ScrollView style={styles.wideMain} contentContainerStyle={styles.wideMainContent}>
+              {board}
+              {controls}
+              {footer}
+            </ScrollView>
+            <ScrollView style={styles.sidebar} contentContainerStyle={styles.sidebarContent}>
+              {score}
+              <View style={styles.viraBox}>{vira}</View>
+              {mineiroManilhas}
+            </ScrollView>
+          </View>
+        ) : (
+          <ScrollView style={styles.phone} contentContainerStyle={styles.phoneContent}>
+            <View style={styles.topRow}>
+              <View style={styles.topScore}>{score}</View>
+              <View>{vira}</View>
+            </View>
+            {mineiroManilhas}
             {board}
             {controls}
             {footer}
           </ScrollView>
-          <ScrollView style={styles.sidebar} contentContainerStyle={styles.sidebarContent}>
-            {score}
-            <View style={styles.viraBox}>{vira}</View>
-            {mineiroManilhas}
-          </ScrollView>
-        </View>
-      ) : (
-        <ScrollView style={styles.phone} contentContainerStyle={styles.phoneContent}>
-          <View style={styles.topRow}>
-            <View style={styles.topScore}>{score}</View>
-            <View>{vira}</View>
-          </View>
-          {mineiroManilhas}
-          {board}
-          {controls}
-          {footer}
-        </ScrollView>
-      )}
+        )}
+      </View>
+      {p.presenceNote !== null ? (
+        <Text style={styles.presence} testID="presence-note" pointerEvents="none">
+          {p.presenceNote}
+        </Text>
+      ) : null}
+      {p.chatPanel !== null ? <ChatPanel {...p.chatPanel} /> : null}
       {confirm}
     </View>
   );
@@ -355,6 +473,19 @@ const SIDEBAR_WIDTH = 340;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.background },
+  flex: { flex: 1 },
+  partnerRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
+  cover: {
+    minHeight: MIN_TOUCH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 2,
+    borderColor: colors.border,
+  },
+  coverOn: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
+  menuRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'flex-end' },
+  menuOff: { opacity: 0.55 },
   probe: { position: 'absolute', width: 1, height: 1, opacity: 0, overflow: 'hidden' },
   phone: { flex: 1 },
   phoneContent: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },
@@ -384,7 +515,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   errorText: { color: colors.danger, fontSize: fontSize.small, textAlign: 'center' },
-  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  footer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
   menu: {
     minHeight: MIN_TOUCH,
     minWidth: MIN_TOUCH,
@@ -405,6 +542,11 @@ const styles = StyleSheet.create({
   bannerError: { borderBottomWidth: 2, borderBottomColor: colors.danger },
   bannerText: { color: colors.text, fontSize: fontSize.body, fontWeight: fontWeight.bold },
   presence: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surfaceAlt,
     color: colors.textMuted,
     fontSize: fontSize.small,
     textAlign: 'center',

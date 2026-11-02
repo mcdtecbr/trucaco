@@ -36,6 +36,8 @@ export interface HandResult {
   readonly scores: readonly [number, number];
   /** Complemento já em texto (ex.: quem pediu o truco). Só exibido como texto. */
   readonly note?: string;
+  /** Lances da mão (cartas, vazas, apostas), em texto, na ordem em que aconteceram. */
+  readonly details?: readonly string[];
 }
 
 /** Nomes padrão das duplas, da perspectiva do jogador: "Nós" e "Eles". */

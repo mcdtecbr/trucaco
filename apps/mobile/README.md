@@ -17,6 +17,7 @@ Na raiz, `pnpm build` antes da primeira execução (os pacotes `@trucaco/*` são
 ## Variáveis
 
 - `EXPO_PUBLIC_SERVER_URL`: URL do servidor (padrão de dev `http://localhost:2567`). Vai para o bundle: nunca coloque segredo. Em build de produção (`NODE_ENV=production` ou `__DEV__ === false`) só `https:` é aceito (o `wss:` deriva dela), salvo `localhost`, `127.0.0.1` e `10.x`; `getServerUrl()` lança caso contrário.
+- `EXPO_PUBLIC_E2E`: `1` liga a sonda oculta `table-state` da mesa (só testes E2E). Vazio nas demais execuções.
 
 ## Servidor local
 

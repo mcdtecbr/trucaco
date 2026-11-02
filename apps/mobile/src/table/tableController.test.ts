@@ -3,7 +3,14 @@ import type { ClientMessage } from '@trucaco/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { errorMessage, hasMessage } from '../i18n/errors';
 import { snapshot, priv } from './snapshotFixtures';
-import { BUSY_TIMEOUT_MS, PRESENCE_NOTE_MS, createTableController } from './tableController';
+import {
+  BUSY_TIMEOUT_MS,
+  LINGER_MS,
+  PRESENCE_NOTE_MS,
+  REPLAY_MIN_AGE_MS,
+  ACTION_ERRORS,
+  createTableController,
+} from './tableController';
 import { createTableStore, effectiveDeadline } from './tableStore';
 
 function setup() {
@@ -163,7 +170,10 @@ describe('erros do servidor (i18n)', () => {
     for (const code of ERROR_CODES) {
       const { ctl, store } = setup();
       ctl.onServerError({ code });
-      expect(store.getState().errorCode).toBe(code);
+      // CHAT_BLOCKED vai para o erro do chat, não para o banner da mesa.
+      const shown =
+        code === 'CHAT_BLOCKED' ? store.getState().chatError : store.getState().errorCode;
+      expect(shown).toBe(code);
       expect(hasMessage(code)).toBe(true);
       expect(errorMessage(code).length).toBeGreaterThan(5);
     }
@@ -198,7 +208,6 @@ describe('eventos', () => {
     ctl.applyState(snapshot());
     clock.t = 5_000;
     ctl.onEvent({ seq: 1, at: 5_300, event: { type: 'gameStarted', gameNumber: 1 } });
-    expect(store.getState().lastSeq).toBe(1);
     expect(store.getState().clockOffsetMs).toBe(300);
     expect(said).toEqual(['Jogo 1 começou.']);
   });
@@ -223,12 +232,11 @@ describe('eventos', () => {
   });
 
   it('evento malformado ou de tipo desconhecido não quebra nem anuncia', () => {
-    const { ctl, said, store } = setup();
+    const { ctl, said } = setup();
     ctl.onEvent({ seq: 1, at: 1, event: { type: 'inventado' } });
     ctl.onEvent({ seq: 2, at: 1, event: { type: 'handDecided' } });
     ctl.onEvent({ seq: 3, at: 1, event: 'x' });
     expect(said).toEqual([]);
-    expect(store.getState().lastSeq).toBe(3);
   });
 
   it('handDecided alimenta o histórico; salto de seq o descarta', () => {
@@ -245,13 +253,10 @@ describe('eventos', () => {
       event: { type: 'handDecided', winnerTeam: 1, points: 3, reason: 'betRun', scores: [0, 3] },
     });
     expect(store.getState().history).toEqual([
-      { handNumber: 4, winnerTeam: 1, points: 3, reason: 'betRun', scores: [0, 3] },
+      { handNumber: 4, winnerTeam: 1, points: 3, reason: 'betRun', scores: [0, 3], details: [] },
     ]);
     ctl.onDesync({ expected: 3, got: 9 });
     expect(store.getState().history).toEqual([]);
-    expect(store.getState().desynced).toBe(true);
-    ctl.acknowledgeResync();
-    expect(store.getState().desynced).toBe(false);
   });
 });
 
@@ -302,7 +307,6 @@ describe('presença, timer e reconexão', () => {
     ctl.onEvent({ seq: 1, at: 1_001_000, event: { type: 'gameStarted', gameNumber: 1 } });
     ctl.reset();
     expect(store.getState().vm).toBeNull();
-    expect(store.getState().lastSeq).toBeNull();
     expect(store.getState().clockOffsetMs).toBe(0);
   });
 
@@ -317,11 +321,311 @@ describe('presença, timer e reconexão', () => {
 
 describe('sem anunciante', () => {
   it('descartar o anunciante não quebra eventos', () => {
-    const { ctl, store } = setup();
+    const { ctl } = setup();
     ctl.setAnnouncer(null);
     const fn = vi.fn();
     ctl.onEvent({ seq: 1, at: 1, event: { type: 'gameStarted', gameNumber: 1 } });
     expect(fn).not.toHaveBeenCalled();
-    expect(store.getState().lastSeq).toBe(1);
+  });
+});
+
+describe('3H2: erro correlacionado à ação', () => {
+  it('erro de chat não destrava o botão em voo; erro de ação destrava', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    expect(ctl.act('play:3paus')).toBe(true);
+    ctl.onServerError({ code: 'CHAT_BLOCKED' });
+    expect(store.getState().busy).toBe(true);
+    expect(store.getState().chatError).toBe('CHAT_BLOCKED');
+    expect(store.getState().errorCode).toBeNull();
+    ctl.onServerError({ code: 'INVALID_SIGNAL' });
+    expect(store.getState().busy).toBe(true);
+    ctl.onServerError({ code: 'NOT_YOUR_TURN' });
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('RATE_LIMITED segue o último envio (ação ou chat)', () => {
+    const a = setup();
+    a.ctl.applyState(snapshot());
+    a.ctl.act('play:3paus');
+    a.ctl.onServerError({ code: 'RATE_LIMITED' });
+    expect(a.store.getState().busy).toBe(false);
+    expect(a.store.getState().errorCode).toBe('RATE_LIMITED');
+    const c = setup();
+    c.ctl.applyState(snapshot());
+    c.ctl.sendChat('table', 'oi');
+    c.ctl.onServerError({ code: 'RATE_LIMITED' });
+    expect(c.store.getState().chatError).toBe('RATE_LIMITED');
+    expect(c.store.getState().errorCode).toBeNull();
+  });
+});
+
+describe('3H2: reconexão e replay', () => {
+  it('reconectar destrava o botão e limpa o timer de ocupado', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.act('play:3paus');
+    ctl.onReconnected();
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('replay logo após reconectar não mede o relógio nem é falado; evento vivo sim', () => {
+    const { ctl, store, said, clock } = setup();
+    ctl.applyState(snapshot());
+    clock.t = 10_000;
+    ctl.onReconnected();
+    const old = 10_000 - REPLAY_MIN_AGE_MS - 5_000;
+    ctl.onEvent({ seq: 1, at: old, event: { type: 'gameStarted', gameNumber: 1 } });
+    expect(store.getState().clockOffsetMs).toBe(0);
+    expect(said).toEqual([]);
+    ctl.onEvent({ seq: 2, at: 10_200, event: { type: 'gameStarted', gameNumber: 2 } });
+    expect(store.getState().clockOffsetMs).toBe(200);
+    expect(said).toEqual(['Jogo 2 começou.']);
+  });
+});
+
+describe('3H2: histórico detalhado', () => {
+  it('lances da mão viram detalhes do histórico; mão repetida substitui', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    const ev = (seq: number, event: unknown) => ctl.onEvent({ seq, at: 1, event });
+    ev(1, { type: 'handStarted', handNumber: 1, pe: 0, scores: [0, 0], special: 'normal' });
+    ev(2, {
+      type: 'cardPlayed',
+      seat: 1,
+      card: { rank: 'K', suit: 'ouros' },
+      covered: false,
+      blind: false,
+    });
+    ev(3, { type: 'betCalled', seat: 0, toLevel: 1, value: 3 });
+    expect(store.getState().handLog).toHaveLength(2);
+    ev(4, { type: 'handDecided', winnerTeam: 0, points: 1, reason: 'tricks', scores: [1, 0] });
+    expect(store.getState().handLog).toEqual([]);
+    expect(store.getState().history[0]?.details).toHaveLength(2);
+    ev(5, { type: 'handDecided', winnerTeam: 0, points: 1, reason: 'tricks', scores: [1, 0] });
+    expect(store.getState().history).toHaveLength(1);
+  });
+
+  it('fim de jogo não apaga o histórico (a tela final o mostra); novo jogo sim', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    const ev = (seq: number, event: unknown) => ctl.onEvent({ seq, at: 1, event });
+    ev(1, { type: 'handDecided', winnerTeam: 0, points: 1, reason: 'tricks', scores: [12, 0] });
+    ev(2, { type: 'gameDecided', winnerTeam: 0, scores: [12, 0] });
+    expect(store.getState().history).toHaveLength(1);
+    ev(3, { type: 'gameStarted', gameNumber: 2 });
+    expect(store.getState().history).toEqual([]);
+  });
+});
+
+describe('3H2: vaza que fica na mesa', () => {
+  const closed = {
+    starter: 0,
+    winnerSeat: 1,
+    winnerTeam: 1,
+    plays: [
+      { seat: 0, rank: '4', suit: 'paus', covered: false },
+      { seat: 1, rank: '3', suit: 'ouros', covered: false },
+    ],
+  };
+
+  it('quando tricks cresce e current esvazia, a vaza fica LINGER_MS', () => {
+    const { ctl, store, fire } = setup();
+    ctl.applyState(
+      snapshot({ hand: { current: [{ seat: 0, rank: '4', suit: 'paus', covered: false }] } }),
+    );
+    expect(store.getState().lingering).toBeNull();
+    ctl.applyState(snapshot({ hand: { tricks: [closed], current: [] } }));
+    expect(store.getState().lingering?.winnerSeat).toBe(1);
+    expect(store.getState().lingering?.plays).toHaveLength(2);
+    fire(LINGER_MS);
+    expect(store.getState().lingering).toBeNull();
+  });
+
+  it('sem vaza nova não há retenção', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.applyState(snapshot());
+    expect(store.getState().lingering).toBeNull();
+  });
+});
+
+describe('3H2: cobrir, votar e chat', () => {
+  const covered = () =>
+    snapshot({
+      privates: priv(0, {
+        hand: [{ rank: '3', suit: 'paus' }],
+        legalActions: ['play:3paus', 'playCovered:3paus'],
+      }),
+    });
+
+  it('modo cobrir só liga com playCovered legal, seleciona a coberta e envia coberta', () => {
+    const { ctl, store, sent } = setup();
+    ctl.applyState(snapshot());
+    ctl.setCoverMode(true);
+    expect(store.getState().coverMode).toBe(false);
+    ctl.applyState(covered());
+    ctl.setCoverMode(true);
+    expect(store.getState().coverMode).toBe(true);
+    ctl.pressCard('playCovered:3paus');
+    ctl.pressCard('playCovered:3paus');
+    expect(sent).toEqual([{ type: 'play', card: { rank: '3', suit: 'paus' }, covered: true }]);
+    expect(store.getState().coverMode).toBe(false);
+  });
+
+  it('o modo cobrir desliga sozinho quando a coberta deixa de ser legal', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(covered());
+    ctl.setCoverMode(true);
+    ctl.applyState(snapshot());
+    expect(store.getState().coverMode).toBe(false);
+  });
+
+  it('voteCancel envia uma vez só e só com a mesa em andamento', () => {
+    const { ctl, sent } = setup();
+    expect(ctl.voteCancel()).toBe(false);
+    ctl.applyState(snapshot());
+    expect(ctl.voteCancel()).toBe(true);
+    ctl.applyState(snapshot({ cancelVotes: [0] }));
+    expect(ctl.voteCancel()).toBe(false);
+    expect(sent).toEqual([{ type: 'voteCancel' }]);
+  });
+
+  it('sendChat valida pelo protocol: texto bloqueado nem sai; válido limpa o rascunho', () => {
+    const { ctl, store, sent } = setup();
+    ctl.applyState(snapshot());
+    ctl.setChatDraft('table', 'oi gente');
+    expect(ctl.sendChat('table', 'a\u200db')).toBe(false);
+    expect(store.getState().chatError).toBe('CHAT_BLOCKED');
+    expect(ctl.sendChat('table', '   ')).toBe(false);
+    expect(sent).toEqual([]);
+    expect(ctl.sendChat('table', 'oi gente')).toBe(true);
+    expect(sent).toEqual([{ type: 'chat', scope: 'table', text: 'oi gente' }]);
+    expect(store.getState().chatDraft.table).toBe('');
+    expect(store.getState().chatError).toBeNull();
+    expect(ctl.sendPhrase('partner', 'good_luck')).toBe(true);
+    expect(ctl.sendPhrase('partner', 'inventada')).toBe(false);
+    expect(sent[1]).toEqual({ type: 'chat', scope: 'partner', phraseId: 'good_luck' });
+  });
+
+  it('onChat guarda texto e frase rápida; ignora lixo; conta não lidas por aba', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.onChat({ scope: 'table', seat: 1, text: 'oi', at: 5 });
+    ctl.onChat({ scope: 'partner', seat: 2, phraseId: 'thanks', at: 6 });
+    ctl.onChat({ scope: 'partner', seat: 9, text: 'x' });
+    ctl.onChat({ scope: 'outro', seat: 1, text: 'x' });
+    ctl.onChat({ scope: 'table', seat: 1, phraseId: 'nao_existe' });
+    ctl.onChat(null);
+    expect(store.getState().chat.map((c) => c.text)).toEqual(['oi', 'Valeu!']);
+    expect(store.getState().chatUnread).toEqual({ table: 1, partner: 1 });
+    ctl.setChatOpen(true);
+    expect(store.getState().chatUnread).toEqual({ table: 0, partner: 1 });
+    ctl.onChat({ scope: 'table', seat: 1, text: 'de novo' });
+    expect(store.getState().chatUnread.table).toBe(0);
+    ctl.setChatTab('partner');
+    expect(store.getState().chatUnread.partner).toBe(0);
+  });
+});
+
+describe('rodada de correção 3H2', () => {
+  it('ACTION_ERRORS só tem códigos que existem no protocol', () => {
+    for (const c of ACTION_ERRORS) expect(ERROR_CODES as readonly string[]).toContain(c);
+    expect(new Set(ACTION_ERRORS).size).toBe(ACTION_ERRORS.length);
+  });
+
+  it('voto alheio não libera a ação em voo (assinatura ignora cancelVotes)', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.act('play:3paus');
+    ctl.applyState(snapshot({ cancelVotes: [1] }));
+    expect(store.getState().busy).toBe(true);
+  });
+
+  it('erro depois de voteCancel não destrava ação em voo; RATE_LIMITED de jogada não vira chatError', () => {
+    const a = setup();
+    a.ctl.applyState(snapshot());
+    a.ctl.act('play:3paus');
+    a.ctl.voteCancel();
+    a.ctl.onServerError({ code: 'NOT_YOUR_TURN' });
+    expect(a.store.getState().busy).toBe(true);
+    const b = setup();
+    b.ctl.applyState(snapshot());
+    b.ctl.act('play:3paus');
+    b.ctl.onServerError({ code: 'INVALID_PAYLOAD' });
+    expect(b.store.getState().chatError).toBeNull();
+    expect(b.store.getState().errorCode).toBe('INVALID_PAYLOAD');
+    expect(b.store.getState().busy).toBe(false);
+  });
+
+  it('chat da dupla de assento adversário é descartado; da mesa passa', () => {
+    const { ctl, store } = setup();
+    ctl.onChat({ scope: 'partner', seat: 0, text: 'sem estado' });
+    ctl.applyState(snapshot());
+    ctl.onChat({ scope: 'partner', seat: 1, text: 'adversário' });
+    ctl.onChat({ scope: 'partner', seat: 2, text: 'parceiro' });
+    ctl.onChat({ scope: 'table', seat: 1, text: 'mesa' });
+    expect(store.getState().chat.map((c) => c.text)).toEqual(['parceiro', 'mesa']);
+  });
+});
+
+describe('rodada de correção 3H2: última vaza da mão', () => {
+  const play = (seat: number, rank: string, suit: string) => ({
+    type: 'cardPlayed',
+    seat,
+    card: { rank, suit },
+    covered: false,
+    blind: false,
+  });
+  const three = [
+    { seat: 0, rank: '4', suit: 'paus', covered: false },
+    { seat: 1, rank: '5', suit: 'ouros', covered: false },
+    { seat: 2, rank: '6', suit: 'copas', covered: false },
+  ];
+
+  function driveLastCard(extra: Record<string, unknown>, nextState: Record<string, unknown>) {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { current: three }, ...extra }));
+    let seq = 0;
+    const ev = (event: unknown) => h.ctl.onEvent({ seq: ++seq, at: 1, event });
+    ev({ type: 'handStarted', handNumber: 1, pe: 0, scores: [0, 0], special: 'normal' });
+    ev(play(0, '4', 'paus'));
+    ev(play(1, '5', 'ouros'));
+    ev(play(2, '6', 'copas'));
+    ev(play(3, '7', 'ouros'));
+    ev({ type: 'trickDecided', index: 1, winnerSeat: 3, winnerTeam: 1 });
+    h.ctl.applyState(snapshot(nextState));
+    return h;
+  }
+
+  it('mão decidida na vaza: o novo patch já é da mão seguinte, e a vaza sai com 4 cartas e vencedor', () => {
+    const { store } = driveLastCard({}, { game: { handNumber: 2 }, hand: { current: [] } });
+    const l = store.getState().lingering;
+    expect(l?.plays).toHaveLength(4);
+    expect(l?.winnerSeat).toBe(3);
+  });
+
+  it('troca de jogo no bo3 (mesmo número de mão) também retém a vaza completa', () => {
+    const { store } = driveLastCard(
+      { game: { handNumber: 2 }, series: { format: 'bo3', gameNumber: 1 } },
+      { game: { handNumber: 2 }, series: { format: 'bo3', gameNumber: 2 }, hand: { current: [] } },
+    );
+    expect(store.getState().lingering?.plays).toHaveLength(4);
+    expect(store.getState().lingering?.winnerSeat).toBe(3);
+  });
+
+  it('patch antes do evento: a vaza retida é completada quando trickDecided chega', () => {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { current: three } }));
+    h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { current: [] } }));
+    expect(h.store.getState().lingering?.plays).toHaveLength(3);
+    const ev = (seq: number, event: unknown) => h.ctl.onEvent({ seq, at: 1, event });
+    ev(1, play(0, '4', 'paus'));
+    ev(2, play(1, '5', 'ouros'));
+    ev(3, play(2, '6', 'copas'));
+    ev(4, play(3, '7', 'ouros'));
+    ev(5, { type: 'trickDecided', index: 2, winnerSeat: 1, winnerTeam: 1 });
+    expect(h.store.getState().lingering?.plays).toHaveLength(4);
+    expect(h.store.getState().lingering?.winnerSeat).toBe(1);
   });
 });

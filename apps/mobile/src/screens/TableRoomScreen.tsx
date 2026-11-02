@@ -3,11 +3,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAnnouncer, useLayoutMode } from '@trucaco/ui';
 import type { LegalActionId } from '@trucaco/protocol';
 import { errorMessage } from '../i18n/errors';
+import { isE2EMode } from '../net/config';
 import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
 import { useRoomStore } from '../store/roomStore';
 import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
-import { connectionBanner, finishedSummary, holdRoom, roomViewFor } from '../table/tableRoute';
+import { connectionBanner, finishedResult, holdRoom, roomViewFor } from '../table/tableRoute';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
@@ -79,7 +80,15 @@ function JoinedTable() {
 
 function FinishedTable({ onLeave }: { onLeave(): void }) {
   const vm = useTableStore((s) => s.vm);
-  return <FinishedView summary={finishedSummary(vm)} onLeave={onLeave} />;
+  const history = useTableStore((s) => s.history);
+  return (
+    <FinishedView
+      result={finishedResult(vm)}
+      myTeam={vm?.myTeam ?? 0}
+      history={history}
+      onLeave={onLeave}
+    />
+  );
 }
 
 function PlayingTable({ onLeave }: { onLeave(): void }) {
@@ -92,6 +101,15 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   const notice = useTableStore((s) => s.notice);
   const presenceNote = useTableStore((s) => s.presenceNote);
   const history = useTableStore((s) => s.history);
+  const handLog = useTableStore((s) => s.handLog);
+  const lingering = useTableStore((s) => s.lingering);
+  const coverMode = useTableStore((s) => s.coverMode);
+  const chatOpen = useTableStore((s) => s.chatOpen);
+  const chatTab = useTableStore((s) => s.chatTab);
+  const chat = useTableStore((s) => s.chat);
+  const chatUnread = useTableStore((s) => s.chatUnread);
+  const chatDraft = useTableStore((s) => s.chatDraft);
+  const chatError = useTableStore((s) => s.chatError);
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
   const deadlineAt = useTableStore((s) => effectiveDeadline(s));
   const leaveConfirm = useTableStore((s) => s.leaveConfirm);
@@ -117,6 +135,32 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       errorText={errorCode === null ? null : errorMessage(errorCode)}
       presenceNote={presenceNote}
       history={history}
+      handLog={handLog}
+      lingering={lingering}
+      coverMode={coverMode}
+      probe={isE2EMode()}
+      chatUnreadTotal={chatUnread.table + chatUnread.partner}
+      chatPanel={
+        chatOpen
+          ? {
+              tab: chatTab,
+              chat,
+              unread: chatUnread,
+              draft: chatDraft[chatTab],
+              errorText: chatError === null ? null : errorMessage(chatError),
+              connected: connection === 'connected',
+              nicknameOf: (seat: number) => vm.seats[seat]?.nickname ?? '',
+              mySeat: vm.mySeat,
+              on: {
+                setTab: (scope) => table.setChatTab(scope),
+                setDraft: (text) => table.setChatDraft(chatTab, text),
+                send: () => void table.sendChat(chatTab, chatDraft[chatTab]),
+                phrase: (id) => void table.sendPhrase(chatTab, id),
+                close: () => table.setChatOpen(false),
+              },
+            }
+          : null
+      }
       deadlineAt={deadlineAt}
       clockOffsetMs={clockOffsetMs}
       leaveConfirm={leaveConfirm}
@@ -129,6 +173,9 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
           if (sel !== null) void table.act(sel);
         },
         dismissError: () => table.clearError(),
+        toggleCover: () => table.setCoverMode(!coverMode),
+        voteCancel: () => void table.voteCancel(),
+        openChat: () => table.setChatOpen(true),
         askLeave: () => table.setLeaveConfirm(true),
         cancelLeave: () => table.setLeaveConfirm(false),
         leave: onLeave,

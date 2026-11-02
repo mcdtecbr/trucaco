@@ -81,7 +81,7 @@ function setup() {
     applyState: vi.fn(),
     onEvent: vi.fn(),
     onDesync: vi.fn(),
-    acknowledgeResync: vi.fn(),
+    onChat: vi.fn(),
     onPresence: vi.fn(),
     onTurnTimer: vi.fn(),
     onServerError: vi.fn(),
@@ -239,6 +239,13 @@ describe('roomService alimentando a mesa', () => {
     expect(t.table.onServerError).toHaveBeenCalledWith({ code: 'NOT_YOUR_TURN' });
   });
 
+  it('mensagens de chat chegam ao controlador da mesa', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('msg:chat', { scope: 'table', seat: 1, text: 'oi' });
+    expect(t.table.onChat).toHaveBeenCalledWith({ scope: 'table', seat: 1, text: 'oi' });
+  });
+
   it('salto de seq: avisa o desync, reprojeta pelo estado e reconhece a ressincronização', async () => {
     const t = setup();
     await t.service.enter(reservation);
@@ -248,7 +255,6 @@ describe('roomService alimentando a mesa', () => {
     r.emit('msg:event', ev(5));
     expect(t.table.onDesync).toHaveBeenCalledWith({ expected: 2, got: 5 });
     expect(t.table.applyState.mock.calls.length).toBe(before + 1);
-    expect(t.table.acknowledgeResync).toHaveBeenCalledTimes(1);
     expect(t.table.onEvent).toHaveBeenCalledTimes(2);
     // Contínuo depois do salto: sem novo desync.
     r.emit('msg:event', ev(6));

@@ -1,7 +1,8 @@
 /**
  * Integração da mesa (3H1) contra o servidor REAL (`apps/server/dist/main.js`) com as peças reais do
  * cliente: sessão, cliente Colyseus, `roomService`, `tableController` e `tableStore`. 4 convidados entram
- * por código e cada um joga uma mão inteira escolhendo a primeira ação legal que não seja apostar.
+ * por código e cada um joga uma mão inteira: pede truco uma vez (quando pode), responde aceitando e
+ * escolhe a primeira ação legal que não seja apostar.
  * Rode com `pnpm --filter @trucaco/mobile test:int` (precisa de `pnpm build` antes).
  */
 import { ERROR_CODES } from '@trucaco/protocol';
@@ -43,8 +44,12 @@ interface Player {
   seenPrivate: Set<string>;
   /** Mão inicial do próprio jogador na mão 1. */
   firstHand: string[];
-  /** Estados em que havia `legalActions` sem ser a vez do jogador. */
+  /** Estados em que havia `legalActions` para quem não é o `actingSeat` (exceto decisão especial). */
   actionsOutOfTurn: string[];
+  /** Estados vistos com aposta pendente em que este jogador tinha ação legal (e era o actingSeat). */
+  pendingActed: number;
+  /** Cartas jogadas segundo os EVENTOS públicos (fonte independente do estado). */
+  playedByEvents: Set<string>;
   rawStates: number;
 }
 
@@ -91,6 +96,8 @@ async function newPlayer(): Promise<Player> {
     seenPrivate: new Set(),
     firstHand: [],
     actionsOutOfTurn: [],
+    pendingActed: 0,
+    playedByEvents: new Set(),
     rawStates: 0,
   };
   // Sorvedouro que registra o que chega e repassa ao controlador real.
@@ -100,23 +107,33 @@ async function newPlayer(): Promise<Player> {
       p.rawStates += 1;
       const state = json as {
         game?: { handNumber?: number };
-        hand?: { turn?: number };
+        hand?: { phase?: string; actingSeat?: number; specialTeam?: number };
         privates?: Record<string, { seat?: number; legalActions?: string[] }>;
       };
       if (state.game?.handNumber === 1) scan(json, false, p.seenPublic, p.seenPrivate);
       for (const mine of Object.values(state.privates ?? {})) {
-        if (
-          (mine.legalActions?.length ?? 0) > 0 &&
-          state.hand?.turn !== mine.seat &&
-          state.hand?.turn !== undefined
-        ) {
-          p.actionsOutOfTurn.push(`seat ${String(mine.seat)} turn ${String(state.hand.turn)}`);
+        if ((mine.legalActions?.length ?? 0) === 0 || mine.seat === undefined) continue;
+        const h = state.hand;
+        // Em decisão especial os DOIS da dupla que decide têm ação; fora disso só o actingSeat (ou a dupla dele).
+        const okSpecial = h?.phase === 'specialDecision' && mine.seat % 2 === h.specialTeam;
+        // Aposta pendente: os dois da dupla que responde têm ação; actingSeat é o menor assento.
+        const okPending =
+          h?.phase === 'betPending' &&
+          h.actingSeat !== undefined &&
+          mine.seat % 2 === h.actingSeat % 2;
+        if (h?.actingSeat !== mine.seat && !okSpecial && !okPending) {
+          p.actionsOutOfTurn.push(
+            `seat ${mine.seat} acting ${String(h?.actingSeat)} ${String(h?.phase)} ${(mine.legalActions ?? []).join(',')}`,
+          );
         }
+        if (h?.phase === 'betPending' && h.actingSeat === mine.seat) p.pendingActed += 1;
       }
       table.applyState(json);
     },
     onEvent(env: EventEnvelope) {
       p.seqs.push(env.seq);
+      const ev = env.event as { type?: string; card?: { rank: string; suit: string } | null };
+      if (ev.type === 'cardPlayed' && ev.card) p.playedByEvents.add(key(ev.card));
       table.onEvent(env);
     },
     onDesync(info: { expected: number; got: number }) {
@@ -226,12 +243,17 @@ describe('mesa jogável contra o servidor real', () => {
     const drive = ps.map((p) => {
       let lastAct = 0;
       let waiting = false;
+      let bet = false;
       const step = (): void => {
         const st = p.tableStore.getState();
         const vm = st.vm;
         if (p.errors.length > 0) return; // nunca insiste depois de um erro
         if (vm === null || vm.phase !== 'playing' || !vm.canAct || st.busy || waiting) return;
-        const first = vm.legalActions.find((a) => a !== 'bet');
+        // Aposta pendente: quem responde é o actingSeat (a UI usa o mesmo critério).
+        if (vm.handPhase === 'betPending' && vm.actingSeat !== vm.mySeat) return;
+        // Pede truco uma vez (só na jogada normal); depois responde aceitando.
+        const wantsBet = !bet && vm.handPhase === 'playing' && vm.legalActions.includes('bet');
+        const first = wantsBet ? 'bet' : vm.legalActions.find((a) => a !== 'bet');
         if (first === undefined) return;
         const wait = lastAct + GAP_MS - Date.now();
         if (wait > 0) {
@@ -245,6 +267,7 @@ describe('mesa jogável contra o servidor real', () => {
           return;
         }
         lastAct = Date.now();
+        if (wantsBet) bet = true;
         p.table.act(first);
       };
       step();
@@ -272,18 +295,20 @@ describe('mesa jogável contra o servidor real', () => {
       });
       expect(p.desyncs).toBe(0);
       expect(p.errors).toEqual([]);
-      expect(p.tableStore.getState().lastSeq).toBe(p.seqs.at(-1));
+      expect(p.seqs.length).toBeGreaterThan(0);
       expect(Math.abs(p.tableStore.getState().clockOffsetMs)).toBeLessThan(2000);
       expect(p.tableStore.getState().history[0]).toMatchObject({ handNumber: 1 });
     }
 
-    // legalActions só no assento da vez (varredura de TODOS os estados brutos).
+    // legalActions só no actingSeat (varredura de TODOS os estados brutos), e houve aposta pendente.
     for (const p of ps) expect(p.actionsOutOfTurn).toEqual([]);
+    expect(ps.reduce((n, p) => n + p.pendingActed, 0)).toBeGreaterThan(0);
 
     // Ninguém vê carta alheia: tudo que um cliente viu fora do próprio bloco privado é público (jogado/vira).
     expect(ps.every((p) => p.firstHand.length === 3)).toBe(true);
+    // Cartas jogadas, segundo os eventos públicos (independente do que o estado mostrou).
     const played = new Set<string>();
-    for (const p of ps) for (const c of p.seenPublic) played.add(c);
+    for (const p of ps) for (const c of p.playedByEvents) played.add(c);
     for (const a of ps) {
       const own = new Set(a.firstHand);
       for (const b of ps) {
@@ -309,7 +334,7 @@ describe('mesa jogável contra o servidor real', () => {
     const ps = await seatedAndPlaying();
     const idle = ps.find((p) => {
       const vm = p.tableStore.getState().vm!;
-      return vm.turnSeat !== vm.mySeat;
+      return !vm.canAct;
     })!;
     const card = idle.tableStore.getState().vm!.myHand[0]!;
     const before = JSON.stringify(idle.tableStore.getState().vm!.current);
@@ -336,7 +361,7 @@ describe('mesa jogável contra o servidor real', () => {
     const ps = await seatedAndPlaying();
     const idle = ps.find((p) => {
       const vm = p.tableStore.getState().vm!;
-      return vm.turnSeat !== vm.mySeat;
+      return !vm.canAct;
     })!;
     const vm = idle.tableStore.getState().vm!;
     expect(vm.legalActions).toEqual([]);

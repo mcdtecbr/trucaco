@@ -54,8 +54,6 @@ export interface PendingView {
   readonly fromSeat: number;
   readonly fromTeam: number;
   readonly toLevel: number;
-  /** Valor da aposta pendente (0 = desconhecido). */
-  readonly value: number;
   /** A aposta pendente é da minha dupla (eu aguardo a resposta). */
   readonly fromMyTeam: boolean;
 }
@@ -92,9 +90,17 @@ export interface TableViewModel {
   readonly tricks: readonly TrickView[];
   /** Identidade da minha carta coberta na vaza em curso, se houver. */
   readonly ownCoveredCurrent: CardSnapshot | null;
-  /** Assento da vez (`-1` = ninguém). */
-  readonly turnSeat: number;
-  /** É a minha vez de agir (há ação legal para mim). */
+  /** Minhas cartas cobertas já decididas, por índice de vaza (`trick` >= 0). */
+  readonly ownCoveredByTrick: readonly (CardSnapshot & { readonly trick: number })[];
+  /**
+   * Assento cuja decisão é esperada (`hand.actingSeat`, o mesmo do timer). NÃO é `hand.turn`: em aposta
+   * pendente e em decisão de onze/dez/ferro quem age é outro. Em decisão especial é o MENOR assento da
+   * dupla que decide, e os DOIS da dupla têm ação legal: use `canAct`/`legalActions`. `-1` = ninguém.
+   */
+  readonly actingSeat: number;
+  /** Decisão de onze/dez em curso: a dupla que decide (`-1` fora disso). */
+  readonly decidingTeam: number;
+  /** Há ação legal para mim (o servidor decide; vale também para o parceiro em decisão especial). */
   readonly canAct: boolean;
   readonly turnDeadlineAt: number;
   readonly pending: PendingView | null;
@@ -109,6 +115,8 @@ export interface TableViewModel {
     readonly winnerTeam: number;
   };
   readonly cancelVotes: readonly number[];
+  /** Eu já votei para cancelar. */
+  readonly iVotedCancel: boolean;
 }
 
 // ------------------------------------------------------------------ leitura tolerante
@@ -178,7 +186,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
 
   const hand = rec(s['hand']);
   const handPhase = isHandPhaseId(hand['phase']) ? hand['phase'] : '';
-  const turnSeat = num(hand['turn'], ABSENT);
+  const actingSeat = num(hand['actingSeat'], ABSENT);
   const special = str(hand['special'], 'normal');
 
   const playersRaw = list(s['players']).map(rec);
@@ -197,7 +205,12 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
       team,
       side: team === myTeam ? 'mine' : 'theirs',
       isMe: i === me,
-      isTurn: i === turnSeat && handPhase !== 'finished' && handPhase !== '',
+      // Em decisão especial os dois da dupla decidem: ninguém recebe o destaque de "vez".
+      isTurn:
+        i === actingSeat &&
+        handPhase !== 'finished' &&
+        handPhase !== '' &&
+        handPhase !== 'specialDecision',
     };
   });
   const at = (pos: ScreenPosition): SeatView => seats.find((x) => x.position === pos) as SeatView;
@@ -241,10 +254,10 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
           fromSeat: num(rec(pendingRaw)['fromSeat'], ABSENT),
           fromTeam: num(rec(pendingRaw)['fromTeam'], ABSENT),
           toLevel: num(rec(pendingRaw)['toLevel']),
-          value: pendingValue,
           fromMyTeam: num(rec(pendingRaw)['fromTeam'], ABSENT) === myTeam,
         };
 
+  const cancelVotes = list(s['cancelVotes']).filter((x): x is number => typeof x === 'number');
   const series = rec(s['series']);
   const game = rec(s['game']);
   const options = rec(s['options']);
@@ -282,7 +295,11 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
       };
     }),
     ownCoveredCurrent: ownCurrent === undefined ? null : card(ownCurrent),
-    turnSeat,
+    ownCoveredByTrick: ownCovered
+      .map((c) => ({ ...card(c), trick: num(c['trick'], ABSENT) }))
+      .filter((c) => c.trick >= 0),
+    actingSeat,
+    decidingTeam: handPhase === 'specialDecision' ? num(hand['specialTeam'], ABSENT) : ABSENT,
     canAct: legalActions.length > 0,
     turnDeadlineAt: Math.max(0, num(s['turnDeadlineAt'])),
     pending,
@@ -295,7 +312,8 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
       gameNumber: Math.max(1, num(series['gameNumber'], 1)),
       winnerTeam: num(series['winnerTeam'], ABSENT),
     },
-    cancelVotes: list(s['cancelVotes']).filter((x): x is number => typeof x === 'number'),
+    cancelVotes,
+    iVotedCancel: me >= 0 && cancelVotes.includes(me),
   };
 }
 
@@ -305,7 +323,7 @@ export function actionSignature(vm: TableViewModel): string {
     vm.legalActions.join(','),
     vm.handNumber,
     vm.handPhase,
-    vm.turnSeat,
+    vm.actingSeat,
     vm.current.length,
     vm.tricks.length,
     vm.pending?.toLevel ?? 0,

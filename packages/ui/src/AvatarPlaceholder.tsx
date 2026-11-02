@@ -80,7 +80,7 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
         ) : null}
       </View>
       <View style={[styles.texts, column && styles.textsColumn]}>
-        <Text style={styles.nick} numberOfLines={1}>
+        <Text style={styles.nick} numberOfLines={column ? 2 : 1}>
           {name}
         </Text>
         <Text style={styles.caption} numberOfLines={1}>

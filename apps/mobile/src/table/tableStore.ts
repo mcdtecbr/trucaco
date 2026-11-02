@@ -3,19 +3,46 @@
  * estado de UI local (carta selecionada, ação em voo, aviso). A fonte de verdade continua sendo o
  * servidor: nada aqui decide jogada.
  */
+import type { ChatScope } from '@trucaco/protocol';
 import type { HandResult } from '@trucaco/ui';
 import { createStore, useStore } from 'zustand';
 import type { TableViewModel } from './projectTable';
 
 export type TableNotice = 'reconnected' | null;
 
+/** Última vaza fechada, mantida na tela por um instante depois que o servidor limpa `hand.current`. */
+export interface LingeringTrick {
+  readonly plays: TableViewModel['current'];
+  readonly winnerSeat: number;
+  readonly ownCovered: { readonly rank: string; readonly suit: string } | null;
+}
+
+/** Mensagem de chat recebida. `text` é sempre exibido como `<Text>` (nunca HTML). */
+export interface ChatEntry {
+  readonly id: number;
+  readonly scope: ChatScope;
+  readonly seat: number;
+  readonly text: string;
+  readonly at: number;
+}
+
 export interface TableStoreState {
   readonly vm: TableViewModel | null;
   /** Histórico das mãos, derivado de eventos. Descartado em salto de `seq`. */
   readonly history: readonly HandResult[];
-  /** Houve salto de `seq` e a projeção ainda não foi refeita. */
-  readonly desynced: boolean;
-  readonly lastSeq: number | null;
+  /** Linhas da mão em curso (derivadas de eventos); viram `details` ao fechar a mão. */
+  readonly handLog: readonly string[];
+  /** Vaza recém-fechada, ainda exibida por um instante. */
+  readonly lingering: LingeringTrick | null;
+  /** Modo "jogar coberta": o toque na carta seleciona `playCovered:`. */
+  readonly coverMode: boolean;
+  readonly chatOpen: boolean;
+  readonly chatTab: ChatScope;
+  readonly chat: readonly ChatEntry[];
+  readonly chatUnread: Readonly<Record<ChatScope, number>>;
+  readonly chatDraft: Readonly<Record<ChatScope, string>>;
+  /** Código do último erro de chat (traduzido na tela). */
+  readonly chatError: string | null;
   /** Servidor − cliente em ms (suavizado). */
   readonly clockOffsetMs: number;
   /** Última mensagem `turnTimer` (reserva quando o estado ainda não traz o prazo). */
@@ -38,8 +65,15 @@ export interface TableStoreState {
 const INITIAL = {
   vm: null as TableViewModel | null,
   history: [] as readonly HandResult[],
-  desynced: false,
-  lastSeq: null as number | null,
+  handLog: [] as readonly string[],
+  lingering: null as LingeringTrick | null,
+  coverMode: false,
+  chatOpen: false,
+  chatTab: 'table' as ChatScope,
+  chat: [] as readonly ChatEntry[],
+  chatUnread: { table: 0, partner: 0 } as Readonly<Record<ChatScope, number>>,
+  chatDraft: { table: '', partner: '' } as Readonly<Record<ChatScope, string>>,
+  chatError: null as string | null,
   clockOffsetMs: 0,
   timer: null as TableStoreState['timer'],
   busy: false,
@@ -70,5 +104,5 @@ export function effectiveDeadline(s: Pick<TableStoreState, 'vm' | 'timer'>): num
   const vm = s.vm;
   if (vm === null) return 0;
   if (vm.turnDeadlineAt > 0) return vm.turnDeadlineAt;
-  return s.timer !== null && s.timer.seat === vm.turnSeat ? s.timer.deadlineAt : 0;
+  return s.timer !== null && s.timer.seat === vm.actingSeat ? s.timer.deadlineAt : 0;
 }

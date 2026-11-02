@@ -50,6 +50,7 @@ export function snapshot(
       specialTeam: -1,
       phase: 'playing',
       turn: 0,
+      actingSeat: hand?.turn ?? 0,
       value: 1,
       level: 0,
       tricks: [],

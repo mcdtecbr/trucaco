@@ -62,6 +62,30 @@ const BASE: ScoreLayersProps = {
 };
 
 describe('ScoreLayers', () => {
+  it('histórico mostra os lances de cada mão e da mão em curso', () => {
+    const html = renderToStaticMarkup(
+      <ScoreLayers
+        {...BASE}
+        defaultHistoryOpen
+        handNumber={2}
+        currentLog={['Bia jogou rei de ouros.']}
+        history={[
+          {
+            handNumber: 1,
+            winnerTeam: 0,
+            points: 1,
+            reason: 'tricks',
+            scores: [1, 0],
+            details: ['Vaza 1: Você levou.'],
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Vaza 1: Você levou.');
+    expect(html).toContain('Mão 2 em curso');
+    expect(html).toContain('Bia jogou rei de ouros.');
+  });
+
   it('mostra série, jogo, valor da mão e vazas com a minha dupla primeiro', () => {
     const html = renderToStaticMarkup(<ScoreLayers {...BASE} />);
     expect(html).toContain('Série 0 × 1 · Jogo 2');

@@ -2,16 +2,23 @@
  * Controlador da mesa (sem React): recebe estado, eventos e mensagens do servidor, mantém o
  * `tableStore` e traduz toques em mensagens. É o único lugar que envia ações de jogo, e só envia o que
  * está em `legalActions` do snapshot atual (a UI desabilita o resto; o servidor revalida).
+ * Mensagens de sala que não são ação de jogo (`voteCancel`, `chat`) passam pelo protocol.
  */
-import { ERROR_CODES } from '@trucaco/protocol';
-import type { ClientMessage, ErrorCode, PublicGameEvent } from '@trucaco/protocol';
+import {
+  ERROR_CODES,
+  QUICK_PHRASES,
+  parseClientMessage,
+  parseLegalAction,
+} from '@trucaco/protocol';
+import type { ChatScope, ClientMessage, ErrorCode, PublicGameEvent } from '@trucaco/protocol';
 import { PUBLIC_EVENT_TYPES, announcementFor } from '@trucaco/ui';
 import type { HandResult } from '@trucaco/ui';
 import { messageForAction } from './actionMessage';
 import { createClockOffset } from './clockOffset';
 import { isPresenceStatus, presenceText } from './presence';
 import { actionSignature, projectTable } from './projectTable';
-import type { TableStore, TableStoreState } from './tableStore';
+import type { PlayedView, TableViewModel } from './projectTable';
+import type { ChatEntry, LingeringTrick, TableStore, TableStoreState } from './tableStore';
 
 /** Se o estado não reagir à ação em tanto tempo, o botão destrava (mensagem perdida). */
 export const BUSY_TIMEOUT_MS = 3000;
@@ -19,6 +26,42 @@ export const NOTICE_MS = 3000;
 export const PRESENCE_NOTE_MS = 5000;
 /** Teto do histórico em memória. */
 const MAX_HISTORY = 200;
+/** Quanto tempo a última vaza fica na mesa depois que o servidor a limpa. */
+export const LINGER_MS = 1500;
+/** Logo depois de reconectar, evento mais velho que isto é replay (não mede relógio nem é falado). */
+export const REPLAY_WINDOW_MS = 2000;
+export const REPLAY_MIN_AGE_MS = 2000;
+const MAX_HAND_LOG = 40;
+const MAX_CHAT = 100;
+const MAX_CHAT_TEXT = 280;
+
+/** Erros que uma AÇÃO de jogo pode causar. Só eles destravam `busy` (lista explícita, testada contra o protocol). */
+export const ACTION_ERRORS: readonly string[] = [
+  'INVALID_SEAT',
+  'HAND_FINISHED',
+  'NOT_YOUR_TURN',
+  'CARD_NOT_IN_HAND',
+  'COVERED_NOT_ALLOWED',
+  'BLIND_ONLY',
+  'NOT_BLIND_HAND',
+  'BET_NOT_ALLOWED',
+  'BET_PENDING',
+  'NO_PENDING_BET',
+  'SPECIAL_DECISION_PENDING',
+  'NO_SPECIAL_DECISION',
+  'GAME_FINISHED',
+  'SERIES_FINISHED',
+  'NOT_SEATED',
+];
+/** Podem vir de ação ou de chat: vale o último envio. */
+const AMBIGUOUS_ERRORS: readonly string[] = ['RATE_LIMITED', 'INVALID_PAYLOAD'];
+const NO_LOG_EVENTS: readonly string[] = [
+  'handStarted',
+  'handDecided',
+  'gameStarted',
+  'gameDecided',
+  'seriesDecided',
+];
 
 type MutablePatch = {
   -readonly [K in keyof Omit<TableStoreState, 'patch' | 'reset'>]?: TableStoreState[K];
@@ -49,7 +92,7 @@ export interface TableController {
   onEvent(env: EventEnvelope): void;
   /** Salto de `seq`: o histórico derivado não vale mais. O estado é reprojetado por quem chama. */
   onDesync(info: { expected: number; got: number }): void;
-  acknowledgeResync(): void;
+  onChat(payload: unknown): void;
   onPresence(payload: unknown): void;
   onTurnTimer(payload: unknown): void;
   onServerError(payload: unknown): void;
@@ -58,6 +101,16 @@ export interface TableController {
   pressCard(actionId: string): void;
   /** Envia a ação se (e só se) ela estiver em `legalActions` e não houver outra em voo. */
   act(actionId: string): boolean;
+  /** Liga/desliga o modo "jogar coberta" (só liga se houver `playCovered` legal). */
+  setCoverMode(on: boolean): void;
+  /** Voto para cancelar a mesa (mensagem de sala, não faz parte de `legalActions`). */
+  voteCancel(): boolean;
+  /** Valida com o protocol e envia. `false` = recusado (erro em `chatError`) ou sem sala. */
+  sendChat(scope: ChatScope, text: string): boolean;
+  sendPhrase(scope: ChatScope, phraseId: string): boolean;
+  setChatOpen(open: boolean): void;
+  setChatTab(scope: ChatScope): void;
+  setChatDraft(scope: ChatScope, text: string): void;
   clearError(): void;
   setLeaveConfirm(open: boolean): void;
   /** Quem anuncia (leitor de tela). `null` desliga. */
@@ -75,6 +128,46 @@ export function isErrorCode(x: unknown): x is ErrorCode {
   return typeof x === 'string' && (ERROR_CODES as readonly string[]).includes(x);
 }
 
+/** A vaza que acabou de fechar (o servidor já limpou `current`), para a tela segurar por um instante. */
+export interface ClosedTrick {
+  readonly plays: readonly PlayedView[];
+  readonly winnerSeat: number;
+}
+
+export function lingeringFor(
+  prev: TableViewModel | null,
+  next: TableViewModel,
+  closed: ClosedTrick | null = null,
+): LingeringTrick | null {
+  if (prev === null || next.current.length > 0) return null;
+  const newHand =
+    prev.handNumber !== next.handNumber || prev.series.gameNumber !== next.series.gameNumber;
+  if (newHand) {
+    // O servidor fecha a mão e abre a seguinte no MESMO patch: a vaza final não está em `tricks` nem
+    // completa em `prev.current` (falta a última carta). Os eventos cardPlayed/trickDecided a trazem inteira.
+    if (closed !== null && closed.plays.length >= prev.current.length && closed.plays.length > 0) {
+      return {
+        plays: closed.plays,
+        winnerSeat: closed.winnerSeat,
+        ownCovered: prev.ownCoveredCurrent,
+      };
+    }
+    return prev.current.length > 0
+      ? { plays: prev.current, winnerSeat: -1, ownCovered: prev.ownCoveredCurrent }
+      : null;
+  }
+  if (next.tricks.length <= prev.tricks.length) return null;
+  const idx = next.tricks.length - 1;
+  const t = next.tricks[idx];
+  if (t === undefined || t.plays.length === 0) return null;
+  const own = next.ownCoveredByTrick.find((c) => c.trick === idx);
+  return {
+    plays: t.plays,
+    winnerSeat: t.winnerSeat,
+    ownCovered: own === undefined ? null : { rank: own.rank, suit: own.suit },
+  };
+}
+
 export function createTableController(opts: TableControllerOptions): TableController {
   const { store } = opts;
   const now = opts.now ?? Date.now;
@@ -88,7 +181,14 @@ export function createTableController(opts: TableControllerOptions): TableContro
   let busyTimer: unknown = null;
   let noticeTimer: unknown = null;
   let presenceTimer: unknown = null;
+  let lingerTimer: unknown = null;
   let handNumber = 0;
+  let replayUntil = 0;
+  let lastSend: 'action' | 'chat' | 'other' = 'other';
+  /** Cartas da vaza em curso, montadas dos eventos; e a última vaza fechada (para a retenção). */
+  let trickPlays: PlayedView[] = [];
+  let closedTrick: ClosedTrick | null = null;
+  let chatId = 0;
 
   const clear = (h: unknown): void => {
     if (h !== null) timers.clearTimeout(h);
@@ -115,8 +215,23 @@ export function createTableController(opts: TableControllerOptions): TableContro
       clear(busyTimer);
       busyTimer = null;
     }
+    const canCover = vm.legalActions.some((id) => parseLegalAction(id)?.kind === 'playCovered');
+    const ling = lingeringFor(cur.vm, vm, closedTrick);
+    if (ling !== null) {
+      clear(lingerTimer);
+      lingerTimer = timers.setTimeout(() => {
+        lingerTimer = null;
+        store.getState().patch({ lingering: null });
+      }, LINGER_MS);
+    }
     // Um único `set` por patch do servidor.
-    cur.patch({ vm, selected, ...(release ? { busy: false } : {}) });
+    cur.patch({
+      vm,
+      selected,
+      ...(release ? { busy: false } : {}),
+      ...(cur.coverMode && !canCover ? { coverMode: false } : {}),
+      ...(ling !== null ? { lingering: ling } : {}),
+    });
   }
 
   function handResultOf(e: Extract<PublicGameEvent, { type: 'handDecided' }>): HandResult {
@@ -138,10 +253,22 @@ export function createTableController(opts: TableControllerOptions): TableContro
     const msg = messageForAction(actionId);
     if (msg === null) return false;
     if (!opts.send(msg)) return false;
+    lastSend = 'action';
     busySignature = actionSignature(vm);
-    s.patch({ busy: true, selected: null, errorCode: null });
+    s.patch({ busy: true, selected: null, errorCode: null, coverMode: false });
     clear(busyTimer);
     busyTimer = timers.setTimeout(unlock, BUSY_TIMEOUT_MS);
+    return true;
+  }
+
+  function sendParsed(message: unknown): boolean {
+    const parsed = parseClientMessage(message);
+    if (!parsed.ok) {
+      store.getState().patch({ chatError: parsed.code });
+      return false;
+    }
+    if (!opts.send(parsed.message)) return false;
+    lastSend = 'chat';
     return true;
   }
 
@@ -152,43 +279,110 @@ export function createTableController(opts: TableControllerOptions): TableContro
     onEvent(env) {
       const clientNow = now();
       const cur = store.getState();
-      const patch: MutablePatch = {
-        lastSeq: env.seq,
-        clockOffsetMs: offset.add(env.at, clientNow),
-      };
+      // Replay logo depois de reconectar: evento velho NÃO mede relógio nem é falado de novo.
+      const age = clientNow + offset.get() - env.at;
+      const replay = clientNow < replayUntil && env.at > 0 && age > REPLAY_MIN_AGE_MS;
+      const patch: MutablePatch = {};
+      if (!replay) patch.clockOffsetMs = offset.add(env.at, clientNow);
       const e = env.event;
       if (isPublicEvent(e)) {
-        if (e.type === 'handStarted') handNumber = e.handNumber;
-        if (e.type === 'handDecided') {
-          patch.history = [...cur.history, handResultOf(e)].slice(-MAX_HISTORY);
+        if (e.type === 'handStarted') {
+          handNumber = e.handNumber;
+          patch.handLog = [];
         }
-        if (e.type === 'gameDecided' || e.type === 'gameStarted') patch.history = [];
+        if (e.type === 'gameStarted') patch.history = [];
+        if (e.type === 'handStarted') {
+          trickPlays = [];
+          closedTrick = null;
+        }
+        if (e.type === 'cardPlayed') {
+          if (trickPlays.length === 0) closedTrick = null;
+          trickPlays = [
+            ...trickPlays.filter((x) => x.seat !== e.seat),
+            {
+              seat: e.seat,
+              rank: e.card?.rank ?? '',
+              suit: e.card?.suit ?? '',
+              covered: e.covered,
+            },
+          ];
+        }
+        if (e.type === 'trickDecided') {
+          closedTrick = { plays: trickPlays, winnerSeat: e.winnerSeat ?? -1 };
+          trickPlays = [];
+          // O patch pode ter chegado antes do evento: completa a vaza já retida.
+          if (cur.lingering !== null && closedTrick.plays.length >= cur.lingering.plays.length) {
+            patch.lingering = {
+              ...cur.lingering,
+              plays: closedTrick.plays,
+              winnerSeat: closedTrick.winnerSeat,
+            };
+          }
+        }
         const vm = cur.vm;
+        let text: string | null = null;
         try {
-          say(
-            announcementFor(e, {
-              mySeat: vm?.mySeat ?? -1,
-              nicknameOf: (seat) => {
-                const n = vm?.seats[seat]?.nickname;
-                return n === undefined || n === '' ? undefined : n;
-              },
-              ...(vm !== undefined && vm !== null ? { variant: vm.variant } : {}),
-            }),
-          );
+          text = announcementFor(e, {
+            mySeat: vm?.mySeat ?? -1,
+            nicknameOf: (seat) => {
+              const n = vm?.seats[seat]?.nickname;
+              return n === undefined || n === '' ? undefined : n;
+            },
+            ...(vm !== undefined && vm !== null ? { variant: vm.variant } : {}),
+          });
         } catch {
           // Evento malformado: o estado (fonte de verdade) segue valendo.
         }
+        if (e.type === 'handDecided') {
+          const result: HandResult = { ...handResultOf(e), details: cur.handLog };
+          patch.history = [
+            ...(patch.history ?? cur.history).filter((h) => h.handNumber !== result.handNumber),
+            result,
+          ].slice(-MAX_HISTORY);
+          patch.handLog = [];
+        } else if (text !== null && !NO_LOG_EVENTS.includes(e.type)) {
+          patch.handLog = [...(patch.handLog ?? cur.handLog), text].slice(-MAX_HAND_LOG);
+        }
+        if (text !== null && !replay) say(text);
       }
       cur.patch(patch);
     },
 
     onDesync() {
       handNumber = 0;
-      store.getState().patch({ history: [], desynced: true });
+      store.getState().patch({ history: [], handLog: [] });
     },
 
-    acknowledgeResync() {
-      store.getState().patch({ desynced: false });
+    onChat(payload) {
+      if (typeof payload !== 'object' || payload === null) return;
+      const m = payload as Record<string, unknown>;
+      const scope = m['scope'];
+      const seat = m['seat'];
+      if (scope !== 'table' && scope !== 'partner') return;
+      if (typeof seat !== 'number' || !Number.isInteger(seat) || seat < 0 || seat > 3) return;
+      let text: string | null = null;
+      if (typeof m['text'] === 'string') text = m['text'].slice(0, MAX_CHAT_TEXT);
+      else if (typeof m['phraseId'] === 'string') {
+        text = QUICK_PHRASES.find((q) => q.id === m['phraseId'])?.label ?? null;
+      }
+      if (text === null || text === '') return;
+      const cur = store.getState();
+      // Segunda barreira: o servidor só entrega o chat da dupla à dupla; aqui também se confere.
+      if (scope === 'partner' && (cur.vm === null || seat % 2 !== cur.vm.myTeam)) return;
+      const entry: ChatEntry = {
+        id: ++chatId,
+        scope,
+        seat,
+        text,
+        at: typeof m['at'] === 'number' ? m['at'] : 0,
+      };
+      const seen = cur.chatOpen && cur.chatTab === scope;
+      cur.patch({
+        chat: [...cur.chat, entry].slice(-MAX_CHAT),
+        chatUnread: seen
+          ? cur.chatUnread
+          : { ...cur.chatUnread, [scope]: cur.chatUnread[scope] + 1 },
+      });
     },
 
     onPresence(payload) {
@@ -216,14 +410,24 @@ export function createTableController(opts: TableControllerOptions): TableContro
     },
 
     onServerError(payload) {
-      const code = (payload as { code?: unknown } | null)?.code;
-      unlock();
-      store.getState().patch({ errorCode: isErrorCode(code) ? code : 'UNKNOWN', selected: null });
+      const raw = (payload as { code?: unknown } | null)?.code;
+      const code = isErrorCode(raw) ? raw : 'UNKNOWN';
+      const ambiguous = AMBIGUOUS_ERRORS.includes(code);
+      if (code === 'CHAT_BLOCKED' || (ambiguous && lastSend === 'chat')) {
+        store.getState().patch({ chatError: code });
+        return;
+      }
+      // O erro não traz correlação: só destrava o botão em voo se o ÚLTIMO envio foi uma ação de jogo
+      // (erro vindo de voteCancel ou de chat não é da jogada em voo) e o código é de ação.
+      if (lastSend === 'action' && (ACTION_ERRORS.includes(code) || ambiguous)) unlock();
+      store.getState().patch({ errorCode: code, selected: null });
     },
 
     onReconnected() {
       clear(noticeTimer);
-      store.getState().patch({ notice: 'reconnected', busy: false });
+      replayUntil = now() + REPLAY_WINDOW_MS;
+      unlock();
+      store.getState().patch({ notice: 'reconnected' });
       noticeTimer = timers.setTimeout(() => {
         noticeTimer = null;
         store.getState().patch({ notice: null });
@@ -239,6 +443,53 @@ export function createTableController(opts: TableControllerOptions): TableContro
         return;
       }
       s.patch({ selected: actionId, errorCode: null });
+    },
+
+    setCoverMode(on) {
+      const s = store.getState();
+      const can = s.vm?.legalActions.some((id) => parseLegalAction(id)?.kind === 'playCovered');
+      if (on && can !== true) return;
+      s.patch({ coverMode: on, selected: null });
+    },
+
+    voteCancel() {
+      const vm = store.getState().vm;
+      if (vm === null || vm.phase !== 'playing' || vm.iVotedCancel) return false;
+      if (!opts.send({ type: 'voteCancel' })) return false;
+      lastSend = 'other';
+      return true;
+    },
+
+    sendChat(scope, text) {
+      if (!sendParsed({ type: 'chat', scope, text })) return false;
+      const s = store.getState();
+      s.patch({ chatError: null, chatDraft: { ...s.chatDraft, [scope]: '' } });
+      return true;
+    },
+
+    sendPhrase(scope, phraseId) {
+      if (!sendParsed({ type: 'chat', scope, phraseId })) return false;
+      store.getState().patch({ chatError: null });
+      return true;
+    },
+
+    setChatOpen(open) {
+      const s = store.getState();
+      s.patch({
+        chatOpen: open,
+        chatError: null,
+        ...(open ? { chatUnread: { ...s.chatUnread, [s.chatTab]: 0 } } : {}),
+      });
+    },
+
+    setChatTab(scope) {
+      const s = store.getState();
+      s.patch({ chatTab: scope, chatError: null, chatUnread: { ...s.chatUnread, [scope]: 0 } });
+    },
+
+    setChatDraft(scope, text) {
+      const s = store.getState();
+      s.patch({ chatDraft: { ...s.chatDraft, [scope]: text } });
     },
 
     clearError() {
@@ -257,9 +508,14 @@ export function createTableController(opts: TableControllerOptions): TableContro
       clear(busyTimer);
       clear(noticeTimer);
       clear(presenceTimer);
-      busyTimer = noticeTimer = presenceTimer = null;
+      clear(lingerTimer);
+      busyTimer = noticeTimer = presenceTimer = lingerTimer = null;
       busySignature = '';
       handNumber = 0;
+      replayUntil = 0;
+      lastSend = 'other';
+      trickPlays = [];
+      closedTrick = null;
       offset.reset();
       store.getState().reset();
     },

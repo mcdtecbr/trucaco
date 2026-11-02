@@ -51,14 +51,29 @@ export async function startServer(extraEnv: Record<string, string> = {}): Promis
       }
     }
   };
+  // Limitação: no Windows o Node não entrega SIGTERM como sinal (o processo é morto direto), então lá
+  // só `stop()` (afterAll) e 'exit' limpam; um worker morto à força pode deixar o servidor órfão (matar por PID).
+  // O runner do Vitest (tinypool) encerra o worker por SIGTERM, que não dispara 'exit' com handler
+  // padrão no filho: cobre também SIGTERM/SIGINT/SIGHUP e relança o sinal depois de matar o servidor.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    killChild();
+    cleanup();
+    process.kill(process.pid, signal);
+  };
+  const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+  function cleanup(): void {
+    process.removeListener('exit', killChild);
+    for (const s of signals) process.removeListener(s, onSignal);
+  }
   process.once('exit', killChild);
+  for (const s of signals) process.once(s, onSignal);
 
   let port: number;
   try {
     port = await waitListening(child);
   } catch (e) {
     killChild();
-    process.removeListener('exit', killChild);
+    cleanup();
     throw e;
   }
 
@@ -67,7 +82,7 @@ export async function startServer(extraEnv: Record<string, string> = {}): Promis
     pid,
     stop: () =>
       new Promise<void>((done) => {
-        process.removeListener('exit', killChild);
+        cleanup();
         if (child.exitCode !== null || child.signalCode !== null) return done();
         child.once('exit', () => done());
         process.kill(pid, 'SIGTERM'); // por PID, nunca pkill -f

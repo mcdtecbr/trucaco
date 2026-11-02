@@ -32,6 +32,8 @@ export interface ScoreLayersProps {
   readonly tricks: readonly { readonly winnerTeam: number }[];
   /** Histórico das mãos do jogo, alimentado pelo contêiner (coleta de eventos no 3H). */
   readonly history?: readonly HandResult[];
+  /** Lances da mão em curso (vazios = não mostra a seção). */
+  readonly currentLog?: readonly string[];
   readonly variant?: string;
   readonly defaultHistoryOpen?: boolean;
 }
@@ -52,6 +54,7 @@ export function ScoreLayers(p: ScoreLayersProps) {
   const order: readonly (0 | 1)[] = [p.myTeam, other];
   const sp = specialText(p.special, p.variant);
   const history = p.history ?? [];
+  const currentLog = p.currentLog ?? [];
   const label = scoreSummary({ ...p, names, tricks: p.tricks }, p.variant);
 
   return (
@@ -115,11 +118,28 @@ export function ScoreLayers(p: ScoreLayersProps) {
             <Text style={styles.empty}>Nenhuma mão concluída ainda.</Text>
           ) : (
             history.map((r) => (
-              <Text key={r.handNumber} accessibilityRole="text" style={styles.row}>
-                {describeHandResult(r, names)}
-              </Text>
+              <View key={r.handNumber} style={styles.entry}>
+                <Text accessibilityRole="text" style={styles.row}>
+                  {describeHandResult(r, names)}
+                </Text>
+                {(r.details ?? []).map((line, i) => (
+                  <Text key={i} style={styles.detail}>
+                    {line}
+                  </Text>
+                ))}
+              </View>
             ))
           )}
+          {currentLog.length > 0 ? (
+            <View style={styles.entry} testID="current-hand-log">
+              <Text style={styles.row}>Mão {p.handNumber} em curso</Text>
+              {currentLog.map((line, i) => (
+                <Text key={i} style={styles.detail}>
+                  {line}
+                </Text>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -158,6 +178,8 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     paddingTop: spacing.sm,
   },
+  entry: { gap: spacing.xs },
   row: { color: colors.text, fontSize: fontSize.small },
+  detail: { color: colors.textMuted, fontSize: fontSize.caption, paddingLeft: spacing.sm },
   empty: { color: colors.textMuted, fontSize: fontSize.small },
 });

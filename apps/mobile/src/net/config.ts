@@ -37,3 +37,11 @@ export function getServerUrl(): string {
   }
   return url;
 }
+
+/**
+ * Modo E2E (`EXPO_PUBLIC_E2E=1`): liga a sonda `table-state` da mesa, que os testes usam para esperar
+ * por estado. Fora dele a sonda não existe. A leitura literal é exigida pelo Expo.
+ */
+export function isE2EMode(): boolean {
+  return process.env.EXPO_PUBLIC_E2E === '1';
+}

@@ -44,3 +44,31 @@ export function finishedSummary(vm: TableViewModel | null): string | null {
   if (vm.series.format !== 'bo3') return game;
   return `Série: Nós ${vm.series.games[me]} × ${vm.series.games[them]} Eles. Último jogo: ${game}`;
 }
+
+export type FinishedOutcome = 'won' | 'lost' | 'cancelled' | 'unknown';
+
+export interface FinishedResult {
+  readonly outcome: FinishedOutcome;
+  readonly title: string;
+  /** Linhas de placar já formatadas (jogo e, na série, os jogos ganhos). */
+  readonly lines: readonly string[];
+}
+
+/**
+ * Resultado da partida/série para a tela final. Quem venceu vem de `series.winnerTeam` (servidor);
+ * `-1` com a mesa encerrada = cancelada. Aqui só se formata.
+ */
+export function finishedResult(vm: TableViewModel | null): FinishedResult {
+  if (vm === null) return { outcome: 'unknown', title: 'Partida encerrada', lines: [] };
+  const me = vm.myTeam;
+  const them = me === 0 ? 1 : 0;
+  const lines: string[] = [`Último jogo: Nós ${vm.scores[me]} × ${vm.scores[them]} Eles`];
+  if (vm.series.format === 'bo3') {
+    lines.unshift(`Série: Nós ${vm.series.games[me]} × ${vm.series.games[them]} Eles`);
+  }
+  const w = vm.series.winnerTeam;
+  if (w < 0) return { outcome: 'cancelled', title: 'Mesa cancelada', lines: [] };
+  return w === me
+    ? { outcome: 'won', title: 'Vitória da sua dupla!', lines }
+    : { outcome: 'lost', title: 'A dupla adversária venceu', lines };
+}
