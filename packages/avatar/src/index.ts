@@ -1,10 +1,26 @@
-import { SIGNAL_IDS, type SignalId } from '@trucaco/protocol';
-
-/** Nome do input trigger da state machine Rive para cada sinal (docs/sinais.md). */
-export const SIGNAL_TRIGGERS = Object.fromEntries(
-  SIGNAL_IDS.map((id) => [id, `trig_${id}`]),
-) as Record<SignalId, string>;
-
-export function signalTrigger(id: SignalId): string {
-  return SIGNAL_TRIGGERS[id];
-}
+export {
+  SIGNALS,
+  SIGNAL_TRIGGERS,
+  MAX_SIGNAL_DURATION_MS,
+  signalInfo,
+  signalTrigger,
+  type SignalInfo,
+} from './signals';
+export {
+  PART_VARIANT_NAMES,
+  SKIN_COLORS,
+  HAIR_COLORS,
+  OUTFIT_COLORS,
+  BG_COLORS,
+  safeIndex,
+} from './parts';
+export { RIVE_CONTRACT, RIVE_IDLE_STATES, RIVE_INPUT_DOCS, RIVE_MAX_BYTES } from './riveContract';
+export { Avatar, pickRenderer, DEFAULT_AVATAR_SIZE } from './Avatar';
+export type { AvatarProps, AvatarRendererId } from './Avatar';
+export { AvatarFallback, type AvatarFallbackProps } from './AvatarFallback';
+export {
+  useSignalAnimation,
+  useIdleAnimation,
+  runSignal,
+  REDUCED_MOTION_HIGHLIGHT_MS,
+} from './useSignalAnimation';
