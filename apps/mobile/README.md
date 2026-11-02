@@ -6,18 +6,19 @@ App Expo (SDK 58) com Expo Router: web, iOS e Android. O cliente não tem regra 
 
 Na raiz, `pnpm build` antes da primeira execução (os pacotes `@trucaco/*` são resolvidos pelo `dist/`).
 
-| Comando                                    | O que faz                                    |
-| ------------------------------------------ | -------------------------------------------- |
-| `pnpm --filter @trucaco/mobile dev`        | `expo start --web` (Metro, porta 8081)       |
-| `pnpm --filter @trucaco/mobile start`      | `expo start` (QR para Expo Go)               |
-| `pnpm --filter @trucaco/mobile export:web` | SPA estática em `apps/mobile/dist` (sem SSR) |
-| `pnpm --filter @trucaco/mobile test`       | Vitest com `react-native-web` no lugar de RN |
-| `pnpm --filter @trucaco/mobile test:int`   | Integração contra o servidor real (abaixo)   |
+| Comando                                    | O que faz                                      |
+| ------------------------------------------ | ---------------------------------------------- |
+| `pnpm --filter @trucaco/mobile dev`        | `expo start --web` (Metro, porta 8081)         |
+| `pnpm --filter @trucaco/mobile start`      | `expo start` (QR para Expo Go)                 |
+| `pnpm --filter @trucaco/mobile export:web` | SPA estática em `apps/mobile/dist` (sem SSR)   |
+| `pnpm --filter @trucaco/mobile test`       | Vitest com `react-native-web` no lugar de RN   |
+| `pnpm --filter @trucaco/mobile test:int`   | Integração contra o servidor real (abaixo)     |
+| `pnpm test:e2e` (raiz) ou `test:e2e` aqui  | E2E web com Playwright, 4 navegadores (abaixo) |
 
 ## Variáveis
 
 - `EXPO_PUBLIC_SERVER_URL`: URL do servidor (padrão de dev `http://localhost:2567`). Vai para o bundle: nunca coloque segredo. Em build de produção (`NODE_ENV=production` ou `__DEV__ === false`) só `https:` é aceito (o `wss:` deriva dela), salvo `localhost`, `127.0.0.1` e `10.x`; `getServerUrl()` lança caso contrário.
-- `EXPO_PUBLIC_E2E`: `1` liga a sonda oculta `table-state` da mesa (só testes E2E). Vazio nas demais execuções.
+- `EXPO_PUBLIC_E2E`: `1` liga a sonda oculta `table-state` da mesa (só testes E2E). Vazio nas demais execuções. O E2E (`e2e/globalSetup.ts`) define esta variável sozinho ao construir o web; não a use em build de produção. A sonda é um texto `fase|turn=<actingSeat>|hand=<n>|act=<canAct>|plays=<n>|match=<n>|me=<assento>`.
 
 ## Servidor local
 
@@ -37,6 +38,42 @@ Sem UI; as telas (bloco 3E) consomem estes módulos.
   Erros que a UI vê de `joinWithReservation`/`reconnect` (`GameClientError.code`): `SESSION_REQUIRED` (sem sessão local: ir ao início), `TOKEN_EXPIRED` (refresh recusado: sessão morta, novo convidado), `ROOM_NOT_FOUND` (sala descartada ou token de reconexão inválido), `UNAVAILABLE` (falha de rede/servidor na conexão, tentar de novo), `JOIN_FAILED` (reserva recusada). Indisponibilidade durante o refresh sobe como `ApiError` (`isUnavailable`), sem descartar a sessão.
 
 `test:int` sobe `apps/server/dist/main.js` (rode `pnpm build` antes; em memória, porta aleatória, `NODE_ENV=test`), cria 4 convidados, entra por código e reconecta com o SDK real. O 401 real é provado com um access de assinatura válida e `exp` no passado (o teste conhece o `JWT_SECRET` que passa ao servidor), na REST e na reconexão. `INT_SLOW=1` liga o caso em que o TTL mínimo do servidor (60 s) expira de verdade durante a queda (cerca de 65 s).
+
+## E2E web (Playwright, `e2e/`)
+
+Cada teste abre **4 contextos de navegador** (Chromium, um convidado por jogador, storage isolado), cria uma mesa privada, entra pelo código de 8 caracteres e joga pela UI real contra o **servidor compilado** (`apps/server/dist/main.js`, `NODE_ENV=test`, `TRUCO_SEED` fixo). Esperas são sempre por estado: a sonda `table-state` (`EXPO_PUBLIC_E2E=1`) e `data-testid`/papéis, nunca por tempo. Cenários em `e2e/table.spec.ts`: mesa criada e iniciada, cartas jogadas guiadas por `actingSeat`/`canAct`, chat da mesa (texto literal e balão), chat da dupla que não chega ao adversário e rate limit, partida decidida numa mão com revanche até `matchNumber` 2, queda do WebSocket com reconexão.
+
+`e2e/globalSetup.ts` faz tudo e desmonta no fim (o servidor é derrubado por PID, também em `process.exit`): (1) `expo export --platform web --output-dir dist-e2e` com `EXPO_PUBLIC_E2E=1` e `EXPO_PUBLIC_SERVER_URL=http://127.0.0.1:2587`; (2) servidor do jogo na porta `2587` com CORS para a origem do web; (3) servidor estático do `dist-e2e/` (SPA, fallback para `index.html`) na porta `8087`. As portas são fixas porque a URL do servidor entra no bundle; troque com `E2E_SERVER_PORT` e `E2E_WEB_PORT`.
+
+**Pré-requisito:** `pnpm build` na raiz (precisa de `apps/server/dist/main.js` e do `dist/` dos pacotes `@trucaco/*`) e o Chromium do Playwright (uma vez por máquina). O E2E **não** entra em `pnpm test`.
+
+Linux ou macOS:
+
+```bash
+pnpm build
+pnpm --filter @trucaco/mobile exec playwright install --with-deps chromium   # só na primeira vez
+pnpm test:e2e
+```
+
+Windows (Git Bash ou PowerShell; os comandos são os mesmos, sem `--with-deps`):
+
+```bash
+pnpm build
+pnpm --filter @trucaco/mobile exec playwright install chromium
+pnpm test:e2e
+```
+
+Sem banco, o servidor roda em memória (usuários e refresh tokens), o que basta para o dia a dia. Para exercitar Postgres e Redis reais, como o CI faz, suba `pnpm db:up`, crie e migre um banco descartável e exporte as duas variáveis (só hosts locais são aceitos):
+
+```bash
+docker exec trucaco-postgres-1 psql -U trucaco -d trucaco -c "CREATE DATABASE trucaco_test"
+DATABASE_URL=postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco_test pnpm --filter @trucaco/server db:deploy
+export TEST_DATABASE_URL=postgresql://trucaco:trucaco_dev_only@localhost:5432/trucaco_test
+export TEST_REDIS_URL=redis://localhost:6380/15
+pnpm test:e2e
+```
+
+Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração rápida; reconstrua depois de mexer no app), `E2E_SERVER_PORT`, `E2E_WEB_PORT`, `TEST_DATABASE_URL`, `TEST_REDIS_URL`. Em falha, os screenshots dos 4 jogadores são anexados ao teste (relatório HTML: `pnpm exec playwright show-report`; no CI vai como artefato `playwright-report`). O trace do Playwright só cobre o contexto padrão, não os 4 criados pelo fixture. Observação de produto: recarregar a página da mesa não retoma o assento (o app não persiste o token de reconexão e volta para `/home`), então a queda testada é a do WebSocket, não o reload.
 
 ## Telas e estado (bloco 3E)
 

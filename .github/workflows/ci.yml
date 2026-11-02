@@ -95,3 +95,103 @@ jobs:
 
       - name: Testes de integração do servidor
         run: pnpm --filter @trucaco/server test:int
+
+  # E2E web (Playwright, Chromium): 4 navegadores = 4 convidados numa mesa privada real, contra o
+  # servidor compilado (`apps/server/dist/main.js`, NODE_ENV=test) com Postgres e Redis de verdade e o
+  # build web estático servido localmente. Roda depois do `verify` (só gasta runner se o básico passar).
+  # O globalSetup do Playwright constrói o web (`EXPO_PUBLIC_E2E=1`), sobe o servidor e o servidor estático.
+  e2e-web:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: trucaco
+          POSTGRES_PASSWORD: ci_throwaway_only
+          POSTGRES_DB: trucaco_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trucaco -d trucaco_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://trucaco:ci_throwaway_only@localhost:5432/trucaco_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Servidor (dist + Prisma Client) e os pacotes que o app web importa via dist. O web em si é
+      # construído pelo globalSetup do Playwright, com a URL do servidor de teste dentro do bundle.
+      - name: Build do servidor e das dependências do app
+        run: pnpm turbo run build --filter=@trucaco/server... --filter=@trucaco/mobile^...
+
+      - name: Migrar o banco de teste
+        run: pnpm --filter @trucaco/server db:deploy
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+
+      # A chave é a versão do @playwright/test (cada versão baixa um Chromium próprio), não o lockfile.
+      - name: Versão do Playwright
+        id: playwright-version
+        run: echo "version=$(node -p "require('./apps/mobile/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dos navegadores do Playwright
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      # Com cache, só as dependências de sistema (apt); sem cache, baixa o Chromium também.
+      - name: Instalar o Chromium do Playwright
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @trucaco/mobile exec playwright install --with-deps chromium
+      - name: Instalar só as dependências de sistema do Chromium
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @trucaco/mobile exec playwright install-deps chromium
+
+      - name: E2E web
+        run: pnpm --filter @trucaco/mobile test:e2e
+
+      # Relatório HTML (com os screenshots dos 4 jogadores em falha) e o build web do E2E para inspeção.
+      - name: Anexar o relatório do Playwright
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/mobile/playwright-report
+            apps/mobile/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Anexar o build web do E2E
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-e2e
+          path: apps/mobile/dist-e2e
+          if-no-files-found: ignore
+          retention-days: 7

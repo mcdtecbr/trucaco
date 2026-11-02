@@ -217,7 +217,7 @@ export function TableView(p: TableViewProps) {
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
-  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}`;
+  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}`;
 
   const score = (
     <ScoreLayers

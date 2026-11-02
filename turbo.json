@@ -17,14 +17,28 @@
     },
     "typecheck": {
       "dependsOn": ["^build", "db:generate"],
-      "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"]
+      "inputs": [
+        "src/**",
+        "app/**",
+        "e2e/**",
+        "playwright.config.ts",
+        "tsconfig*.json",
+        "package.json"
+      ]
     },
     "test": {
       "dependsOn": ["^build", "db:generate"],
       "inputs": ["src/**", "app/**", "tsconfig*.json", "package.json"]
     },
     "lint": {
-      "inputs": ["src/**", "app/**", "../../eslint.config.mjs", "package.json"],
+      "inputs": [
+        "src/**",
+        "app/**",
+        "e2e/**",
+        "playwright.config.ts",
+        "../../eslint.config.mjs",
+        "package.json"
+      ],
       "dependsOn": ["db:generate"]
     },
     "dev": {

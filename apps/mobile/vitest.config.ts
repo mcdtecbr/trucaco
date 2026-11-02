@@ -11,5 +11,9 @@ export default defineConfig({
     },
   },
   // `*.int.test.ts` sobe o servidor real: só via `pnpm test:int` (vitest.int.config.ts).
-  test: { environment: 'node', exclude: [...configDefaults.exclude, '**/*.int.test.ts'] },
+  // `e2e/` é do Playwright (`*.spec.ts`): só via `pnpm test:e2e`.
+  test: {
+    environment: 'node',
+    exclude: [...configDefaults.exclude, '**/*.int.test.ts', 'e2e/**'],
+  },
 });
