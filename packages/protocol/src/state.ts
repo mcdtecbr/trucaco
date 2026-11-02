@@ -69,6 +69,11 @@ export interface HandSnapshot {
   /** `HandPhaseId` ou `''`. */
   readonly phase: string;
   readonly turn: number;
+  /**
+   * Assento cuja decisão é esperada agora (o mesmo do timer de turno). Em aposta pendente e em decisão
+   * de onze/dez/ferro NÃO é `turn`. `-1` (ABSENT) se ninguém age.
+   */
+  readonly actingSeat: number;
   readonly value: number;
   readonly level: number;
   readonly pending?: PendingBetSnapshot | undefined;

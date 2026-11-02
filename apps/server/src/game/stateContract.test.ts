@@ -8,6 +8,7 @@ import {
   legalActions,
   manilhaRank,
   mulberry32,
+  pendingSeat,
   startHand,
   startSeries,
   variantById,
@@ -186,6 +187,44 @@ describe('contrato TableState <-> TableStateSnapshot', () => {
       expect(kinds).toContain('accept');
       expect(kinds).toContain('run');
     }
+  });
+
+  it('actingSeat: jogada normal = turn; aposta pendente = quem responde; onze/ferro = quem decide; waiting = -1', () => {
+    const normal = build({ name: 'n', variant: 'paulista', ironHand: false, scores: [0, 0] });
+    const n = checkAllSeats(normal.state)[0]?.hand;
+    expect(n?.actingSeat).toBe(n?.turn);
+    expect(n?.actingSeat).toBe(pendingSeat(normal.series));
+
+    const caller = normal.series.match.hand.turn;
+    const r = applySeriesAction(normal.series, { type: 'callBet', seat: caller }, mulberry32(7));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    projectState(r.state, normal.state, { turnDeadlineAt: 1234 });
+    const pend = checkAllSeats(normal.state)[0]?.hand;
+    expect(pend?.phase).toBe('betPending');
+    expect(pend?.turn).toBe(caller);
+    expect(pend?.actingSeat).not.toBe(caller);
+    expect(pend?.actingSeat).toBe(pendingSeat(r.state));
+    expect((pend?.actingSeat ?? 0) % 2).not.toBe(caller % 2);
+
+    const onze = build({ name: 'o', variant: 'paulista', ironHand: true, scores: [11, 3] });
+    const o = checkAllSeats(onze.state)[0]?.hand;
+    expect(o?.phase).toBe('specialDecision');
+    expect(o?.actingSeat).toBe(pendingSeat(onze.series));
+    expect(o?.actingSeat).toBe(0);
+
+    const ferro = build({ name: 'f', variant: 'paulista', ironHand: true, scores: [11, 11] });
+    const f = checkAllSeats(ferro.state)[0]?.hand;
+    expect(f?.actingSeat).toBe(pendingSeat(ferro.series));
+    expect(f?.actingSeat).toBe(f?.turn);
+
+    const waiting = createTableState('ABCDEFGH', {
+      variant: 'paulista',
+      format: 'single',
+      ironHand: false,
+      visibility: 'public',
+    });
+    expect(asSnapshot(waiting.toJSON()).hand.actingSeat).toBe(ABSENT);
   });
 
   it('manilha e valores de aposta vêm do motor (Paulista, Mineiro, pendente, onze)', () => {

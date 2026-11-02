@@ -11,7 +11,7 @@
  * `privates[seat].ownCovered`. Carta às cegas (mão de ferro) é pública depois de jogada.
  */
 import type { Card } from '@trucaco/protocol';
-import { legalActions, manilhaRank, pendingSeat, viewFor } from '@trucaco/rules';
+import { isSeriesOver, legalActions, manilhaRank, pendingSeat, viewFor } from '@trucaco/rules';
 import type { HandAction, HandView, PlayedCardView, SeriesState, Seat, Team } from '@trucaco/rules';
 import type { ArraySchema } from '@colyseus/schema';
 import {
@@ -95,6 +95,8 @@ export interface SharedSnapshot {
     readonly specialTeam: number;
     readonly phase: string;
     readonly turn: Seat;
+    /** `pendingSeat` do motor (o mesmo do timer de turno); -1 se ninguém age. */
+    readonly actingSeat: number;
     readonly value: number;
     readonly level: number;
     readonly pending: {
@@ -176,6 +178,7 @@ export function sharedSnapshot(series: SeriesState): SharedSnapshot {
       specialTeam: v.specialTeam ?? -1,
       phase: v.phase,
       turn: v.turn,
+      actingSeat: isSeriesOver(series) ? -1 : (pendingSeat(series) ?? -1),
       value: v.value,
       level: v.level,
       pending: v.pending === null ? null : { ...v.pending },
@@ -337,6 +340,7 @@ export function projectState(
   setIf(hand, 'specialTeam', h.specialTeam);
   setIf(hand, 'phase', h.phase);
   setIf(hand, 'turn', h.turn);
+  setIf(hand, 'actingSeat', h.actingSeat);
   setIf(hand, 'value', h.value);
   setIf(hand, 'level', h.level);
   if (h.pending === null) {

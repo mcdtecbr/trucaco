@@ -58,6 +58,8 @@ export const HandSchema = schema(
     /** '' antes da primeira mão. */
     phase: t.string().default(''),
     turn: t.int8(),
+    /** Assento cuja decisão é esperada agora (`pendingSeat` do motor); -1 se ninguém age. */
+    actingSeat: t.int8().default(-1),
     value: t.uint8().default(0),
     level: t.int8(),
     pending: t.ref(PendingBetSchema).optional(),
@@ -185,6 +187,7 @@ export function createTableState(roomCode: string, options: TableOptions): Table
   state.game.pe = -1;
   state.hand.specialTeam = -1;
   state.hand.turn = -1;
+  state.hand.actingSeat = -1;
   state.hand.level = -1;
   for (let seat = 0; seat < TABLE_SEATS; seat++) {
     const p = new PlayerSchema();
