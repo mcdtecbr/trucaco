@@ -12,6 +12,7 @@ import type {
   GuestAuthResponse,
   HealthResponse,
   JoinTableResponse,
+  LogoutRequest,
   MeResponse,
   QueueStatusResponse,
   RefreshResponse,
@@ -19,7 +20,7 @@ import type {
 } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { WS_BEARER_PROTOCOL as SERVER_BEARER } from '../auth/authService';
-import type { TokenPair } from '../auth/authService';
+import type { AuthService, TokenPair } from '../auth/authService';
 import { buildHealth } from '../index';
 import type { SeatReservation as ServerReservation, QueueStatus } from '../lobby/lobby';
 
@@ -91,6 +92,11 @@ describe('contrato HTTP protocol <-> servidor', () => {
       createdAt: new Date(0).toISOString(),
     };
     const health: HealthResponse = buildHealth();
+    const logoutRefresh: LogoutRequest = { refreshToken: 'r' };
+    const logoutAll: LogoutRequest = { all: true };
+    // O serviço aceita exatamente a união do protocol.
+    const svc: Parameters<AuthService['logout']>[1][] = [logoutRefresh, logoutAll];
     expect([refresh, guest, queueResp, created, joined, me, health]).toHaveLength(7);
+    expect(svc).toHaveLength(2);
   });
 });

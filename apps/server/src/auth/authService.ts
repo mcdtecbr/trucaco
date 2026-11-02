@@ -145,6 +145,27 @@ export class AuthService {
     return { accessToken: access.token, refreshToken, expiresIn: this.cfg.accessTtlSec };
   }
 
+  /**
+   * Logout do usuário autenticado (`principal` vem do JWT, nunca do corpo). Sempre revoga o `jti` vigente
+   * do access. Com `all`, revoga todas as famílias do usuário. Com `refreshToken`, revoga a família dele
+   * SÓ se ela pertencer a `principal.userId`; token malformado, desconhecido ou de outro usuário é um
+   * no-op silencioso (sem oráculo de existência e sem permitir que A derrube a sessão de B). Idempotente.
+   */
+  async logout(
+    principal: Principal,
+    input: { readonly refreshToken: string } | { readonly all: true },
+  ): Promise<void> {
+    if ('all' in input) {
+      await this.tokens.revokeAllForUser(principal.userId);
+    } else if (REFRESH_FORMAT.test(input.refreshToken)) {
+      const owner = await this.tokens.lookup(hashRefresh(input.refreshToken));
+      if (owner !== null && owner.userId === principal.userId) {
+        await this.tokens.revokeFamily(owner.familyId);
+      }
+    }
+    await this.tokens.revokeJti(principal.jti, this.cfg.accessTtlSec);
+  }
+
   /** Valida o access JWT (assinatura, `iss`, `aud`, `exp`) e a lista de `jti` revogados. */
   async authenticateAccess(token: string): Promise<Principal> {
     let claims;

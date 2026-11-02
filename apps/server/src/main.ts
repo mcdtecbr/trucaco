@@ -10,6 +10,7 @@ import {
 } from './db';
 import type { MatchRepository, PrismaHandle, UserRepository } from './db';
 import { log } from './logger';
+import { roomConfigFromEnv } from './rooms/roomSeed';
 import { createServer } from './server';
 import type { ServerDeps } from './server';
 
@@ -136,6 +137,7 @@ async function main(): Promise<void> {
   const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
   const server = await createServer({
     port: resolvePort(process.env.PORT),
+    room: roomConfigFromEnv(process.env),
     matchmakeLimit: {
       ...(max !== undefined ? { max } : {}),
       trustProxy: config.trustProxy,

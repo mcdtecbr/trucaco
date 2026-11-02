@@ -47,6 +47,7 @@ export type {
   HealthResponse,
   HttpErrorCode,
   JoinTableRequest,
+  LogoutRequest,
   JoinTableResponse,
   MeResponse,
   PartnerCodesResponse,

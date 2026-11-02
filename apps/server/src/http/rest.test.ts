@@ -392,6 +392,169 @@ describe('GET/PUT /me', () => {
   });
 });
 
+describe('POST /auth/logout', () => {
+  const refreshStatus = async (
+    call: Awaited<ReturnType<typeof start>>['call'],
+    refreshToken: string,
+  ): Promise<number> => (await call('POST', '/auth/refresh', { body: { refreshToken } })).status;
+
+  it('com refreshToken: 204 sem corpo, família morre e o access vigente é revogado', async () => {
+    const { call, guest } = await start();
+    const g = await guest();
+    const res = await call('POST', '/auth/logout', {
+      token: g.accessToken,
+      body: { refreshToken: g.refreshToken },
+    });
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe('');
+    expect(await refreshStatus(call, g.refreshToken)).toBe(401);
+    expect((await call('GET', '/me', { token: g.accessToken })).status).toBe(401);
+  });
+
+  it('é idempotente: repetir (já com access revogado) dá 401 e nada quebra; com novo access, 204', async () => {
+    const { call, guest, auth } = await start();
+    const g = await guest();
+    const body = { refreshToken: g.refreshToken };
+    expect((await call('POST', '/auth/logout', { token: g.accessToken, body })).status).toBe(204);
+    expect((await call('POST', '/auth/logout', { token: g.accessToken, body })).status).toBe(401);
+    // chamada direta do serviço (outra sessão do mesmo usuário) repetida: sempre sem erro
+    const principal = { userId: g.user.id, jti: 'qualquer-jti' };
+    await auth.logout(principal, body);
+    await auth.logout(principal, body);
+  });
+
+  it('refresh de OUTRO usuário: mesmo 204, mas a família dele NÃO é revogada (mutação: A não derruba B)', async () => {
+    const { call, guest } = await start();
+    const a = await guest();
+    const b = await guest();
+    const res = await call('POST', '/auth/logout', {
+      token: a.accessToken,
+      body: { refreshToken: b.refreshToken },
+    });
+    expect(res.status).toBe(204);
+    expect(await refreshStatus(call, b.refreshToken)).toBe(200);
+    // e o access de B continua válido
+    expect((await call('GET', '/me', { token: b.accessToken })).status).toBe(200);
+    // o access de A foi revogado mesmo assim (é o logout dele)
+    expect((await call('GET', '/me', { token: a.accessToken })).status).toBe(401);
+  });
+
+  it('refresh inválido, malformado ou desconhecido: 204 igual (sem oráculo)', async () => {
+    const { call, guest } = await start();
+    for (const rt of ['lixo', 'A'.repeat(43), '', 'x'.repeat(5000)]) {
+      const g = await guest();
+      const res = await call('POST', '/auth/logout', {
+        token: g.accessToken,
+        body: { refreshToken: rt },
+      });
+      expect(res.status).toBe(204);
+      expect(await res.text()).toBe('');
+    }
+  });
+
+  it('{ all: true } revoga todas as famílias do usuário e preserva as de outros', async () => {
+    const { call, guest, auth } = await start();
+    const a = await guest();
+    const other = await guest();
+    // segunda família de A: o servidor só cria família em guest, então simula via serviço
+    const a2 = await auth.refresh(a.refreshToken); // continua na mesma família; basta para provar
+    const res = await call('POST', '/auth/logout', { token: a2.accessToken, body: { all: true } });
+    expect(res.status).toBe(204);
+    expect(await refreshStatus(call, a.refreshToken)).toBe(401);
+    expect(await refreshStatus(call, a2.refreshToken)).toBe(401);
+    expect(await refreshStatus(call, other.refreshToken)).toBe(200);
+  });
+
+  it('corpo inválido: ausente, vazio, chaves extras, tipos errados, all diferente de true -> 400', async () => {
+    const { call, guest } = await start();
+    const g = await guest();
+    const bad: unknown[] = [
+      undefined,
+      {},
+      [],
+      { refreshToken: 1 },
+      { all: false },
+      { all: 'true' },
+      { all: 1 },
+      { all: true, refreshToken: g.refreshToken },
+      { refreshToken: g.refreshToken, extra: 1 },
+      { other: 'x' },
+    ];
+    for (const body of bad) {
+      const res = await call('POST', '/auth/logout', {
+        token: g.accessToken,
+        ...(body === undefined ? {} : { body }),
+      });
+      expect([body, res.status]).toEqual([body, 400]);
+      expect(await code(res)).toBe('INVALID_BODY');
+    }
+    // nada disso revogou a sessão
+    expect(await refreshStatus(call, g.refreshToken)).toBe(200);
+    expect((await call('POST', '/auth/logout', { token: g.accessToken, raw: '{' })).status).toBe(
+      400,
+    );
+  });
+
+  it('exige access válido (401), Content-Type JSON (415) e método POST (405)', async () => {
+    const { call, guest } = await start();
+    const g = await guest();
+    const body = { refreshToken: g.refreshToken };
+    expect((await call('POST', '/auth/logout', { body })).status).toBe(401);
+    expect((await call('POST', '/auth/logout', { token: 'lixo', body })).status).toBe(401);
+    const text = await call('POST', '/auth/logout', {
+      token: g.accessToken,
+      headers: { 'content-type': 'text/plain' },
+      raw: JSON.stringify(body),
+    });
+    expect(text.status).toBe(415);
+    expect((await call('GET', '/auth/logout')).status).toBe(405);
+    expect(await refreshStatus(call, g.refreshToken)).toBe(200);
+  });
+
+  it('rate limit por usuário: estourou -> 429', async () => {
+    const { call, guest } = await start({ limits: { perUserPerMin: 2 } });
+    const g = await guest();
+    // corpo inválido (400) não revoga o access, então dá para esgotar o limite do usuário
+    const results: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      results.push((await call('POST', '/auth/logout', { token: g.accessToken, body: {} })).status);
+    }
+    expect(results).toEqual([400, 400, 429, 429]);
+  });
+
+  it('token store fora do ar: 503, nunca 204', async () => {
+    const store = new MemoryTokenStore();
+    const { call, guest } = await start({ tokens: store });
+    const g = await guest();
+    store.revokeJti = async () => {
+      throw new TokenStoreUnavailableError();
+    };
+    const res = await call('POST', '/auth/logout', {
+      token: g.accessToken,
+      body: { refreshToken: g.refreshToken },
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it('o refresh token e o JWT não vão para o log', async () => {
+    const lines: string[] = [];
+    const restore = setLogSink((_l, msg, f) => lines.push(JSON.stringify({ msg, ...f })));
+    try {
+      const { call, guest } = await start();
+      const g = await guest();
+      await call('POST', '/auth/logout', {
+        token: g.accessToken,
+        body: { refreshToken: g.refreshToken },
+      });
+      const text = lines.join('\n');
+      expect(text).not.toContain(g.refreshToken);
+      expect(text).not.toContain(g.accessToken);
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe('stubs, 404 e 405', () => {
   it('Google, Apple e link respondem 501 (link exige auth)', async () => {
     const { call, guest } = await start();

@@ -9,6 +9,7 @@ Ao divergir deste texto, o código vence e este documento deve ser corrigido. It
 - **Access token**: JWT HS256 de 15 min (`ACCESS_TOKEN_TTL_SECONDS`). O servidor aceita o JWT só em:
   - cabeçalho `Authorization: Bearer <jwt>` (REST, `POST /matchmake/*` e o upgrade do WebSocket em Node e React Native);
   - subprotocolo `Sec-WebSocket-Protocol: trucaco.bearer, <jwt>` (navegador, que não põe cabeçalho no WebSocket).
+    O `trucaco.bearer` DEVE vir primeiro (`new WebSocket(url, ['trucaco.bearer', jwt])`): o servidor seleciona e ecoa só `trucaco.bearer` no 101 (o JWT nunca volta); com a ordem invertida o guard não acha o token e responde 401. Coberto por `apps/server/src/rooms/wsHandshake.test.ts`.
 - **Nunca** envie o JWT em `client.auth.token` nem na query. O SDK copia esse valor para `_authToken` na URL (vaza em log de proxy), e o servidor o ignora como credencial.
 - Com o SDK Colyseus 0.18: `client.http.options.headers = { authorization: 'Bearer <jwt>' }`.
 - **Refresh token**: opaco, rotativo a cada uso. Guarde o par novo assim que `/auth/refresh` responder: o token antigo morre.
@@ -23,18 +24,19 @@ Ao divergir deste texto, o código vence e este documento deve ser corrigido. It
 
 Toda resposta de erro tem o formato `{ "error": { "code": "..." } }`. Corpo JSON de até 8 KB e `Content-Type: application/json`.
 
-| Rota                                | Auth   | Sucesso                                                                | Erros (status e código)                                                                                 |
-| ----------------------------------- | ------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `POST /auth/guest`                  | não    | `201 { user: { id, nickname }, accessToken, refreshToken, expiresIn }` | `429 RATE_LIMITED` (por IP/h e global/h), `503 SERVICE_UNAVAILABLE`                                     |
-| `POST /auth/refresh`                | não    | `200 { accessToken, refreshToken, expiresIn }`                         | `400 INVALID_BODY`; `401 INVALID_REFRESH_TOKEN` (desconhecido, expirado, reuso, revogado); `429`; `503` |
-| `POST /auth/link`                   | Bearer | —                                                                      | `401 UNAUTHORIZED`; `501 NOT_IMPLEMENTED` (stub, Fase 3)                                                |
-| `POST /auth/google`, `/auth/apple`  | não    | —                                                                      | `501 NOT_IMPLEMENTED` (stub, Fase 3)                                                                    |
-| `GET /me`                           | Bearer | `200 { id, nickname, provider, avatar, createdAt }`                    | `401 UNAUTHORIZED`                                                                                      |
-| `PUT /me`                           | Bearer | `200 { nickname }`                                                     | `400 INVALID_BODY` ou `INVALID_NICKNAME`; `409 NICKNAME_TAKEN`                                          |
-| `PUT /me/avatar`                    | Bearer | `200 { avatar }`                                                       | `400 INVALID_BODY` ou `INVALID_AVATAR` (objeto plano, até 32 chaves)                                    |
-| `GET /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`; `403 NOT_PARTNERS` (sem partida finalizada juntos)                               |
-| `PUT /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`, `INVALID_BODY` ou `INVALID_CODES`; `403 NOT_PARTNERS`                            |
-| `GET /health`                       | não    | `200 { status, protocol }`                                             | —                                                                                                       |
+| Rota                                | Auth   | Sucesso                                                                | Erros (status e código)                                                                                    |
+| ----------------------------------- | ------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `POST /auth/guest`                  | não    | `201 { user: { id, nickname }, accessToken, refreshToken, expiresIn }` | `429 RATE_LIMITED` (por IP/h e global/h), `503 SERVICE_UNAVAILABLE`                                        |
+| `POST /auth/refresh`                | não    | `200 { accessToken, refreshToken, expiresIn }`                         | `400 INVALID_BODY`; `401 INVALID_REFRESH_TOKEN` (desconhecido, expirado, reuso, revogado); `429`; `503`    |
+| `POST /auth/logout`                 | Bearer | `204` sem corpo. Corpo `{ refreshToken }` ou `{ all: true }`           | `400 INVALID_BODY`; `401 UNAUTHORIZED`; `429`; `503`. Refresh inválido ou de outro usuário também dá `204` |
+| `POST /auth/link`                   | Bearer | —                                                                      | `401 UNAUTHORIZED`; `501 NOT_IMPLEMENTED` (stub, Fase 3)                                                   |
+| `POST /auth/google`, `/auth/apple`  | não    | —                                                                      | `501 NOT_IMPLEMENTED` (stub, Fase 3)                                                                       |
+| `GET /me`                           | Bearer | `200 { id, nickname, provider, avatar, createdAt }`                    | `401 UNAUTHORIZED`                                                                                         |
+| `PUT /me`                           | Bearer | `200 { nickname }`                                                     | `400 INVALID_BODY` ou `INVALID_NICKNAME`; `409 NICKNAME_TAKEN`                                             |
+| `PUT /me/avatar`                    | Bearer | `200 { avatar }`                                                       | `400 INVALID_BODY` ou `INVALID_AVATAR` (objeto plano, até 32 chaves)                                       |
+| `GET /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`; `403 NOT_PARTNERS` (sem partida finalizada juntos)                                  |
+| `PUT /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                        | `400 INVALID_PARTNER`, `INVALID_BODY` ou `INVALID_CODES`; `403 NOT_PARTNERS`                               |
+| `GET /health`                       | não    | `200 { status, protocol }`                                             | —                                                                                                          |
 
 `GET /matches` NÃO existe como rota (o repositório tem `listForUser`, mas nenhuma rota o chama). **a confirmar**: se o histórico entra no REST na Fase 3 ou na 6.
 

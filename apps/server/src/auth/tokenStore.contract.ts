@@ -139,6 +139,31 @@ export function tokenStoreContract(name: string, make: (clock: () => number) => 
       expect((await rot(store, b.refreshHash).run()).status).toBe('revoked');
     });
 
+    it('revokeFamily e revokeAllForUser são escopados: não tocam outra família nem outro usuário', async () => {
+      const store = fresh();
+      const userId = randomUUID();
+      const mk = (uid: string) => ({
+        familyId: randomUUID(),
+        userId: uid,
+        refreshHash: hex(),
+        jti: randomUUID(),
+        ttlSec: 60,
+      });
+      const a1 = mk(userId);
+      const a2 = mk(userId);
+      const b = mk(randomUUID());
+      for (const f of [a1, a2, b]) await store.createFamily(f);
+      await store.revokeFamily(a1.familyId);
+      expect((await rot(store, a1.refreshHash).run()).status).toBe('revoked');
+      expect((await rot(store, a2.refreshHash).run()).status).toBe('rotated');
+      await store.revokeAllForUser(userId);
+      expect((await rot(store, b.refreshHash).run()).status).toBe('rotated');
+      // famílias de outro usuário continuam acháveis pelo lookup, com o dono certo
+      expect((await store.lookup(b.refreshHash))?.userId).toBe(b.userId);
+      // revogar família inexistente é no-op
+      await store.revokeFamily(randomUUID());
+    });
+
     it('jti revogado vale até o TTL', async () => {
       const store = fresh();
       const jti = randomUUID();

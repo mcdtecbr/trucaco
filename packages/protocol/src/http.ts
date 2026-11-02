@@ -159,6 +159,12 @@ export type QueueRequest = RoomOptions & {
 export interface RefreshRequest {
   readonly refreshToken: string;
 }
+/**
+ * `POST /auth/logout` (autenticado) -> 204 sem corpo. Exatamente uma chave: `refreshToken` revoga a
+ * família dele (se for do usuário do JWT; inválido ou alheio também dá 204, sem oráculo) e `all: true`
+ * revoga todas as famílias do usuário. Em ambos o access apresentado é invalidado.
+ */
+export type LogoutRequest = { readonly refreshToken: string } | { readonly all: true };
 export interface JoinTableRequest {
   readonly code: string;
 }

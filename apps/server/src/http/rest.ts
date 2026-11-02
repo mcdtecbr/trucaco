@@ -138,7 +138,9 @@ export function mountRest(app: Application, opts: RestOptions): void {
     }
     let userId: string;
     try {
-      userId = (await auth.authenticateAccess(token)).userId;
+      const principal = await auth.authenticateAccess(token);
+      userId = principal.userId;
+      res.locals['jti'] = principal.jti;
     } catch (err) {
       if (!(err instanceof AuthError)) throw err;
       res.setHeader('WWW-Authenticate', 'Bearer error="invalid_token"');
@@ -206,6 +208,32 @@ export function mountRest(app: Application, opts: RestOptions): void {
       }
       const pair = await auth.refresh(body['refreshToken']);
       res.status(200).json(pair);
+    }),
+  );
+
+  /**
+   * Logout: corpo `{ refreshToken }` (revoga a família dele, se for do usuário do JWT) ou `{ all: true }`.
+   * Sempre 204, também para refresh inválido/desconhecido/de outro usuário (sem oráculo). O `jti` do
+   * access apresentado é revogado em qualquer caso.
+   */
+  route('/auth/logout', ['POST'], (r) =>
+    r.post(byIp(ipLimiter, 60), authenticate, contentType, json, async (req, res) => {
+      const body: unknown = req.body;
+      if (!isPlainObject(body) || Object.keys(body).length !== 1) {
+        fail(res, 400, 'INVALID_BODY');
+        return;
+      }
+      const jti = res.locals['jti'] as string;
+      const userId = locals(res).user.id;
+      if (typeof body['refreshToken'] === 'string') {
+        await auth.logout({ userId, jti }, { refreshToken: body['refreshToken'] });
+      } else if (body['all'] === true) {
+        await auth.logout({ userId, jti }, { all: true });
+      } else {
+        fail(res, 400, 'INVALID_BODY');
+        return;
+      }
+      res.status(204).end();
     }),
   );
 
