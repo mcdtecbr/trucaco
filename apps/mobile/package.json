@@ -11,9 +11,11 @@
     "build": "pnpm run export:web",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint app src"
+    "lint": "eslint app src",
+    "test:int": "vitest run --config vitest.int.config.ts"
   },
   "dependencies": {
+    "@colyseus/sdk": "0.18.9",
     "@expo/metro-runtime": "58.0.16",
     "@trucaco/avatar": "workspace:*",
     "@trucaco/protocol": "workspace:*",

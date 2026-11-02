@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // React Native roda no Vitest via react-native-web (DOM-less, renderToStaticMarkup).
 export default defineConfig({
@@ -10,5 +10,6 @@ export default defineConfig({
       '@': resolve(import.meta.dirname, 'src'),
     },
   },
-  test: { environment: 'node' },
+  // `*.int.test.ts` sobe o servidor real: só via `pnpm test:int` (vitest.int.config.ts).
+  test: { environment: 'node', exclude: [...configDefaults.exclude, '**/*.int.test.ts'] },
 });

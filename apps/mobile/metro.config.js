@@ -2,6 +2,18 @@
 // (watchFolders), resolve node_modules da raiz e do app e habilita `package.json#exports`.
 // Os pacotes @trucaco/* são resolvidos pelo `exports` -> `dist/` (por isso `pnpm build` antes
 // do `expo start`/`export`; o turbo faz isso via `dependsOn: ^build`).
+const path = require('node:path');
 const { getDefaultConfig } = require('expo/metro-config');
 
-module.exports = getDefaultConfig(__dirname);
+const config = getDefaultConfig(__dirname);
+
+// `ws` (puxado por `@colyseus/sdk`) não empacota no Metro nativo: ver shims/ws-stub.js.
+const upstreamResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === 'ws') {
+    return { type: 'sourceFile', filePath: path.join(__dirname, 'shims', 'ws-stub.js') };
+  }
+  return (upstreamResolveRequest ?? context.resolveRequest)(context, moduleName, platform);
+};
+
+module.exports = config;

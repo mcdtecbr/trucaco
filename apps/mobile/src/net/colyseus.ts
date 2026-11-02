@@ -1,0 +1,371 @@
+/**
+ * Cliente Colyseus do Trucaco e a solução do RISCO CRÍTICO do subprotocolo.
+ *
+ * Problema (lido em `@colyseus/sdk@0.18.9`, `src/transport/WebSocketTransport.ts`):
+ * - navegador (`typeof document !== 'undefined'`): `new WebSocket(url, this.protocols)` e `protocols`
+ *   nunca é preenchido pelo SDK, então o upgrade da RECONEXÃO vai sem JWT -> 401;
+ * - Node/RN (`document` ausente): `new WebSocket(url, { headers, protocols })`. O Node (undici/`ws`)
+ *   entende; o WebSocket do React Native 0.88 NÃO (`protocols` não-array vira `null` e `options` fica
+ *   `undefined`), então também vai sem JWT -> 401.
+ *
+ * Solução: `BearerWebSocketTransport` substitui o transporte do `Connection` de cada `Room`
+ * (via `BearerClient.createRoom`) e abre SEMPRE `new WebSocket(url, ['trucaco.bearer', jwt])`, a forma
+ * que funciona nas três plataformas e que o servidor aceita (`trucaco.bearer` primeiro). O JWT é lido
+ * no momento de cada (re)conexão, então as tentativas automáticas do SDK usam o access mais novo.
+ *
+ * Nunca: `client.auth.token` / `_authToken` (vai para a query e vaza em log de proxy), JWT na URL, log
+ * de token, de Authorization ou de payload.
+ */
+import {
+  Client,
+  CloseCode,
+  ErrorCode as MatchMakeCode,
+  MatchMakeError,
+  Room,
+  ServerError,
+} from '@colyseus/sdk';
+import { WS_BEARER_PROTOCOL } from '@trucaco/protocol';
+import type { ErrorCode, SeatReservation } from '@trucaco/protocol';
+import { getServerUrl } from './config';
+import type { Session } from './session';
+
+// ---------------------------------------------------------------------------
+// Transporte WebSocket com subprotocolo bearer
+// ---------------------------------------------------------------------------
+
+/** Subconjunto do `WebSocket` usado aqui (DOM, undici e React Native o satisfazem). */
+export interface WebSocketLike {
+  binaryType: string;
+  readyState: number;
+  onopen: ((ev: unknown) => void) | null;
+  onmessage: ((ev: unknown) => void) | null;
+  onclose: ((ev: unknown) => void) | null;
+  onerror: ((ev: unknown) => void) | null;
+  send(data: Uint8Array): void;
+  close(code?: number, reason?: string): void;
+}
+
+/** Cria o socket. O segundo argumento é SEMPRE a lista de subprotocolos (nunca o objeto `{headers}`). */
+export type WebSocketFactory = (url: string, protocols: string[]) => WebSocketLike;
+
+export const defaultWebSocketFactory: WebSocketFactory = (url, protocols) => {
+  const Ctor = (
+    globalThis as unknown as {
+      WebSocket?: new (url: string, protocols: string[]) => WebSocketLike;
+    }
+  ).WebSocket;
+  if (Ctor === undefined) throw new Error('WebSocket indisponível neste ambiente');
+  return new Ctor(url, protocols);
+};
+
+interface TransportEvents {
+  onopen?: ((ev: unknown) => unknown) | null;
+  onmessage?: ((ev: unknown) => unknown) | null;
+  onclose?: ((ev: unknown) => unknown) | null;
+  onerror?: ((ev: unknown) => unknown) | null;
+}
+
+const WS_OPEN = 1;
+
+/** Implementa a mesma interface do transporte do SDK (`ITransport`) com o JWT no subprotocolo. */
+export class BearerWebSocketTransport {
+  ws: WebSocketLike | undefined;
+
+  constructor(
+    private readonly events: TransportEvents,
+    private readonly getAccessToken: () => string | null,
+    private readonly factory: WebSocketFactory = defaultWebSocketFactory,
+  ) {}
+
+  send(data: Uint8Array): void {
+    this.ws?.send(data);
+  }
+
+  /** O WebSocket não tem canal não confiável: o SDK usa o confiável (mesmo comportamento dele). */
+  sendUnreliable(data: Uint8Array): void {
+    this.send(data);
+  }
+
+  /** O 2º argumento (cabeçalhos do SDK) é ignorado de propósito: o JWT segue só pelo subprotocolo. */
+  connect(url: string): void {
+    const jwt = this.getAccessToken();
+    if (jwt === null) throw new Error('SESSION_REQUIRED');
+    const ws = this.factory(url, [WS_BEARER_PROTOCOL, jwt]);
+    this.ws = ws;
+    let opened = false;
+    let closed = false;
+
+    const onclose = (event: unknown): void => {
+      if (closed) return;
+      closed = true;
+      this.events.onclose?.(event);
+    };
+
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = (event) => {
+      opened = true;
+      this.events.onopen?.(event);
+    };
+    ws.onmessage = (event) => {
+      this.events.onmessage?.(event);
+    };
+    ws.onclose = onclose;
+    ws.onerror = (event) => {
+      // Um socket que nunca abriu (ex.: upgrade recusado com 401) pode não emitir `close`:
+      // sintetiza o fechamento anormal para o SDK tentar de novo.
+      if (!opened) {
+        ws.onerror = null;
+        setTimeout(() => {
+          if (ws.onclose === onclose) {
+            onclose({ code: CloseCode.ABNORMAL_CLOSURE, reason: '' });
+          }
+        }, 0);
+      }
+      this.events.onerror?.(event);
+    };
+  }
+
+  close(code?: number, reason?: string): void {
+    const ws = this.ws;
+    if (ws === undefined) return;
+    try {
+      if (code === CloseCode.MAY_TRY_RECONNECT && this.events.onclose) {
+        ws.onclose = null;
+        this.events.onclose({ code, reason });
+      }
+    } finally {
+      ws.close(code, reason);
+    }
+  }
+
+  get isOpen(): boolean {
+    return this.ws?.readyState === WS_OPEN;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client/Room do SDK com o transporte acima
+// ---------------------------------------------------------------------------
+
+interface Wiring {
+  getAccessToken: () => string | null;
+  factory: WebSocketFactory;
+  /** Avisa uma queda (o SDK vai tentar reconectar sozinho): hora de garantir um access fresco. */
+  onDrop: () => void;
+}
+
+type RootSchema<T> = ConstructorParameters<typeof Room<unknown, T>>[1];
+
+/**
+ * `Room.connection` é um campo de instância criado dentro de `Room.connect()`. Um acessor definido
+ * aqui troca o transporte do `Connection` recém-criado ANTES de ele conectar.
+ */
+class BearerRoom<T> extends Room<unknown, T> {
+  constructor(name: string, rootSchema: RootSchema<T>, wiring: Wiring) {
+    super(name, rootSchema);
+    let current: Room['connection'] | undefined;
+    Object.defineProperty(this, 'connection', {
+      configurable: true,
+      enumerable: true,
+      get: () => current,
+      set: (conn: Room['connection']) => {
+        conn.transport = new BearerWebSocketTransport(
+          conn.events,
+          wiring.getAccessToken,
+          wiring.factory,
+        );
+        current = conn;
+      },
+    });
+    this.onDrop(() => wiring.onDrop());
+  }
+}
+
+class BearerClient extends Client {
+  constructor(
+    url: string,
+    headers: Record<string, string>,
+    private readonly wiring: Wiring,
+  ) {
+    super(url, { headers });
+  }
+
+  protected override createRoom<T>(roomName: string, rootSchema?: RootSchema<T>) {
+    return new BearerRoom<T>(roomName, rootSchema, this.wiring) as unknown as Room<unknown, T>;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// API do cliente de jogo
+// ---------------------------------------------------------------------------
+
+export type GameClientErrorCode =
+  | Extract<ErrorCode, 'ROOM_NOT_FOUND' | 'TOKEN_EXPIRED'>
+  | 'UNAVAILABLE'
+  | 'JOIN_FAILED';
+
+/** Erro de entrada/reconexão. `cause` guarda o original do SDK (sem token). */
+export class GameClientError extends Error {
+  readonly code: GameClientErrorCode;
+  constructor(code: GameClientErrorCode, cause?: unknown) {
+    super(`GAME_CLIENT ${code}`);
+    this.name = 'GameClientError';
+    this.code = code;
+    this.cause = cause;
+  }
+}
+
+export interface GameClient {
+  readonly client: Client;
+  /** Consome a reserva do lobby (objeto repassado intacto). */
+  joinWithReservation(reservation: SeatReservation): Promise<Room>;
+  /** Reconecta com `room.reconnectionToken`. 401 -> refresh e 1 nova tentativa; 403/404 -> ROOM_NOT_FOUND. */
+  reconnect(source: string | { reconnectionToken: string }): Promise<Room>;
+  dispose(): void;
+}
+
+export interface GameClientOptions {
+  serverUrl?: string;
+  /** Injetável em testes. */
+  webSocketFactory?: WebSocketFactory;
+}
+
+type FailureKind = 'unauthorized' | 'gone' | 'upgrade' | 'other';
+
+function numericCode(e: unknown): number | undefined {
+  if (e instanceof ServerError || e instanceof MatchMakeError) return e.code;
+  return undefined;
+}
+
+/** Classifica falha de `reconnect` do SDK pelo código (HTTP no matchmake; 1006 no upgrade do WS). */
+export function classifyFailure(e: unknown): FailureKind {
+  const code = numericCode(e);
+  if (code === 401) return 'unauthorized';
+  // 403/404 do servidor; 522 (sala descartada) e 524 (token expirado) do matchmaker do Colyseus.
+  if (
+    code === 403 ||
+    code === 404 ||
+    code === MatchMakeCode.MATCHMAKE_INVALID_ROOM_ID ||
+    code === MatchMakeCode.MATCHMAKE_EXPIRED
+  ) {
+    return 'gone';
+  }
+  if (code === CloseCode.ABNORMAL_CLOSURE) return 'upgrade';
+  return 'other';
+}
+
+export function createGameClient(session: Session, options: GameClientOptions = {}): GameClient {
+  const headers: Record<string, string> = {};
+  const syncHeaders = (token: string | null): void => {
+    if (token === null) delete headers['authorization'];
+    else headers['authorization'] = `Bearer ${token}`;
+  };
+  syncHeaders(session.getAccessToken());
+
+  const wiring: Wiring = {
+    getAccessToken: () => session.getAccessToken(),
+    factory: options.webSocketFactory ?? defaultWebSocketFactory,
+    onDrop: () => {
+      // Em segundo plano: a próxima tentativa do SDK lê o access renovado. Falha (503) não é fatal.
+      session.ensureAccessToken().catch(() => undefined);
+    },
+  };
+  const client = new BearerClient(options.serverUrl ?? getServerUrl(), headers, wiring);
+  // O servidor não envia Access-Control-Allow-Credentials: o padrão do SDK ("include") quebraria o CORS.
+  client.http.options.credentials = 'omit';
+  const unsubscribe = session.onAccessTokenChange(syncHeaders);
+
+  async function joinWithReservation(reservation: SeatReservation): Promise<Room> {
+    await session.ensureAccessToken();
+    try {
+      return await client.consumeSeatReservation(
+        reservation as unknown as Parameters<Client['consumeSeatReservation']>[0],
+      );
+    } catch (e) {
+      throw new GameClientError('JOIN_FAILED', e);
+    }
+  }
+
+  async function reconnect(source: string | { reconnectionToken: string }): Promise<Room> {
+    const token = typeof source === 'string' ? source : source.reconnectionToken;
+    if (!/^[^:]+:[^:]+$/.test(token)) throw new GameClientError('ROOM_NOT_FOUND');
+    await session.ensureAccessToken();
+    let refreshed = false;
+    for (;;) {
+      try {
+        return await client.reconnect(token);
+      } catch (e) {
+        const kind = classifyFailure(e);
+        if (kind === 'gone') throw new GameClientError('ROOM_NOT_FOUND', e);
+        if ((kind === 'unauthorized' || kind === 'upgrade') && !refreshed) {
+          refreshed = true;
+          await session.forceRefresh(); // ApiError (503/rede) sobe: a sessão continua válida
+          continue;
+        }
+        throw new GameClientError(kind === 'unauthorized' ? 'TOKEN_EXPIRED' : 'UNAVAILABLE', e);
+      }
+    }
+  }
+
+  return { client, joinWithReservation, reconnect, dispose: unsubscribe };
+}
+
+// ---------------------------------------------------------------------------
+// Eventos com `seq`: salto = desincronizado
+// ---------------------------------------------------------------------------
+
+export interface EventEnvelope {
+  readonly seq: number;
+  readonly at: number;
+  readonly event: unknown;
+}
+
+export interface EventTrackerHandlers {
+  onEvent(envelope: EventEnvelope): void;
+  /** Chamado UMA vez por salto, até `acknowledgeResync()`. Reconstrua pelo estado; o log não vale. */
+  onDesync(info: { expected: number; got: number }): void;
+}
+
+export interface EventTracker {
+  lastSeq(): number | null;
+  isDesynced(): boolean;
+  /** Chame depois de reconstruir a projeção a partir de `room.state`. */
+  acknowledgeResync(): void;
+}
+
+/**
+ * Registra o único handler de `event` da sala. `afterSeq` = último `seq` visto numa sala anterior
+ * (reconexão manual): o replay do servidor só reenvia `seq` maiores.
+ */
+export function trackEvents(
+  room: Pick<Room, 'onMessage'>,
+  handlers: EventTrackerHandlers,
+  afterSeq: number | null = null,
+): EventTracker {
+  let last = afterSeq;
+  let desynced = false;
+  room.onMessage('event', (raw: unknown) => {
+    if (typeof raw !== 'object' || raw === null) return;
+    const env = raw as Record<string, unknown>;
+    const seq = env['seq'];
+    if (typeof seq !== 'number' || !Number.isInteger(seq)) return;
+    if (last !== null && seq <= last) return; // repetido (sobreposição de replay)
+    if (last !== null && seq > last + 1 && !desynced) {
+      desynced = true;
+      handlers.onDesync({ expected: last + 1, got: seq });
+    }
+    last = seq;
+    handlers.onEvent({
+      seq,
+      at: typeof env['at'] === 'number' ? env['at'] : 0,
+      event: env['event'],
+    });
+  });
+  return {
+    lastSeq: () => last,
+    isDesynced: () => desynced,
+    acknowledgeResync: () => {
+      desynced = false;
+    },
+  };
+}
