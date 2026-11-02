@@ -7,7 +7,9 @@ ARG NODE_IMAGE=node:22.12.0-alpine3.21
 FROM ${NODE_IMAGE} AS build
 ENV CI=true
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+# Sem corepack: o corepack do node:22.12.0 não conhece as chaves atuais de assinatura do npm
+# ("Cannot find matching keyid") e não consegue baixar o pnpm. Mesma versão do packageManager.
+RUN npm install -g pnpm@9.15.9
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps/server/package.json apps/server/
