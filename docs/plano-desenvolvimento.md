@@ -93,7 +93,7 @@ Critério verificado: CI do GitHub verde em `dd8ab6e` (jobs `verify`, `integrati
 
 - **Reload da página da mesa** não retoma o assento: o token de reconexão fica só em memória. Persistir o token (SecureStore no nativo e storage no web, com a mesma política do refresh) ou aceitar o comportamento atual.
 - **Botões de aposta do parceiro**: em aposta pendente e em decisão de onze/dez, os dois da dupla veem os botões (o motor dá ação legal aos dois). O servidor aceita a primeira ação. Decidir se a UI esconde os botões do parceiro.
-- **`voteRematch` e o limite de 150 ms** (`ACTION_MIN_INTERVAL_MS`): hoje o voto de revanche também é barrado por esse limite. Isentar ou manter.
+- **`voteRematch` e o limite de 150 ms** (`ACTION_MIN_INTERVAL_MS`): o voto de revanche também é barrado por esse limite. **Decidido pelo usuário em 2026-11-02: manter como está** (um humano dificilmente vota em menos de 150 ms depois da última jogada).
 
 **Decisões assumidas por padrão, a confirmar com o usuário:** a lista completa está em "Decisões a confirmar" no `CHANGELOG.md` e em `docs/protocolo-servidor.md`. Inclui voto de cancelar unânime, ban por sala em memória, ZWJ recusado no chat, cooldown de 60 s para reentrar na fila, janela de graça de 20 s no refresh, `ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente, `typedRoutes` desligado, carta jogada como "selecionar e confirmar", cores "Nós" e "Eles" fixas e o estilo provisório do baralho.
 
