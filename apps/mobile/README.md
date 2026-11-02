@@ -37,6 +37,16 @@ Sem UI; as telas (bloco 3E) consomem estes módulos.
 
 `test:int` sobe `apps/server/dist/main.js` (rode `pnpm build` antes; em memória, porta aleatória, `NODE_ENV=test`), cria 4 convidados, entra por código e reconecta com o SDK real. O 401 real é provado com um access de assinatura válida e `exp` no passado (o teste conhece o `JWT_SECRET` que passa ao servidor), na REST e na reconexão. `INT_SLOW=1` liga o caso em que o TTL mínimo do servidor (60 s) expira de verdade durante a queda (cerca de 65 s).
 
+## Telas e estado (bloco 3E)
+
+Rotas em `app/` (finas) e telas em `src/screens/` (`XScreen` com hooks e rede, `XView` só props, testável com `renderToStaticMarkup`): `/` (boot: restaura a sessão ou cria convidado; `unavailable` com "Tentar de novo" sem criar convidado), `/home` (criar mesa privada, entrar por código, fila pública), `/table/[code]` (sala de espera e, quando a partida começa, placeholder da mesa), `/settings` (apelido via `PUT /me`, sair, versões). Deep link `trucaco://table/CODE` só preenche o campo de código em `/home`: nunca entra sozinho.
+
+- `src/store/`: Zustand só para UI (`sessionStore` espelha `session.ts`; `lobbyStore` = fila/busy/erro; `roomStore` = projeção da sala de espera). Sem regra de jogo; a fonte continua sendo `room.state`.
+- `src/lobby/lobbyController.ts`: criar/entrar/fila (validação antes da rede, anti duplo clique, polling de 2 s cancelável, guards de resposta). `src/room/roomService.ts`: uma sala por vez, `leave(true)`, reconexão manual quando o SDK desiste. `src/services/app.ts` monta tudo sob demanda.
+- `src/i18n/errors.ts`: código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`). `src/theme.ts`: tokens simples (contraste AA testado); migram para `packages/ui` no 3F.
+- Política de apelido no cliente (`src/lobby/nickname.ts`) é só UX e espelha `apps/server/src/db/validation.ts`, que não está no protocol.
+- `typedRoutes` do Expo Router está desligado: o arquivo gerado em `.expo/types` só é atualizado por `expo start` e deixava o `typecheck` instável.
+
 ## Limites
 
 Nada nativo (iOS/Android) é testado na nuvem: sem simulador nem EAS. Validação em Expo Go fica com o usuário.

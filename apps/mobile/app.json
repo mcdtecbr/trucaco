@@ -7,10 +7,17 @@
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "ios": { "bundleIdentifier": "com.mcdtec.trucaco", "supportsTablet": true },
-    "android": { "package": "com.mcdtec.trucaco" },
-    "web": { "bundler": "metro", "output": "single" },
-    "plugins": ["expo-router", "expo-secure-store"],
-    "experiments": { "typedRoutes": true }
+    "ios": {
+      "bundleIdentifier": "com.mcdtec.trucaco",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.mcdtec.trucaco"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": ["expo-router", "expo-secure-store"]
   }
 }
