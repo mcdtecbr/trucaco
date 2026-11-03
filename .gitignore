@@ -46,3 +46,6 @@ graphify-out/
 
 # Prisma Client gerado (pnpm --filter @trucaco/server db:generate)
 apps/server/src/generated/
+
+# Codex CLI (estado local)
+.codex/
