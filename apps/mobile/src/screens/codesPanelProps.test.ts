@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildCodesPanelProps, humanPartnerName } from './codesPanelProps';
-import { mutesFor, visibleBubbles } from './chatPanelProps';
+import { MUTE_FULL_NOTE, muteFeedback, mutesFor, visibleBubbles } from './chatPanelProps';
 
 const seats = [
   { seat: 0, nickname: 'Ana', status: 'connected', isBot: false },
@@ -76,6 +76,19 @@ describe('silenciar', () => {
       { seat: 3, name: 'Davi', muted: false },
     ]);
     expect(mutesFor([{ seat: 1, nickname: '' }], 0, [])).toEqual([]);
+  });
+
+  it('mutesFor não oferece silenciar bot', () => {
+    expect(
+      mutesFor([{ seat: 1, nickname: 'Bot 2', isBot: true }, ...seats.slice(2)], 0, []).map(
+        (m) => m.seat,
+      ),
+    ).toEqual([2, 3]);
+  });
+
+  it('muteFeedback avisa só quando a lista está cheia', () => {
+    expect(muteFeedback(true)).toBeNull();
+    expect(muteFeedback(false)).toBe(MUTE_FULL_NOTE);
   });
 
   it('visibleBubbles esconde os balões dos silenciados', () => {

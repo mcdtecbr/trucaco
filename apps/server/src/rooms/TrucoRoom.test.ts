@@ -2932,6 +2932,54 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     for (const s of [1, 3]) expect(texts(at(game, s))).not.toContain('depois');
   });
 
+  it('leitura do banco falhou: nunca grava, o combinado salvo sobrevive à partida', async () => {
+    resetCodeStore();
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    codeStore.played.add(key);
+    codeStore.codes.set(key, { nod: 'guardado' });
+    codeStore.failLoad = true;
+    const game = await createGame(NAME, OPTS, 4, P);
+    await until(() => game.server.series !== null, 'série');
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    codeStore.failLoad = false;
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'x' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'x', 'entregue');
+    await drive(game, () => (game.server.series?.winner ?? null) !== null, 'fim da série');
+    await sleep(QUIET_MS * 2);
+    expect(codeStore.saved).toEqual([]);
+    expect(codeStore.codes.get(key)).toEqual({ nod: 'guardado' });
+  });
+
+  it('1ª partida com mapa vazio já vincula: combinar na revanche grava na hora', async () => {
+    const game = await started();
+    await drive(game, () => (game.server.series?.winner ?? null) !== null, 'fim da série');
+    await until(() => codeStore.played.size === 2, 'pares vinculados pela partida');
+    await sleep(QUIET_MS);
+    expect(codeStore.saved).toEqual([]);
+    for (const p of game.players) p.room.send('voteRematch');
+    await until(() => game.server.state.matchNumber === 2, 'partida 2');
+    await sleep(350);
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'na-revanche' });
+    await until(() => codeStore.saved.length === 1, 'gravado na hora');
+    expect(codeStore.saved[0]?.codes).toEqual({ wink: 'na-revanche' });
+  });
+
+  it('significado legado acima do limite é descartado no carregamento sem derrubar o resto', async () => {
+    resetCodeStore();
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    codeStore.played.add(key);
+    codeStore.codes.set(key, { nod: 'l'.repeat(PARTNER_CODE_MAX_LENGTH + 40), wink: 'ok' });
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'ok', 'carregado');
+    expect(lastCodes(at(game, 2))).toEqual({ wink: 'ok' });
+    await sleep(350);
+    at(game, 0).room.send('setCode', { signalId: 'smile', meaning: 'novo' });
+    await until(() => codeStore.saved.length === 1, 'gravado');
+    expect(codeStore.saved[0]?.codes).toEqual({ wink: 'ok', smile: 'novo' });
+  });
+
   it('partida cancelada não vincula nem grava: a 2ª mesa começa com o combinado vazio', async () => {
     const game = await started();
     at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'nao-gravar' });

@@ -36,6 +36,10 @@ export interface CodesPanelProps {
   };
 }
 
+/** O servidor guarda o texto em NFC e sem bordas: compara na mesma forma. */
+const clean = (s: string): string => s.normalize('NFC').trim();
+const PENDING_TIMEOUT_MS = 2000;
+
 const chars = (s: string): number => Array.from(s).length;
 
 function CodeRow({
@@ -55,13 +59,27 @@ function CodeRow({
 }) {
   // `undefined` = sem edição em curso: o campo mostra o que o servidor tem (inclusive a edição do parceiro).
   const [draft, setDraft] = useState<string | undefined>(undefined);
+  // Enviado e ainda sem eco do servidor: bloqueia novo envio (evita RATE_LIMITED de toque duplo).
+  const [pending, setPending] = useState(false);
   useEffect(() => {
     // O servidor refletiu o que digitei (ou o parceiro chegou ao mesmo texto): volta a seguir o servidor.
-    if (draft !== undefined && draft.trim() === saved) setDraft(undefined);
+    if (draft !== undefined && clean(draft) === saved) setDraft(undefined);
   }, [draft, saved]);
+  useEffect(() => {
+    setPending(false);
+  }, [saved]);
+  useEffect(() => {
+    if (!pending) return undefined;
+    const t = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [pending]);
   const value = draft ?? saved;
-  const dirty = draft !== undefined && draft.trim() !== saved;
-  const erasing = dirty && draft.trim() === '';
+  const dirty = draft !== undefined && clean(draft) !== saved;
+  const erasing = dirty && clean(draft) === '';
+  const save = () => {
+    if (draft === undefined || !canEdit || pending) return;
+    if (onSave(id, draft)) setPending(true);
+  };
   return (
     <View style={styles.row} testID={`code-row-${id}`}>
       <TextField
@@ -73,7 +91,7 @@ function CodeRow({
         autoCapitalize="sentences"
         disabled={!canEdit}
         onSubmit={() => {
-          if (dirty && canEdit) onSave(id, draft);
+          if (dirty) save();
         }}
         testID={`code-input-${id}`}
       />
@@ -88,11 +106,9 @@ function CodeRow({
         <Button
           label={erasing ? 'Apagar' : 'Salvar'}
           variant="secondary"
-          disabled={!canEdit || !dirty}
+          disabled={!canEdit || !dirty || pending}
           hint={`Salva o significado de ${name} para você e seu parceiro`}
-          onPress={() => {
-            if (draft !== undefined) onSave(id, draft);
-          }}
+          onPress={save}
           testID={`code-save-${id}`}
         />
       </View>

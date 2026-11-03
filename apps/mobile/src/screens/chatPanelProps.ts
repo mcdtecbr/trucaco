@@ -2,7 +2,7 @@
 import type { ChatScope } from '@trucaco/protocol';
 import type { TableController } from '../table/tableController';
 import type { ChatEntry } from '../table/tableStore';
-import { normalizeNickname } from '../platform/mutedStorageCore';
+import { MAX_MUTED, normalizeNickname } from '../platform/mutedStorageCore';
 import type { ChatPanelProps, MuteEntry } from './ChatPanel';
 
 export interface ChatPanelInput {
@@ -57,17 +57,29 @@ export function buildChatPanelProps(i: ChatPanelInput): ChatPanelProps | null {
 
 /** Botões de silenciar: um por OUTRO jogador sentado (apelido não vazio). Preferência local. */
 export function mutesFor(
-  seats: readonly { readonly seat: number; readonly nickname: string }[],
+  seats: readonly {
+    readonly seat: number;
+    readonly nickname: string;
+    readonly isBot?: boolean;
+  }[],
   mySeat: number,
   mutedNames: readonly string[],
 ): MuteEntry[] {
+  // Bot não é silenciável: o apelido dele iria para a lista persistente sem sentido.
   return seats
-    .filter((s) => s.seat !== mySeat && s.nickname.trim() !== '')
+    .filter((s) => s.seat !== mySeat && s.nickname.trim() !== '' && s.isBot !== true)
     .map((s) => ({
       seat: s.seat,
       name: s.nickname,
       muted: mutedNames.includes(normalizeNickname(s.nickname)),
     }));
+}
+
+export const MUTE_FULL_NOTE = `Lista de silenciados cheia (${MAX_MUTED}). Reative alguém para silenciar outro jogador.`;
+
+/** Aviso (texto pt-BR) quando `toggle` do store recusou; null quando funcionou. */
+export function muteFeedback(ok: boolean): string | null {
+  return ok ? null : MUTE_FULL_NOTE;
 }
 
 /** Balões sem os de jogadores silenciados neste aparelho. */

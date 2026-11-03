@@ -579,6 +579,30 @@ describe('5D: combinar sinais', () => {
     expect(save().getAttribute('aria-disabled')).toBe('true');
   });
 
+  it('toque duplo em Salvar envia uma vez; o botão volta após o eco e o erro antigo some', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    type(must('code-input-wink'), 'tenho o zap');
+    click(must('code-save-wink'));
+    expect(must('code-save-wink').getAttribute('aria-disabled')).toBe('true');
+    click(must('code-save-wink'));
+    expect(h.sent).toHaveLength(1);
+    act(() => h.table.onServerError({ code: 'RATE_LIMITED' }));
+    expect(byTestId('codes-error')).not.toBeNull();
+    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: 0, at: 1 }));
+    expect(byTestId('codes-error')).toBeNull();
+  });
+
+  it('draft decomposto (NFD) casa com o eco normalizado (NFC) do servidor', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    type(must('code-input-wink'), 'coração'.normalize('NFD'));
+    click(must('code-save-wink'));
+    act(() => h.table.onCodes({ codes: { wink: 'coração' }, by: 0, at: 1 }));
+    expect(must('code-save-wink').getAttribute('aria-disabled')).toBe('true');
+    expect((must('code-input-wink') as HTMLInputElement).value).toBe('coração');
+  });
+
   it('apagar: campo esvaziado vira "Apagar" e envia meaning vazio', () => {
     mount(snapshot());
     act(() => h.table.onCodes({ codes: { nod: 'sim' }, by: -1, at: 1 }));

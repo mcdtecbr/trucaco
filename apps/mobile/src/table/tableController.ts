@@ -608,7 +608,12 @@ export function createTableController(opts: TableControllerOptions): TableContro
         const t = Array.from(v.trim()).slice(0, MAX_CODE_DISPLAY).join('');
         if (t !== '') next[id] = t;
       }
-      cur.patch({ codes: next });
+      // Eco do meu próprio salvamento: um erro antigo (ex.: RATE_LIMITED de um 2º toque) deixou de valer.
+      cur.patch(
+        bySeat >= 0 && bySeat === cur.vm?.mySeat
+          ? { codes: next, codesError: null }
+          : { codes: next },
+      );
       if (bySeat >= 0 && bySeat !== cur.vm?.mySeat) {
         say(`${seatName(bySeat)} atualizou o combinado de sinais.`);
       }

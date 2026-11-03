@@ -18,7 +18,7 @@ import {
   roomViewFor,
 } from '../table/tableRoute';
 import { useMutedNames, mutedStore } from '../store/mutedStore';
-import { buildChatPanelProps, mutesFor, visibleBubbles } from './chatPanelProps';
+import { buildChatPanelProps, muteFeedback, mutesFor, visibleBubbles } from './chatPanelProps';
 import { buildCodesPanelProps } from './codesPanelProps';
 import type { CodesPanelProps } from './CodesPanel';
 import { FinishedView } from './FinishedView';
@@ -56,8 +56,10 @@ function useChatPanel(
   mySeat: number,
   connected: boolean,
   scopes?: readonly ChatScope[],
+  isBotSeat: (seat: number) => boolean = () => false,
 ): ChatPanelProps | null {
   const mutedNames = useMutedNames();
+  const [muteNote, setMuteNote] = useState<string | null>(null);
   const chatOpen = useTableStore((s) => s.chatOpen);
   const chatTab = useTableStore((s) => s.chatTab);
   const chat = useTableStore((s) => s.chat);
@@ -70,17 +72,17 @@ function useChatPanel(
     chat,
     chatUnread,
     chatDraft,
-    errorText: chatError === null ? null : errorMessage(chatError),
+    errorText: chatError === null ? muteNote : errorMessage(chatError),
     connected,
     nicknameOf,
     mySeat,
     ...(scopes !== undefined ? { scopes } : {}),
     mutes: mutesFor(
-      [0, 1, 2, 3].map((seat) => ({ seat, nickname: nicknameOf(seat) })),
+      [0, 1, 2, 3].map((seat) => ({ seat, nickname: nicknameOf(seat), isBot: isBotSeat(seat) })),
       mySeat,
       mutedNames,
     ),
-    toggleMute: (seat) => void mutedStore.getState().toggle(nicknameOf(seat)),
+    toggleMute: (seat) => setMuteNote(muteFeedback(mutedStore.getState().toggle(nicknameOf(seat)))),
     table: getApp().table,
   });
 }
@@ -124,6 +126,10 @@ function JoinedTable() {
     mySeat,
     connection === 'connected',
     WAITING_SCOPES,
+    (seat) => {
+      const s = seats.find((x) => x.seat === seat);
+      return s?.isBot === true || s?.status === 'bot';
+    },
   );
   const codesPanel = useCodesPanel(seats, mySeat, connection === 'connected');
   const chatUnreadTotal = useTableStore((s) => s.chatUnread.table + s.chatUnread.partner);
@@ -232,6 +238,8 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
     (seat) => vm?.seats[seat]?.nickname ?? '',
     vm?.mySeat ?? -1,
     connection === 'connected',
+    undefined,
+    (seat) => vm?.seats[seat]?.isBot === true || vm?.seats[seat]?.status === 'bot',
   );
   const codesPanel = useCodesPanel(vm?.seats ?? [], vm?.mySeat ?? -1, connection === 'connected');
   const mutedNames = useMutedNames();

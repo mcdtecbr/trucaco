@@ -25,6 +25,7 @@ import {
   CHAT_COOLDOWN_MS,
   CODES_COOLDOWN_MS,
   DEFAULT_REMATCH_WINDOW_MS,
+  PARTNER_CODE_MAX_LENGTH,
   REMATCH_MIN_HUMANS,
   RECONNECT_SECONDS,
   SFX_COOLDOWN_MS,
@@ -200,6 +201,8 @@ interface PairCodes {
   /** Sinais editados nesta mesa (a leitura do banco, assíncrona, não pode sobrescrevê-los). */
   readonly touched: Set<SignalId>;
   loaded: boolean;
+  /** A leitura do banco falhou: nunca gravar (o upsert do mapa inteiro apagaria o combinado salvo). */
+  loadFailed: boolean;
   /** O par já jogou junto uma partida finalizada: edições são gravadas na hora. */
   linked: boolean;
   /** Gravações em série: a última edição sempre vence. */
@@ -1646,6 +1649,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         codes: {},
         touched: new Set(),
         loaded: false,
+        loadFailed: false,
         linked: false,
         chain: Promise.resolve(),
       };
@@ -1658,6 +1662,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const users = this.config.users;
     let stored: Readonly<Record<string, string>> | null = null;
     let linked = false;
+    let failed = false;
     if (users !== undefined) {
       try {
         [stored, linked] = await Promise.all([
@@ -1665,7 +1670,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
           users.havePlayedTogether(state.a, state.b),
         ]);
       } catch (err) {
-        // Sem ids nem texto no log: o combinado começa vazio e a mesa segue.
+        // Sem ids nem texto no log: o combinado começa vazio e a mesa segue, mas sem gravar.
+        failed = true;
         log.warn('truco: combinado não carregado', {
           room: this.roomId,
           name: err instanceof Error ? err.name : 'unknown',
@@ -1675,13 +1681,16 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (this.closing || this.pairs.get(team) !== state) return;
     for (const [id, meaning] of Object.entries(stored ?? {})) {
       if (!(SIGNAL_IDS as readonly string[]).includes(id) || typeof meaning !== 'string') continue;
+      // Legado acima do limite: descartado (uma gravação do mapa inteiro falharia no assert).
+      if ([...meaning].length > PARTNER_CODE_MAX_LENGTH) continue;
       if (state.touched.has(id as SignalId)) continue;
       state.codes[id as SignalId] = meaning;
     }
     state.linked = linked;
+    state.loadFailed = failed;
     state.loaded = true;
     this.sendCodes(team, -1);
-    if (linked && state.touched.size > 0) this.persistPair(state);
+    if (linked && !failed && state.touched.size > 0) this.persistPair(state);
   }
 
   /** Destino SÓ pelo time do servidor: sockets vivos dos 2 assentos; bot e assento caído não recebem. */
@@ -1757,13 +1766,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       length: [...msg.meaning].length,
     });
     this.sendCodes(team, seat);
-    if (state.linked) this.persistPair(state);
+    if (state.linked && !state.loadFailed) this.persistPair(state);
   }
 
   /** Grava o mapa atual (upsert) em segundo plano; falha só loga (sem ids nem texto). */
   private persistPair(state: PairCodes): void {
     const users = this.config.users;
-    if (users === undefined) return;
+    if (users === undefined || state.loadFailed) return;
     state.chain = state.chain
       .then(() =>
         users.savePartnerCodes(
@@ -1784,12 +1793,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   /** Depois da 1ª partida finalizada gravada: grava o combinado dos pares ainda não vinculados. */
   private async persistNewPairs(): Promise<void> {
     for (const [team, state] of this.pairs) {
-      if (state.linked || !state.loaded || Object.keys(state.codes).length === 0) continue;
+      if (state.linked || !state.loaded || state.loadFailed) continue;
       const [s1, s2] = this.teamSeats(team);
       const a = s1 === undefined ? undefined : this.userBySeat.get(s1);
       const b = s2 === undefined ? undefined : this.userBySeat.get(s2);
       if (a === undefined || b === undefined || a === b) continue;
+      // A partida finalizada vincula o par no banco: edições seguintes gravam na hora.
       state.linked = true;
+      if (Object.keys(state.codes).length === 0) continue;
       this.persistPair(state);
       await state.chain;
     }
