@@ -19,7 +19,7 @@ metadata:
 
 **Pendências**
 
-1. **Licença do Rive:** o plano gratuito exporta `.riv`, mas o runtime mostra uma splash do Rive por vários segundos (os artboards `Watermark` e `NuRive*` do arquivo). O Cadet (US$ 17/assento/mês, US$ 108/ano) exporta sem splash. Uso comercial no plano gratuito não consta nas páginas oficiais: ler os Termos de Serviço e reexportar depois de assinar.
+1. **Licença do Rive: Cadet assinado (03/11/2026, mensal, US$ 17, próxima cobrança 03/12/2026)** e `.riv` reexportado sem splash (só o artboard `Avatar`, 16,5 KB). Falta: ler os Termos de Serviço (uso comercial) e saber o que vale para `.riv` já exportado se a assinatura for cancelada.
 2. **Aparelho iOS/Android:** `Avatar.native` e os `transform` em string do `react-native-svg` nativo nunca rodaram; FPS em aparelho não medido.
 3. O Rive em si (4G web, 4H nativo) ainda não é o renderizador de produção: continua o fallback vetorial (ADR 0002 e 0003).
 4. Não existe `.rev`: o fonte do Rive fica na nuvem (`editor.rive.app/file/untitled/2701970`, arquivo `avatar`). Se a conta se perder, o rig precisa ser refeito.

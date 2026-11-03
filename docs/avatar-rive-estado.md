@@ -13,7 +13,7 @@ O catálogo de variantes, o contrato de sinais e o fallback vetorial agora descr
 | Sinais novos   | 15 sinais, com `mouth_l` e `mouth_r`.                                                                                                                                                                                                |
 | Variantes      | `PART_VARIANT_NAMES`, `SKIN_COLORS`, `BG_COLORS` etc. seguem o `.riv`; o fallback renderiza os mesmos paths (`packages/avatar/src/art.ts`) com `react-native-svg`.                                                                   |
 | Piscar do idle | Variável (3 estados em 1,5x, 1x e 0,65x com Randomize Exit); a prévia do editor alternou os estados.                                                                                                                                                   |
-| Splash         | **Ainda pendente:** no plano gratuito do Rive o runtime mostra uma splash do Rive por vários segundos (ver "Licença do Rive").                                                                                                       |
+| Splash         | **Resolvido (03/11/2026):** Cadet assinado; o `.riv` reexportado só tem o artboard `Avatar` (ver "Licença do Rive").                                                                                                                |
 
 Convenção de lado: `_l` e `_r` são o lado da tela de quem vê o avatar; só `wink` guarda o significado do zap.
 
@@ -95,7 +95,11 @@ Teste no editor: um osso (ferramenta Bone, em Design) com uma peça pendurada po
 
 Validação no runtime web (`@rive-app/canvas` 2.21.6, Chrome desktop, página local): carrega artboard `Avatar` e state machine `Main`; 15 triggers (`trig_*`) e 8 Numbers lidos; os 15 triggers disparam sem erro; trocar os 8 Numbers muda o visual; **60 FPS com 1 e com 4 instâncias** (256×256). **Não validado:** runtime nativo (`rive-react-native`), dispositivo móvel, legibilidade a 64 px no `.riv`, licença comercial. O arquivo exportado tem os artboards extras `Watermark`, `NuRiveBrandmark01` e `NuRiveWordmark01` (plano gratuito do editor): conferir o termo de uso antes de publicar. O `.rev` não existe: o fonte do Rive fica na nuvem do editor (`editor.rive.app/file/untitled/2701970`, arquivo `avatar`).
 
-### Licença do Rive: pendência (03/11/2026)
+### Licença do Rive: Cadet assinado e `.riv` sem splash (03/11/2026)
+
+**Atualização:** o usuário assinou o Cadet (workspace Trucaco, 1 assento pago, US$ 17 por mês, próxima cobrança em 03/12/2026). O `.riv` reexportado (16.506 bytes, antes 26.853) tem só o artboard `Avatar`: `Watermark` e `NuRive*` saíram; 15 triggers, 8 Numbers e 60 FPS no runtime web. **Atenção:** a assinatura é mensal; o que acontece com `.riv` já exportado se ela for cancelada continua sem confirmação nas páginas oficiais. Com o Cadet, "Revision history" do editor ficou liberado (84 revisões no dia). Os Termos de Serviço (uso comercial) continuam sem leitura.
+
+Texto original da conferência (antes da assinatura):
 
 Conferido nas páginas oficiais (preços e exportação para runtime): o plano Free exporta `.riv`, mas o arquivo toca uma **tela de splash do Rive** ("Exports for runtime, with a Rive splash screen"); os artboards `Watermark` e `NuRive*` do nosso `.riv` provavelmente são essa splash (inferência, não está escrito). O plano **Cadet** (US$ 17/assento/mês ou US$ 108/assento/ano, até 3 assentos) exporta "without the splash screen". Os runtimes são código aberto, sem royalties (licença MIT segundo busca, não confirmada nas páginas). **Não consta** nas páginas se o plano gratuito permite uso comercial do `.riv` nem se arquivos exportados continuam valendo após o fim da assinatura.
 
