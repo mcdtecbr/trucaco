@@ -12,7 +12,7 @@ O catálogo de variantes, o contrato de sinais e o fallback vetorial agora descr
 | Piscar         | `wink` (olho esquerdo) usa `trig_wink_l`; `wink_r` usa `trig_wink_r`.                                                                                                                                                                |
 | Sinais novos   | 15 sinais, com `mouth_l` e `mouth_r`.                                                                                                                                                                                                |
 | Variantes      | `PART_VARIANT_NAMES`, `SKIN_COLORS`, `BG_COLORS` etc. seguem o `.riv`; o fallback renderiza os mesmos paths (`packages/avatar/src/art.ts`) com `react-native-svg`.                                                                   |
-| Piscar do idle | **Ainda diverge:** fixo de 4,5 s no `.riv` (o requisito era aleatório de 3 a 7 s).                                                                                                                                                   |
+| Piscar do idle | Variável (3 estados em 1,5x, 1x e 0,65x com Randomize Exit); a prévia do editor alternou os estados.                                                                                                                                                   |
 | Splash         | **Ainda pendente:** no plano gratuito do Rive o runtime mostra uma splash do Rive por vários segundos (ver "Licença do Rive").                                                                                                       |
 
 Convenção de lado: `_l` e `_r` são o lado da tela de quem vê o avatar; só `wink` guarda o significado do zap.
@@ -66,7 +66,7 @@ Seis timelines `skin_0..5` que gravam a cor das formas de pele de uma vez (selec
 
 ### Idle, olhar e piscar (03/11/2026)
 
-Sem ossos: as animações mexem em nós existentes (limitação do pivô). `idle_breathe` (2,4 s, `avatar_partes` Y), `idle_look` (4 s, Solo dos olhos X), `idle_blink` (4,5 s, Solo dos olhos escala Y compensada em Y). Layers `Base_Idle`, `Idle_Look` e `Blink_Random`, cada uma com Entry → estado em loop. **Limitação:** o piscar tem intervalo fixo de 4,5 s (o editor não tem timer aleatório simples); o requisito de 3–7 s aleatório não foi atendido. (A layer `Signal_Triggers` e as animações de sinal vieram na seção seguinte.)
+Sem ossos: as animações mexem em nós existentes (limitação do pivô). `idle_breathe` (2,4 s, `avatar_partes` Y), `idle_look` (4 s, Solo dos olhos X), `idle_blink` (4,5 s, Solo dos olhos escala Y compensada em Y). Layers `Base_Idle`, `Idle_Look` e `Blink_Random`, cada uma com Entry → estado em loop. **Piscar aleatório (03/11/2026, depois):** a layer `Blink_Random` ganhou 3 estados com a mesma timeline `idle_blink` em velocidades 1,5x, 1x e 0,65x, conectados dois a dois com Exit Time 4400 ms e **Randomize Exit** em cada um (opção do estado, no inspetor). Não é preciso código nem trigger. Não funcionou: Random não existe na transição (só no estado) e não há `Duplicate` de estado (criar por Add State). (A layer `Signal_Triggers` e as animações de sinal vieram na seção seguinte.)
 
 ### Sinais e layer `Signal_Triggers` (03/11/2026)
 

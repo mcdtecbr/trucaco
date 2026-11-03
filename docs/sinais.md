@@ -45,4 +45,4 @@ Os sinais são **públicos**: todo mundo na mesa vê a animação. Blefar e ler 
 
 ## Estados ociosos do avatar (não são sinais)
 
-`idle_breathe` (contínuo), `idle_blink` (aleatório a cada 3–7 s), `idle_look` (olhar para a carta jogada). Eles não passam pelo servidor.
+`idle_breathe` (contínuo), `idle_blink` (intervalo variável, sorteado dentro do `.riv`), `idle_look` (olhar para a carta jogada). Eles não passam pelo servidor.
