@@ -56,7 +56,7 @@ describe('AvatarEditorView', () => {
         expect(out).toContain(`data-testid="avatar-part-${key}-${i}"`);
       }
     }
-    expect(out).toContain('Cabelo: Repartido de lado');
+    expect(out).toContain('Cabelo: Afro');
     const checked = (key: string, i: number): boolean =>
       new RegExp(`aria-checked="true"[^>]*data-testid="avatar-part-${key}-${i}"`).test(out) ||
       new RegExp(`data-testid="avatar-part-${key}-${i}"[^>]*aria-checked="true"`).test(out);
@@ -88,7 +88,7 @@ describe('AvatarEditorView', () => {
   });
 
   it('rótulos vêm do catálogo; índice além do catálogo vira "Opção N"', () => {
-    expect(variantLabel('skin', 0)).toBe('Bege claro');
+    expect(variantLabel('skin', 0)).toBe('Clara');
     expect(variantLabel('skin', 99)).toBe('Opção 100');
   });
 });

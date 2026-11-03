@@ -2,7 +2,7 @@
 
 > O `assets/rive/avatar.riv` já foi montado e exportado; o que ele tem e onde difere deste contrato está em `docs/avatar-rive-estado.md`.
 
-Documento para o ilustrador. É autocontido: com ele se produz o arquivo `.riv` sem ler o código. Enquanto o `.riv` não existe, o avatar vetorial de `packages/avatar` (Views e Animated) é o avatar do produto e segue exatamente este contrato. **Nomes são contrato**: mudar um nome ou a ordem de uma variante exige atualizar `packages/avatar/src/riveContract.ts`, `parts.ts`, `signals.ts`, `docs/sinais.md` e este documento juntos. Ids de sinal e índices de variante nunca são renomeados nem reordenados; só se acrescenta ao fim.
+Documento para o ilustrador. É autocontido: com ele se produz o arquivo `.riv` sem ler o código. O avatar vetorial de `packages/avatar` (fallback com `react-native-svg`) é o avatar do produto e desenha as mesmas variantes do `.riv` (ADR 0003). **Nomes são contrato**: mudar um nome ou a ordem de uma variante exige atualizar `packages/avatar/src/riveContract.ts`, `parts.ts`, `signals.ts`, `docs/sinais.md` e este documento juntos. Ids de sinal e índices de variante nunca são renomeados nem reordenados; só se acrescenta ao fim.
 
 ## 1. Entrega
 
@@ -28,7 +28,7 @@ Cada input recebe o **índice** da variante (0 até n-1). O valor padrão de tod
 | `eyes`         | 4         | Estilo dos olhos              |
 | `mouth`        | 4         | Estilo da boca                |
 | `outfit`       | 6         | Roupa (modelo e cor juntos)   |
-| `accessory`    | 5         | Acessório (índice 0 = nenhum) |
+| `accessory`    | 3         | Acessório (índice 0 = nenhum) |
 | `bg_color`     | 8         | Cor do círculo de fundo       |
 
 Os nomes são exatamente estes (minúsculas, sublinhado). O catálogo e as contagens vivem em `@trucaco/protocol` (`AVATAR_PART_KEYS`, `AVATAR_PART_COUNTS`).
@@ -60,7 +60,7 @@ Cada sinal precisa ser **legível a 64 px** e distinguível dos outros num relan
 ### 2.3 Estados ociosos (sem input; não são sinais)
 
 - `idle_breathe`: contínuo e sutil (ombros e peito sobem e descem cerca de 1,5% em ciclo de ~3,6 s).
-- `idle_blink`: piscada rápida (cerca de 160 ms) em intervalos aleatórios de 3 a 7 s.
+- `idle_blink`: piscada rápida em intervalo **fixo de 4,5 s** no `.riv` exportado (o requisito original era aleatório de 3 a 7 s; o editor não tem timer aleatório simples).
 - `idle_look`: olhar para a carta jogada (reserva de uso futuro; pode ficar como pose neutra por enquanto).
 
 Os estados ociosos ficam em camadas (layers) independentes da camada dos sinais, para não competirem. Eles são locais, não passam pelo servidor.
@@ -69,16 +69,18 @@ Os estados ociosos ficam em camadas (layers) independentes da camada dos sinais,
 
 O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma lista está em `PART_VARIANT_NAMES` (`packages/avatar/src/parts.ts`).
 
-- **`face_shape` (4)**: 0 redondo; 1 oval comprido (mais alto que largo); 2 quadrado de cantos suaves; 3 largo e achatado.
-- **`skin` (6)**, do mais claro ao mais escuro: 0 bege claro (#F6D5B8); 1 bege rosado (#EDB79A); 2 dourado (#D9A066); 3 moreno (#B97A4B); 4 marrom (#8A5533); 5 marrom escuro (#5A3724). Cores de referência; podem ser ajustadas mantendo a ordem de claro para escuro.
-- **`hair` (8)**: 0 careca (sem cabelo; sobrancelhas escuras); 1 curto rente; 2 repartido de lado (franja varrida); 3 topete reto (volume reto no alto); 4 longo solto (cai dos dois lados do rosto); 5 coque no alto; 6 black power (volume redondo grande); 7 moicano (faixa central alta). Cor de cada estilo (referência): 1 castanho escuro, 2 castanho médio, 3 preto, 4 loiro, 5 ruivo escuro, 6 preto, 7 verde. A cor faz parte da variante.
-- **`eyes` (4)**: 0 redondos pequenos (pontos escuros); 1 grandes com brilho (branco, íris escura e reflexo); 2 estreitos (traço horizontal); 3 felizes em arco (arco voltado para cima, estilo "^").
-- **`mouth` (4)**: 0 sorriso aberto suave (arco para baixo, curvo); 1 reta (traço horizontal curto); 2 aberta (oval escura); 3 sorriso de canto (arco curto inclinado).
-- **`outfit` (6)**, ombros e peito com decote visível: 0 camiseta lisa vermelha, gola redonda; 1 gola em V azul; 2 listras horizontais verdes (duas faixas claras); 3 moletom amarelo com capuz atrás do pescoço e dois cordões; 4 terno escuro com camisa branca em V e gravata vermelha; 5 camisa de time roxa com distintivo redondo branco e dourado no peito (sem escudo real nem texto).
-- **`accessory` (5)**: 0 nenhum; 1 óculos redondos (aros finos pretos e ponte); 2 óculos escuros (lentes escuras **semitransparentes**, para o olho e a piscada continuarem visíveis); 3 boné azul com aba, por cima do cabelo; 4 bigode escuro sob o nariz, na cor do cabelo (preto se `hair` = 0).
-- **`bg_color` (8)**: 0 verde-mesa (#1F6B4A); 1 azul (#2C5C9E); 2 vermelho-tijolo (#A8472F); 3 amarelo (#D4A72C); 4 roxo (#6A4A9C); 5 laranja (#D9772B); 6 turquesa (#2A9AA0); 7 cinza-azulado (#62717F). Cor chapada, sem degradê.
+- **`face_shape` (4)**: 0 oval; 1 quadrado; 2 triângulo (queixo em ponta); 3 redondo.
+- **`skin` (6)**, cor base / sombra: 0 clara (#FCE4D6 / #E8B89B); 1 dourada (#E0AC69 / #C68943); 2 morena (#B87B42 / #945927); 3 marrom (#8D5524 / #673B15); 4 marrom escura (#523219 / #361F0E); 5 terrosa (#C67D5A / #A15538).
+- **`hair` (8)**, todos na cor #2B1B12 (uma cor só; a variante é o estilo): 0 careca; 1 curto; 2 afro; 3 longo (cai dos dois lados do rosto, parte atrás); 4 coque; 5 boné (azul-escuro com aba); 6 chapéu (bege com aba larga); 7 topete.
+- **`eyes` (4)**: 0 normal; 1 sonolento; 2 grande; 3 pequeno.
+- **`mouth` (4)**: 0 sorriso suave; 1 sorriso largo; 2 aberta; 3 pequena. Lábios #B4443A.
+- **`outfit` (6)**: 0 camiseta cinza (#E5E7EB), gola redonda; 1 camiseta rosa (#F2A0A0) gola V, mostra pele; 2 polo azul (#0EA5E9) com gola e botões; 3 camisa marrom (#7C2D12) de botões; 4 colete escuro (#1F2937) sobre camisa branca; 5 regata branca (#F9FAFB), mostra pele.
+- **`accessory` (3)**: 0 nenhum; 1 bigode (cor do cabelo); 2 brinco dourado (#F5B301). Óculos e boné de acessório **não existem**: os óculos escondem o piscar de olho, base dos sinais (ADR 0003).
+- **`bg_color` (8)**: 0 verde (#1E5631); 1 azul (#1D4ED8); 2 vermelho (#991B1B); 3 laranja (#D97706); 4 cinza (#4B5563); 5 roxo (#581C87); 6 laranja escuro (#C2410C); 7 turquesa (#0F766E). Cor chapada, sem degradê.
 
-Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam livremente (o boné cobre o cabelo curto sem vazar; o cabelo longo e o black power ficam atrás do rosto; os óculos ficam sobre os olhos). Camadas, de trás para a frente: fundo, cabelo de trás, pescoço e ombros/roupa, rosto, cabelo da frente, sobrancelhas, olhos, nariz, bochechas de sinal, boca, sinais de boca (dentes, língua, sorriso), acessório.
+A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (65 paths, 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
+
+Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam livremente (boné e chapéu cobrem o cabelo sem vazar; o cabelo longo e o afro ficam atrás do rosto). Camadas, de trás para a frente: fundo, cabelo de trás, pescoço e ombros/roupa, rosto, cabelo da frente, sobrancelhas, olhos, nariz, bochechas de sinal, boca, sinais de boca (dentes, língua, sorriso), acessório.
 
 ## 4. Teste de aceitação
 

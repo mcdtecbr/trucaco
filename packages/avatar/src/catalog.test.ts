@@ -8,7 +8,7 @@ import {
 } from '@trucaco/protocol';
 import {
   BG_COLORS,
-  HAIR_COLORS,
+  HAIR_COLOR,
   OUTFIT_COLORS,
   PART_VARIANT_NAMES,
   SKIN_COLORS,
@@ -63,11 +63,24 @@ describe('contrato do rig', () => {
       expect(new Set(PART_VARIANT_NAMES[key]).size).toBe(AVATAR_PART_COUNTS[key]);
     }
     expect(SKIN_COLORS).toHaveLength(AVATAR_PART_COUNTS.skin);
-    expect(HAIR_COLORS).toHaveLength(AVATAR_PART_COUNTS.hair);
     expect(OUTFIT_COLORS).toHaveLength(AVATAR_PART_COUNTS.outfit);
     expect(BG_COLORS).toHaveLength(AVATAR_PART_COUNTS.bg_color);
-    expect(new Set(SKIN_COLORS).size).toBe(SKIN_COLORS.length);
+    expect(new Set(SKIN_COLORS.map((c) => c.base)).size).toBe(SKIN_COLORS.length);
     expect(new Set(BG_COLORS).size).toBe(BG_COLORS.length);
+    for (const c of SKIN_COLORS) {
+      expect(c.base).toMatch(/^#[0-9A-F]{6}$/);
+      expect(c.shade).toMatch(/^#[0-9A-F]{6}$/);
+    }
+    expect(HAIR_COLOR).toBe('#2B1B12');
+  });
+
+  it('o catálogo segue o avatar.riv: contagens e nomes', () => {
+    expect(AVATAR_PART_COUNTS.accessory).toBe(3);
+    expect(PART_VARIANT_NAMES.accessory).toEqual(['nenhum', 'bigode', 'brinco']);
+    expect(PART_VARIANT_NAMES.hair[2]).toBe('afro');
+    expect(PART_VARIANT_NAMES.hair[7]).toBe('topete');
+    expect(SKIN_COLORS[0]).toEqual({ base: '#FCE4D6', shade: '#E8B89B' });
+    expect(BG_COLORS[0]).toBe('#1E5631');
   });
 
   it('safeIndex nunca devolve índice fora do catálogo', () => {

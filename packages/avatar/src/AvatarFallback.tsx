@@ -1,16 +1,21 @@
+import type { ReactNode } from 'react';
 import { Animated, StyleSheet, View, type ViewStyle } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import {
   DEFAULT_AVATAR_PARTS,
   parseAvatarParts,
   type AvatarParts,
   type SignalId,
 } from '@trucaco/protocol';
-import { BG_COLORS, HAIR_COLORS, OUTFIT_COLORS, SKIN_COLORS, safeIndex } from './parts';
+import { groupParts, resolveFill, type ArtGroup } from './art';
+import { BG_COLORS, safeIndex } from './parts';
 import { NEUTRAL, POSES, type PoseChannel } from './poses';
 
 /**
- * Avatar vetorial (Views + Animated, sem dependência nova). Desenhado numa caixa de 100x100
- * unidades escalada para `size` px. Todas as animações são transform/opacity.
+ * Avatar de reserva: desenha os MESMOS paths do rig `avatar.riv` (`art.ts`, viewBox 512x512) com
+ * react-native-svg, então fallback e Rive mostram o mesmo avatar (ADR 0003). Um `<Svg>` por grupo
+ * animado, cada um dentro de um `Animated.View`; as animações são só transform/opacity dos Views
+ * (nenhuma prop SVG é animada). Sobreposições de sinal (bochechas, sorriso, dentes) são Views.
  */
 
 type Num = number | Animated.AnimatedNode;
@@ -33,22 +38,27 @@ export interface AvatarFallbackProps {
 }
 
 const INK = '#1E1A1A';
+const LIP = '#B4443A';
 const BLUSH = 'rgba(0,0,0,0.16)';
 
-/** Dimensões do rosto por formato: [largura, altura, raio]. */
-const FACES: readonly (readonly [number, number, number])[] = [
-  [62, 62, 31],
-  [54, 68, 27],
-  [60, 58, 14],
-  [70, 54, 27],
-];
-const FACE_CY = 46;
+/** Região (unidades do viewBox 512) de cada grupo recortado: a escala/rotação sai do centro certo. */
+type Region = readonly [x: number, y: number, w: number, h: number];
+const FULL: Region = [0, 0, 512, 512];
+const REGIONS = {
+  nose: [224, 232, 64, 62],
+  eyeL: [160, 189, 96, 90],
+  eyeR: [256, 189, 96, 90],
+  browL: [172, 178, 80, 44],
+  browR: [260, 178, 80, 44],
+  mouth: [200, 296, 112, 72],
+  tongue: [226, 300, 60, 72],
+} as const satisfies Partial<Record<ArtGroup, Region>>;
 
 function evenly(n: number): number[] {
   return Array.from({ length: n }, (_, i) => i / (n - 1));
 }
 
-/** Estilo absoluto de uma caixa centrada em (cx, cy), em unidades. */
+/** Estilo absoluto de uma caixa centrada em (cx, cy), em unidades de 100. */
 function box(u: number, cx: number, cy: number, w: number, h: number): ViewStyle {
   return {
     position: 'absolute',
@@ -62,20 +72,23 @@ function box(u: number, cx: number, cy: number, w: number, h: number): ViewStyle
 export function AvatarFallback(props: AvatarFallbackProps) {
   const parsed = parseAvatarParts(props.parts) ?? DEFAULT_AVATAR_PARTS;
   const u = props.size / 100;
-  const face = FACES[safeIndex('face_shape', parsed.face_shape)] ?? FACES[0]!;
-  const [fw, fh, fr] = face;
-  const faceTop = FACE_CY - fh / 2;
-  const skin = SKIN_COLORS[safeIndex('skin', parsed.skin)] ?? SKIN_COLORS[0]!;
-  const hairIdx = safeIndex('hair', parsed.hair);
-  const hairColor = HAIR_COLORS[hairIdx] ?? INK;
-  const eyesIdx = safeIndex('eyes', parsed.eyes);
-  const mouthIdx = safeIndex('mouth', parsed.mouth);
-  const outfitIdx = safeIndex('outfit', parsed.outfit);
-  const accIdx = safeIndex('accessory', parsed.accessory);
-  const bg = BG_COLORS[safeIndex('bg_color', parsed.bg_color)] ?? BG_COLORS[0]!;
-  const outfit = OUTFIT_COLORS[outfitIdx] ?? OUTFIT_COLORS[0]!;
+  const k = props.size / 512;
+  const cfg: AvatarParts = {
+    ...parsed,
+    face_shape: safeIndex('face_shape', parsed.face_shape),
+    skin: safeIndex('skin', parsed.skin),
+    hair: safeIndex('hair', parsed.hair),
+    eyes: safeIndex('eyes', parsed.eyes),
+    mouth: safeIndex('mouth', parsed.mouth),
+    outfit: safeIndex('outfit', parsed.outfit),
+    accessory: safeIndex('accessory', parsed.accessory),
+    bg_color: safeIndex('bg_color', parsed.bg_color),
+  };
+  const bg = BG_COLORS[cfg.bg_color] ?? BG_COLORS[0]!;
+  const skin = resolveFill('skin', cfg);
 
   const pose = props.activeId === null ? undefined : POSES[props.activeId];
+  const has = (name: PoseChannel): boolean => pose?.[name] !== undefined;
   const ch = (name: PoseChannel, mult = 1): Num => {
     const values = pose?.[name];
     if (values === undefined) return NEUTRAL[name] * mult;
@@ -100,320 +113,70 @@ export function AvatarFallback(props: AvatarFallbackProps) {
   const eyeRScale = Animated.multiply(blinkScale, ch('winkRScaleY'));
   const pupilX = ch('pupilX', u);
   const smileOp = ch('smileOpacity');
-  const eyeCx = [37, 63] as const;
-  const eyeCy = 44;
+  const baseMouthOp: Num = has('smileOpacity') ? Animated.subtract(1, smileOp) : 1;
 
-  const eyeNode = (cx: number, scaleY: Num, key: string) => (
+  /** Um `<Svg>` com os paths de um grupo, recortado em `region`. */
+  const layer = (group: ArtGroup, region: Region, withHidden = false): ReactNode => {
+    const [x, y, w, h] = region;
+    return (
+      <Svg width={w * k} height={h * k} viewBox={`${x} ${y} ${w} ${h}`}>
+        {groupParts(group, cfg, withHidden).map((p) => (
+          <Path
+            key={p.name}
+            d={p.d}
+            fill={resolveFill(p.fill, cfg)}
+            {...(p.evenodd === true ? { fillRule: 'evenodd' as const } : {})}
+            {...(p.opacity !== undefined ? { fillOpacity: p.opacity } : {})}
+            {...(p.mirror === true
+              ? { transform: 'matrix(-1 0 0 1 512 0)' }
+              : p.tilt !== undefined
+                ? { transform: p.tilt }
+                : {})}
+          />
+        ))}
+      </Svg>
+    );
+  };
+  const at = (region: Region): ViewStyle => ({
+    position: 'absolute',
+    left: region[0] * k,
+    top: region[1] * k,
+    width: region[2] * k,
+    height: region[3] * k,
+  });
+
+  const eye = (group: 'eyeL' | 'eyeR', scaleY: Num) => (
     <Animated.View
-      key={key}
+      key={group}
       style={[
-        box(u, cx, eyeCy, 16, 14),
-        styles.center,
+        at(REGIONS[group]),
         { transform: [{ translateX: pupilX as number }, { scaleY: scaleY as number }] },
       ]}
     >
-      {eyesIdx === 0 ? (
-        <View style={styles.dot(7 * u)} />
-      ) : eyesIdx === 1 ? (
-        <View style={styles.white(13 * u, 11 * u)}>
-          <View style={styles.pupil(6 * u)}>
-            <View style={styles.glint(2 * u)} />
-          </View>
-        </View>
-      ) : eyesIdx === 2 ? (
-        <View style={styles.slit(11 * u, 3.5 * u)} />
-      ) : (
-        <View style={styles.arc(11 * u, 6 * u, 2.5 * u)} />
-      )}
+      {layer(group, REGIONS[group])}
     </Animated.View>
   );
-
-  const browStyle = (cx: number, tilt: number): ViewStyle => ({
-    ...box(u, cx, 34, 13, 3),
-    backgroundColor: hairIdx === 0 ? INK : hairColor,
-    borderRadius: 2 * u,
-    transform: [
-      { translateY: ch('browY', u) as number },
-      { scaleX: ch('browScale') as number },
-      { rotate: `${tilt}deg` },
-    ],
-  });
-
-  const hairBack = (() => {
-    switch (hairIdx) {
-      case 4:
-        return (
-          <>
-            <View
-              style={[
-                box(u, 50, FACE_CY + 4, fw + 16, fh + 10),
-                { backgroundColor: hairColor, borderRadius: ((fw + 16) / 2) * u },
-              ]}
-            />
-            <View
-              style={[
-                box(u, 50 - fw / 2 - 3, faceTop + 36, 14, 46),
-                { backgroundColor: hairColor, borderRadius: 7 * u },
-              ]}
-            />
-            <View
-              style={[
-                box(u, 50 + fw / 2 + 3, faceTop + 36, 14, 46),
-                { backgroundColor: hairColor, borderRadius: 7 * u },
-              ]}
-            />
-          </>
-        );
-      case 6:
-        return (
-          <View
-            style={[box(u, 50, 36, 78, 70), { backgroundColor: hairColor, borderRadius: 39 * u }]}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
-
-  const cap = (h: number) => (
-    <View
+  const brow = (group: 'browL' | 'browR') => (
+    <Animated.View
+      key={group}
       style={[
-        box(u, 50, faceTop - 4 + h / 2, fw + 4, h),
+        at(REGIONS[group]),
         {
-          backgroundColor: hairColor,
-          borderTopLeftRadius: ((fw + 4) / 2) * u,
-          borderTopRightRadius: ((fw + 4) / 2) * u,
-          borderBottomLeftRadius: 4 * u,
-          borderBottomRightRadius: 4 * u,
+          transform: [
+            { translateY: ch('browY', u) as number },
+            { scaleX: ch('browScale') as number },
+          ],
         },
       ]}
-    />
+    >
+      {layer(group, REGIONS[group])}
+    </Animated.View>
   );
-
-  const hairFront = (() => {
-    switch (hairIdx) {
-      case 1:
-        return cap(15);
-      case 2:
-        return (
-          <>
-            {cap(15)}
-            <View
-              style={[
-                box(u, 42, faceTop + 13, 32, 10),
-                {
-                  backgroundColor: hairColor,
-                  borderRadius: 5 * u,
-                  transform: [{ rotate: '-10deg' }],
-                },
-              ]}
-            />
-          </>
-        );
-      case 3:
-        return (
-          <View
-            style={[
-              box(u, 50, faceTop + 2, fw - 4, 14),
-              { backgroundColor: hairColor, borderRadius: 3 * u },
-            ]}
-          />
-        );
-      case 4:
-      case 6:
-        return cap(14);
-      case 5:
-        return (
-          <>
-            {cap(14)}
-            <View
-              style={[
-                box(u, 50, faceTop - 9, 18, 18),
-                { backgroundColor: hairColor, borderRadius: 9 * u },
-              ]}
-            />
-          </>
-        );
-      case 7:
-        return (
-          <View
-            style={[
-              box(u, 50, faceTop - 2, 11, 28),
-              { backgroundColor: hairColor, borderRadius: 5.5 * u },
-            ]}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
-
-  const mouthBase = (() => {
-    switch (mouthIdx) {
-      case 1:
-        return <View style={[box(u, 50, 62, 16, 3), styles.ink(1.5 * u)]} />;
-      case 2:
-        return (
-          <View
-            style={[box(u, 50, 62, 12, 13), { backgroundColor: '#5A1E1E', borderRadius: 7 * u }]}
-          />
-        );
-      case 3:
-        return (
-          <View
-            style={[
-              box(u, 52, 62, 16, 8),
-              styles.smileArc(8 * u, 3 * u),
-              { transform: [{ rotate: '-12deg' }] },
-            ]}
-          />
-        );
-      default:
-        return <View style={[box(u, 50, 61, 20, 10), styles.smileArc(10 * u, 3 * u)]} />;
-    }
-  })();
-
-  const outfitDetail = (() => {
-    switch (outfitIdx) {
-      case 1:
-        return (
-          <View
-            style={{
-              ...box(u, 38, -2, 15, 15),
-              backgroundColor: skin,
-              transform: [{ rotate: '45deg' }],
-            }}
-          />
-        );
-      case 2:
-        return (
-          <>
-            <View style={[box(u, 38, 12, 76, 4), styles.stripe]} />
-            <View style={[box(u, 38, 21, 76, 4), styles.stripe]} />
-          </>
-        );
-      case 3:
-        return (
-          <>
-            <View
-              style={[
-                box(u, 38, 1, 28, 14),
-                { borderWidth: 4 * u, borderColor: 'rgba(0,0,0,0.25)', borderRadius: 10 * u },
-              ]}
-            />
-            <View style={[box(u, 32, 14, 2, 9), styles.cord]} />
-            <View style={[box(u, 44, 14, 2, 9), styles.cord]} />
-          </>
-        );
-      case 4:
-        return (
-          <>
-            <View
-              style={{
-                ...box(u, 38, -1, 18, 18),
-                backgroundColor: '#F5F1E6',
-                transform: [{ rotate: '45deg' }],
-              }}
-            />
-            <View
-              style={[box(u, 38, 12, 5, 16), { backgroundColor: '#B3261E', borderRadius: 1.5 * u }]}
-            />
-          </>
-        );
-      case 5:
-        return (
-          <View
-            style={[
-              box(u, 22, 14, 9, 9),
-              {
-                backgroundColor: '#F5F1E6',
-                borderRadius: 4.5 * u,
-                borderWidth: 2 * u,
-                borderColor: '#F2C14E',
-              },
-            ]}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
-
-  const glassesRing = (cx: number) => (
-    <View
-      key={cx}
-      style={[
-        box(u, cx, eyeCy, 16, 16),
-        { borderRadius: 8 * u, borderWidth: 2 * u, borderColor: INK },
-      ]}
-    />
-  );
-  const sunLens = (cx: number) => (
-    <View
-      key={cx}
-      style={[
-        box(u, cx, eyeCy, 18, 12),
-        { backgroundColor: INK, opacity: 0.62, borderRadius: 5 * u },
-      ]}
-    />
-  );
-
-  const accessory = (() => {
-    switch (accIdx) {
-      case 1:
-        return (
-          <>
-            {eyeCx.map(glassesRing)}
-            <View style={[box(u, 50, eyeCy, 6, 2), styles.ink(u)]} />
-          </>
-        );
-      case 2:
-        return (
-          <>
-            {eyeCx.map(sunLens)}
-            <View style={[box(u, 50, eyeCy - 1, 6, 2.5), styles.ink(u)]} />
-          </>
-        );
-      case 3:
-        return (
-          <>
-            <View
-              style={[
-                box(u, 50, faceTop + 3, fw + 6, 24),
-                {
-                  backgroundColor: '#2B4A8A',
-                  borderTopLeftRadius: ((fw + 6) / 2) * u,
-                  borderTopRightRadius: ((fw + 6) / 2) * u,
-                },
-              ]}
-            />
-            <View
-              style={[
-                box(u, 50, faceTop + 15, fw + 18, 5),
-                { backgroundColor: '#1F3566', borderRadius: 3 * u },
-              ]}
-            />
-          </>
-        );
-      case 4:
-        return (
-          <View
-            style={[
-              box(u, 50, 56.5, 22, 6),
-              { backgroundColor: hairIdx === 0 ? INK : hairColor, borderRadius: 3 * u },
-            ]}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
-
   const puff = (cx: number) => (
     <Animated.View
       key={cx}
       style={[
-        box(u, cx, 59, 13, 13),
+        box(u, cx, 58.5, 13, 13),
         {
           backgroundColor: skin,
           borderRadius: 6.5 * u,
@@ -425,6 +188,17 @@ export function AvatarFallback(props: AvatarFallbackProps) {
       ]}
     />
   );
+
+  const headStyle = [
+    StyleSheet.absoluteFill,
+    {
+      transform: [
+        { translateX: ch('headX', u) as number },
+        { translateY: ch('headY', u) as number },
+        { rotate: rot('headRot') as string },
+      ],
+    },
+  ];
 
   return (
     <View
@@ -440,122 +214,102 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         overflow: 'hidden',
       }}
     >
-      {/* ombros e roupa */}
-      <Animated.View
-        style={[
-          box(u, 50, 91, 76, 36),
-          { transform: [{ translateY: shoulderY as unknown as number }] },
-        ]}
-      >
-        <View
-          style={[
-            StyleSheet.absoluteFill,
-            {
-              backgroundColor: outfit,
-              borderTopLeftRadius: 30 * u,
-              borderTopRightRadius: 30 * u,
-              overflow: 'hidden',
-            },
-          ]}
-        >
-          <View
-            style={[
-              box(u, 38, 0, 24, 12),
-              {
-                backgroundColor: skin,
-                borderBottomLeftRadius: 12 * u,
-                borderBottomRightRadius: 12 * u,
-              },
-            ]}
-          />
-          {outfitDetail}
-        </View>
+      {/* cabelo de trás e orelhas: acompanham a cabeça, mas ficam atrás do pescoço e da roupa */}
+      <Animated.View style={headStyle}>
+        <View style={at(FULL)}>{layer('headBack', FULL)}</View>
       </Animated.View>
 
-      {/* cabeça */}
+      {/* pescoço, ombros e roupa (o fundo é a cor do círculo) */}
       <Animated.View
-        style={[
-          StyleSheet.absoluteFill,
-          {
-            transform: [
-              { translateX: ch('headX', u) as number },
-              { translateY: ch('headY', u) as number },
-              { rotate: rot('headRot') as string },
-            ],
-          },
-        ]}
+        style={[at(FULL), { transform: [{ translateY: shoulderY as unknown as number }] }]}
       >
-        {hairBack}
-        <View style={[box(u, 50, 70, 14, 14), { backgroundColor: skin }]} />
-        <View
-          style={[box(u, 50, FACE_CY, fw, fh), { backgroundColor: skin, borderRadius: fr * u }]}
-        />
-        {hairFront}
-        <Animated.View style={browStyle(eyeCx[0], -4)} />
-        <Animated.View style={browStyle(eyeCx[1], 4)} />
-        {eyeNode(eyeCx[0], eyeLScale, 'l')}
-        {eyeNode(eyeCx[1], eyeRScale, 'r')}
+        {layer('body', FULL)}
+      </Animated.View>
+
+      {/* cabeça e tudo que acompanha o rosto */}
+      <Animated.View style={headStyle}>
+        <View style={at(FULL)}>{layer('head', FULL)}</View>
         <Animated.View
           style={[
-            box(u, 50, 52, 7, 6),
+            at(REGIONS.nose),
             {
-              backgroundColor: BLUSH,
-              borderRadius: 3 * u,
               transform: [
                 { translateX: ch('noseX', u) as number },
                 { scaleX: ch('noseScale') as number },
               ],
             },
           ]}
-        />
-        {puff(50 - fw / 2 + 2)}
-        {puff(50 + fw / 2 - 2)}
+        >
+          {layer('nose', REGIONS.nose)}
+        </Animated.View>
+        {has('puffOpacity') ? (
+          <>
+            {puff(34)}
+            {puff(66)}
+          </>
+        ) : null}
+        {eye('eyeL', eyeLScale)}
+        {eye('eyeR', eyeRScale)}
+        {brow('browL')}
+        {brow('browR')}
+        {/* boca: gira em torno do próprio centro; esmaece quando o sorriso entra */}
         <Animated.View
-          pointerEvents="none"
           style={[
-            StyleSheet.absoluteFill,
+            at(REGIONS.mouth),
             {
-              // gira em torno do centro da boca (y = 62), não do centro do rosto
-              transform: [
-                { translateY: 12 * u },
-                { rotate: rot('mouthRot') as string },
-                { translateY: -12 * u },
-              ],
+              opacity: baseMouthOp as number,
+              transform: [{ rotate: rot('mouthRot') as string }],
             },
           ]}
         >
-          {mouthBase}
+          {layer('mouth', REGIONS.mouth)}
         </Animated.View>
-        {/* sorriso por cima da boca base (com fundo da cor da pele) */}
-        <Animated.View style={[box(u, 50, 62, 28, 16), { opacity: smileOp as number }]}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: skin }]} />
-          <View style={[box(u, 14, 7, 20, 10), styles.smileArc(10 * u, 3.2 * u)]} />
-        </Animated.View>
-        <Animated.View
-          style={[
-            box(u, 50, 64.5, 12, 4),
-            {
-              opacity: ch('biteOpacity') as number,
-              backgroundColor: '#F5F1E6',
-              borderRadius: 2 * u,
-              borderWidth: 0.8 * u,
-              borderColor: INK,
-            },
-          ]}
-        />
-        <Animated.View
-          style={[
-            box(u, 50, 68, 9, 10),
-            {
-              backgroundColor: '#E56F86',
-              borderBottomLeftRadius: 5 * u,
-              borderBottomRightRadius: 5 * u,
-              opacity: ch('tongueOpacity') as number,
-              transform: [{ translateY: ch('tongueY', u) as number }],
-            },
-          ]}
-        />
-        {accessory}
+        {has('smileOpacity') ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              box(u, 50, 63.5, 18, 9),
+              {
+                opacity: smileOp as number,
+                borderBottomLeftRadius: 9 * u,
+                borderBottomRightRadius: 9 * u,
+                borderBottomWidth: 3 * u,
+                borderLeftWidth: 3 * u,
+                borderRightWidth: 3 * u,
+                borderColor: LIP,
+              },
+            ]}
+          />
+        ) : null}
+        {has('biteOpacity') ? (
+          <Animated.View
+            style={[
+              box(u, 50, 64, 12, 4),
+              {
+                opacity: ch('biteOpacity') as number,
+                backgroundColor: '#F5F1E6',
+                borderRadius: 2 * u,
+                borderWidth: 0.8 * u,
+                borderColor: INK,
+              },
+            ]}
+          />
+        ) : null}
+        {/* interior da boca e língua: ocultos no rig, só aparecem no sinal de língua */}
+        {has('tongueOpacity') ? (
+          <Animated.View
+            style={[
+              at(REGIONS.tongue),
+              {
+                opacity: ch('tongueOpacity') as number,
+                transform: [{ translateY: ch('tongueY', u) as number }],
+              },
+            ]}
+          >
+            {layer('tongue', REGIONS.tongue, true)}
+          </Animated.View>
+        ) : null}
+        <View style={at(FULL)}>{layer('front', FULL)}</View>
       </Animated.View>
 
       {props.activeId !== null ? (
@@ -583,61 +337,5 @@ export function AvatarFallback(props: AvatarFallbackProps) {
 }
 
 const styles = {
-  center: { alignItems: 'center', justifyContent: 'center' } as ViewStyle,
   marker: { position: 'absolute', width: 0, height: 0 } as ViewStyle,
-  stripe: { backgroundColor: 'rgba(255,255,255,0.4)' } as ViewStyle,
-  cord: { backgroundColor: '#F5F1E6', borderRadius: 1 } as ViewStyle,
-  dot: (d: number): ViewStyle => ({
-    width: d,
-    height: d,
-    borderRadius: d / 2,
-    backgroundColor: INK,
-  }),
-  white: (w: number, h: number): ViewStyle => ({
-    width: w,
-    height: h,
-    borderRadius: h / 2,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  }),
-  pupil: (d: number): ViewStyle => ({
-    width: d,
-    height: d,
-    borderRadius: d / 2,
-    backgroundColor: INK,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-start',
-  }),
-  glint: (d: number): ViewStyle => ({
-    width: d,
-    height: d,
-    borderRadius: d / 2,
-    backgroundColor: '#FFFFFF',
-  }),
-  slit: (w: number, h: number): ViewStyle => ({
-    width: w,
-    height: h,
-    borderRadius: h / 2,
-    backgroundColor: INK,
-  }),
-  arc: (w: number, h: number, t: number): ViewStyle => ({
-    width: w,
-    height: h,
-    borderTopLeftRadius: h,
-    borderTopRightRadius: h,
-    borderTopWidth: t,
-    borderLeftWidth: t,
-    borderRightWidth: t,
-    borderColor: INK,
-  }),
-  ink: (r: number): ViewStyle => ({ backgroundColor: INK, borderRadius: r }),
-  smileArc: (r: number, t: number): ViewStyle => ({
-    borderBottomLeftRadius: r,
-    borderBottomRightRadius: r,
-    borderBottomWidth: t,
-    borderLeftWidth: t,
-    borderRightWidth: t,
-    borderColor: INK,
-  }),
 };
