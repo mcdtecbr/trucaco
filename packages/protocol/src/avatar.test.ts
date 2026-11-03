@@ -11,7 +11,14 @@ const valid = { ...DEFAULT_AVATAR_PARTS };
 
 describe('catálogo de partes do avatar', () => {
   it('contagens combinadas', () => {
-    expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([4, 6, 8, 4, 4, 6, 3, 8]);
+    expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([
+      4, 8, 8, 4, 4, 6, 3, 8, 8, 3, 11,
+    ]);
+    expect(AVATAR_PART_KEYS.slice(-3)).toEqual(['hair_color', 'eye_color', 'outfit_color']);
+  });
+
+  it('cores novas começam em 0 por padrão', () => {
+    expect(DEFAULT_AVATAR_PARTS).toMatchObject({ hair_color: 0, eye_color: 0, outfit_color: 0 });
   });
 
   it('o padrão é válido', () => {
@@ -20,6 +27,17 @@ describe('catálogo de partes do avatar', () => {
 });
 
 describe('parseAvatarParts', () => {
+  it.each(['hair_color', 'eye_color', 'outfit_color'] as const)(
+    'rejeita avatar sem %s e índice fora do intervalo',
+    (key) => {
+      const without = Object.fromEntries(Object.entries(valid).filter(([k]) => k !== key));
+      expect(parseAvatarParts(without)).toBeNull();
+      expect(parseAvatarParts({ ...valid, [key]: AVATAR_PART_COUNTS[key] })).toBeNull();
+      expect(parseAvatarParts({ ...valid, [key]: -1 })).toBeNull();
+      expect(parseAvatarParts({ ...valid, [key]: AVATAR_PART_COUNTS[key] - 1 })).not.toBeNull();
+    },
+  );
+
   it('aceita o último índice de cada parte e voice do catálogo', () => {
     const max = Object.fromEntries(AVATAR_PART_KEYS.map((k) => [k, AVATAR_PART_COUNTS[k] - 1]));
     for (const voice of VOICE_IDS) {

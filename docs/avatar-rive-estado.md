@@ -12,8 +12,8 @@ O catálogo de variantes, o contrato de sinais e o fallback vetorial agora descr
 | Piscar         | `wink` (olho esquerdo) usa `trig_wink_l`; `wink_r` usa `trig_wink_r`.                                                                                                                                                                |
 | Sinais novos   | 15 sinais, com `mouth_l` e `mouth_r`.                                                                                                                                                                                                |
 | Variantes      | `PART_VARIANT_NAMES`, `SKIN_COLORS`, `BG_COLORS` etc. seguem o `.riv`; o fallback renderiza os mesmos paths (`packages/avatar/src/art.ts`) com `react-native-svg`.                                                                   |
-| Piscar do idle | Variável (3 estados em 1,5x, 1x e 0,65x com Randomize Exit); a prévia do editor alternou os estados.                                                                                                                                                   |
-| Splash         | **Resolvido (03/11/2026):** Cadet assinado; o `.riv` reexportado só tem o artboard `Avatar` (ver "Licença do Rive").                                                                                                                |
+| Piscar do idle | Variável (3 estados em 1,5x, 1x e 0,65x com Randomize Exit); a prévia do editor alternou os estados.                                                                                                                                 |
+| Splash         | **Resolvido (03/11/2026):** Cadet assinado; o `.riv` reexportado só tem o artboard `Avatar` (ver "Licença do Rive").                                                                                                                 |
 
 Convenção de lado: `_l` e `_r` são o lado da tela de quem vê o avatar; só `wink` guarda o significado do zap.
 
@@ -120,6 +120,23 @@ Ações antes de publicar: (1) ler os Termos de Serviço em rive.app (frase sobr
 `Avatar.web.tsx` testado contra o `assets/rive/avatar.riv` real, empacotado com esbuild numa página local (React 19 + `@rive-app/react-canvas`, wasm local): carrega o `.riv`; aplica as 8 dimensões (troca de rosto, pele, cabelo, olhos, boca, roupa, acessório e fundo confirmada visualmente); valores inválidos (`hair: 99`, `skin: 'x'`) caem no avatar padrão; `fireSignal('wink_l')` altera o canvas por ~1 s e volta; quatro instâncias na mesma página (uma de 256 px e três de 64 px); a 64 px o rosto, o cabelo, o boné e a cor de pele são distinguíveis. **Splash do Rive:** no plano gratuito o runtime mostra uma tela preta com o logo do Rive por vários segundos antes do avatar (ver pendência de licença). Typecheck estrito de `Avatar.web.tsx` com os pacotes reais passa; o `pnpm typecheck` do `packages/ui` falha no repositório só porque `@rive-app/react-canvas`, `typescript` e os tipos não estão instalados no pacote (peerDependencies `*`). **Não testado:** `Avatar.native.tsx` (precisa de `rive-react-native` em dispositivo).
 
 Próximos passos de estrutura: cada opção de um Solo precisa ser **um único filho** (agrupar as partes de uma opção, ex.: `eye_white_N` + `eye_pupil_N` + espelhos); opções sem peça (ex.: cabelo posterior inexistente) precisam de um nó vazio.
+
+## Fatia 1: cores (04/11/2026)
+
+Ampliação do catálogo, fatia 1 de 5 (ADR 0004). `.riv` de 22,6 KB, só o artboard `Avatar`, state machine `Main`, **11 Numbers e 15 triggers**, 60 FPS no runtime web.
+
+- Timelines novas: `skin_6` e `skin_7`, `hair_color_0..7`, `eye_color_0..2` e `outfit_color_0..10`.
+- Três layers novas (`hair_color`, `eye_color`, `outfit_color`), cada uma com Entry para `_0` e Any State para `_n` por `input = n`.
+- Para evitar colisão de hex, o botão do polo passou a `#F8FAFC` e a coroa do boné a `#1E2836` (também em `art.ts`).
+- Validado no runtime web (`@rive-app/canvas` 2.21.6): 8 peles, 8 cabelos, 3 olhos e 11 roupas (polo, colete e regata) corretos, mais 4 combinações misturadas. Aparelho iOS/Android não testado.
+- **Divergência com o fallback:** pescoço (base alargada), sombra do queixo (Multiply 75% com Feather) e nariz (Multiply 70% com Feather 5) foram ajustados só no Rive; `art.ts` e o fallback vetorial ainda não têm esses ajustes.
+
+Receitas do editor aprendidas:
+
+- Criar timeline pelo "+" de Animations, **esperando 1 s antes de digitar o nome**. Renomear depois não funciona: errou o nome, apague e crie de novo.
+- Editar cor por hex em Selected Colors, com **duplo clique** no valor; no modo Animate vira keyframe sozinho.
+- Transições: clique direito no estado e "Connect to...". A condição (`input = n`) se edita na seta da transição.
+- **Cuidado com hex repetido entre peças:** Selected Colors agrupa por valor, então editar um hex muda todas as peças que o compartilham, inclusive as que não deveriam mudar (foi o caso do botão do polo e da coroa do boné). Dê um hex único à peça que não deve acompanhar a cor antes de editar.
 
 ## Cor de pele por Number: CONFIRMADA no editor (03/11/2026)
 

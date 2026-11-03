@@ -4,13 +4,13 @@
  * Só caminhos absolutos M/L/C/Q/Z (contagem de vértices confiável). Sem bitmaps.
  */
 import { type AvatarPartKey, type AvatarParts } from '@trucaco/protocol';
-import { BG_COLORS, HAIR_COLOR, SKIN_COLORS } from './parts';
+import { BG_COLORS, EYE_COLORS, HAIR_COLORS, OUTFIT_COLORS, SKIN_COLORS } from './parts';
 
-const HAIR = HAIR_COLOR;
+const HAIR = 'hair';
 const LIP = '#B4443A';
 const K = 0.5523;
 
-export type Fill = string | 'skin' | 'shade' | 'bg';
+export type Fill = string | 'skin' | 'shade' | 'bg' | 'hair' | 'outfit' | 'iris';
 export type Cfg = Readonly<Pick<AvatarParts, AvatarPartKey>>;
 
 export interface Part {
@@ -67,14 +67,14 @@ export const PARTS: readonly Part[] = [
   {
     name: 'outfit_tee_crew',
     layer: 3,
-    fill: '#E5E7EB',
+    fill: 'outfit',
     when: is('outfit', 0),
     d: 'M100,512Q100,440 190,420Q256,452 322,420Q412,440 412,512Z',
   },
   {
     name: 'outfit_tee_v',
     layer: 3,
-    fill: '#F2A0A0',
+    fill: 'outfit',
     when: is('outfit', 1),
     d: 'M100,512Q100,440 190,420L256,486L322,420Q412,440 412,512Z',
   },
@@ -88,7 +88,7 @@ export const PARTS: readonly Part[] = [
   {
     name: 'outfit_polo',
     layer: 3,
-    fill: '#0EA5E9',
+    fill: 'outfit',
     when: is('outfit', 2),
     d: 'M100,512Q100,440 190,420Q256,448 322,420Q412,440 412,512Z',
   },
@@ -102,14 +102,14 @@ export const PARTS: readonly Part[] = [
   {
     name: 'outfit_polo_buttons',
     layer: 3,
-    fill: '#F9FAFB',
+    fill: '#F8FAFC',
     when: is('outfit', 2),
     d: ell(256, 482, 5, 5) + ell(256, 502, 5, 5),
   },
   {
     name: 'outfit_shirt',
     layer: 3,
-    fill: '#7C2D12',
+    fill: 'outfit',
     when: is('outfit', 3),
     d: 'M100,512Q100,440 190,420L256,470L322,420Q412,440 412,512Z',
   },
@@ -137,7 +137,7 @@ export const PARTS: readonly Part[] = [
   {
     name: 'outfit_vest',
     layer: 3,
-    fill: '#1F2937',
+    fill: 'outfit',
     when: is('outfit', 4),
     d: 'M118,512Q112,452 192,426L238,512Z' + 'M394,512Q400,452 320,426L274,512Z',
   },
@@ -151,7 +151,7 @@ export const PARTS: readonly Part[] = [
   {
     name: 'outfit_tank',
     layer: 3,
-    fill: '#F9FAFB',
+    fill: 'outfit',
     when: is('outfit', 5),
     d: 'M150,512L168,432Q190,430 214,438Q256,470 298,438Q322,430 344,432L362,512Z',
   },
@@ -203,11 +203,11 @@ export const PARTS: readonly Part[] = [
     mirror: true,
     d: 'M180,228Q210,204 240,228Q210,250 180,228Z',
   },
-  { name: 'eye_pupil_0', layer: 5, fill: '#1B1B1F', when: is('eyes', 0), d: ell(212, 228, 11, 11) },
+  { name: 'eye_pupil_0', layer: 5, fill: 'iris', when: is('eyes', 0), d: ell(212, 228, 11, 11) },
   {
     name: 'eye_pupil_0_r',
     layer: 5,
-    fill: '#1B1B1F',
+    fill: 'iris',
     when: is('eyes', 0),
     mirror: true,
     d: ell(212, 228, 11, 11),
@@ -230,14 +230,14 @@ export const PARTS: readonly Part[] = [
   {
     name: 'eye_pupil_1',
     layer: 5,
-    fill: '#1B1B1F',
+    fill: 'iris',
     when: is('eyes', 1),
     d: ell(212, 236, 9, 8) + 'M176,232L244,222L244,230Q210,232 176,242Z',
   },
   {
     name: 'eye_pupil_1_r',
     layer: 5,
-    fill: '#1B1B1F',
+    fill: 'iris',
     when: is('eyes', 1),
     mirror: true,
     d: ell(212, 236, 9, 8) + 'M176,232L244,222L244,230Q210,232 176,242Z',
@@ -251,11 +251,11 @@ export const PARTS: readonly Part[] = [
     mirror: true,
     d: ell(208, 236, 36, 38),
   },
-  { name: 'eye_pupil_2', layer: 5, fill: '#1B1B1F', when: is('eyes', 2), d: ell(212, 240, 20, 22) },
+  { name: 'eye_pupil_2', layer: 5, fill: 'iris', when: is('eyes', 2), d: ell(212, 240, 20, 22) },
   {
     name: 'eye_pupil_2_r',
     layer: 5,
-    fill: '#1B1B1F',
+    fill: 'iris',
     when: is('eyes', 2),
     mirror: true,
     d: ell(212, 240, 20, 22),
@@ -275,11 +275,11 @@ export const PARTS: readonly Part[] = [
     mirror: true,
     d: 'M176,230Q210,214 246,230Q210,242 176,230Z',
   },
-  { name: 'eye_pupil_3', layer: 5, fill: '#1B1B1F', when: is('eyes', 3), d: ell(212, 230, 10, 7) },
+  { name: 'eye_pupil_3', layer: 5, fill: 'iris', when: is('eyes', 3), d: ell(212, 230, 10, 7) },
   {
     name: 'eye_pupil_3_r',
     layer: 5,
-    fill: '#1B1B1F',
+    fill: 'iris',
     when: is('eyes', 3),
     mirror: true,
     d: ell(212, 230, 10, 7),
@@ -415,7 +415,7 @@ export const PARTS: readonly Part[] = [
   {
     name: 'cap_crown',
     layer: 7,
-    fill: '#1F2937',
+    fill: '#1E2836',
     tilt: TILT_CAP,
     when: is('hair', 5),
     d: 'M150,170C150,100 200,76 256,76C312,76 362,100 362,170Z',
@@ -466,6 +466,13 @@ export function resolveFill(fill: Fill, c: Cfg): string {
   if (fill === 'skin') return (SKIN_COLORS[c.skin] ?? SKIN_COLORS[0]!).base;
   if (fill === 'shade') return (SKIN_COLORS[c.skin] ?? SKIN_COLORS[0]!).shade;
   if (fill === 'bg') return BG_COLORS[c.bg_color] ?? BG_COLORS[0]!;
+  if (fill === 'hair') return HAIR_COLORS[c.hair_color] ?? HAIR_COLORS[0]!;
+  if (fill === 'iris') return EYE_COLORS[c.eye_color] ?? EYE_COLORS[0]!;
+  if (fill === 'outfit') {
+    // outfit_color 0 = cor própria do modelo (preserva o visual de quem nunca escolheu cor).
+    const i = c.outfit_color === 0 ? c.outfit : c.outfit_color;
+    return OUTFIT_COLORS[i] ?? OUTFIT_COLORS[0]!;
+  }
   return fill;
 }
 

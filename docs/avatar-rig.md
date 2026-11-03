@@ -20,16 +20,21 @@ Documento para o ilustrador. É autocontido: com ele se produz o arquivo `.riv` 
 
 Cada input recebe o **índice** da variante (0 até n-1). O valor padrão de todos é 0. Qualquer combinação de índices deve montar um avatar sem sobreposição quebrada. Valor fora do intervalo não será enviado (o cliente valida), mas a state machine deve tratá-lo como 0.
 
-| Input (Number) | Variantes | O que controla                |
-| -------------- | --------- | ----------------------------- |
-| `face_shape`   | 4         | Formato do rosto              |
-| `skin`         | 6         | Cor da pele                   |
-| `hair`         | 8         | Cabelo (estilo e cor juntos)  |
-| `eyes`         | 4         | Estilo dos olhos              |
-| `mouth`        | 4         | Estilo da boca                |
-| `outfit`       | 6         | Roupa (modelo e cor juntos)   |
-| `accessory`    | 3         | Acessório (índice 0 = nenhum) |
-| `bg_color`     | 8         | Cor do círculo de fundo       |
+| Input (Number) | Variantes | O que controla                      |
+| -------------- | --------- | ----------------------------------- |
+| `face_shape`   | 4         | Formato do rosto                    |
+| `skin`         | 8         | Cor da pele                         |
+| `hair`         | 8         | Cabelo (estilo e cor juntos)        |
+| `eyes`         | 4         | Estilo dos olhos                    |
+| `mouth`        | 4         | Estilo da boca                      |
+| `outfit`       | 6         | Roupa (modelo e cor juntos)         |
+| `accessory`    | 3         | Acessório (índice 0 = nenhum)       |
+| `bg_color`     | 8         | Cor do círculo de fundo             |
+| `hair_color`   | 8         | Cor do cabelo, sobrancelha e bigode |
+| `eye_color`    | 3         | Cor da pupila                       |
+| `outfit_color` | 11        | Cor da roupa (0 = padrão do modelo) |
+
+São **11 Numbers** (ADR 0004). Cor é dimensão própria, separada da forma: `hair_color` vale para cabelo, sobrancelha e bigode (boné e chapéu não mudam); `eye_color` recolore a pupila; `outfit_color` 0 usa a cor principal de cada modelo de roupa e 1 a 10 aplicam a paleta (`OUTFIT_COLORS`). As chaves novas ficam ao fim de `AVATAR_PART_KEYS`.
 
 Os nomes são exatamente estes (minúsculas, sublinhado). O catálogo e as contagens vivem em `@trucaco/protocol` (`AVATAR_PART_KEYS`, `AVATAR_PART_COUNTS`).
 
@@ -70,11 +75,14 @@ Os estados ociosos ficam em camadas (layers) independentes da camada dos sinais,
 O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma lista está em `PART_VARIANT_NAMES` (`packages/avatar/src/parts.ts`).
 
 - **`face_shape` (4)**: 0 oval; 1 quadrado; 2 triângulo (queixo em ponta); 3 redondo.
-- **`skin` (6)**, cor base / sombra: 0 clara (#FCE4D6 / #E8B89B); 1 dourada (#E0AC69 / #C68943); 2 morena (#B87B42 / #945927); 3 marrom (#8D5524 / #673B15); 4 marrom escura (#523219 / #361F0E); 5 terrosa (#C67D5A / #A15538).
-- **`hair` (8)**, todos na cor #2B1B12 (uma cor só; a variante é o estilo): 0 careca; 1 curto; 2 afro; 3 longo (cai dos dois lados do rosto, parte atrás); 4 coque; 5 boné (azul-escuro com aba); 6 chapéu (bege com aba larga); 7 topete.
+- **`skin` (8)**, cor base / sombra: 0 clara (#FCE4D6 / #E8B89B); 1 dourada (#E0AC69 / #C68943); 2 morena (#B87B42 / #945927); 3 marrom (#8D5524 / #673B15); 4 marrom escura (#523219 / #361F0E); 5 terrosa (#C67D5A / #A15538); 6 oliva (#C9A56B / #A07E45); 7 rosada (#F1C2AE / #D49A84).
+- **`hair` (8)**, só o estilo (a cor vem de `hair_color`): 0 careca; 1 curto; 2 afro; 3 longo (cai dos dois lados do rosto, parte atrás); 4 coque; 5 boné (azul-escuro com aba); 6 chapéu (bege com aba larga); 7 topete.
 - **`eyes` (4)**: 0 normal; 1 sonolento; 2 grande; 3 pequeno.
 - **`mouth` (4)**: 0 sorriso suave; 1 sorriso largo; 2 aberta; 3 pequena. Lábios #B4443A.
-- **`outfit` (6)**: 0 camiseta cinza (#E5E7EB), gola redonda; 1 camiseta rosa (#F2A0A0) gola V, mostra pele; 2 polo azul (#0EA5E9) com gola e botões; 3 camisa marrom (#7C2D12) de botões; 4 colete escuro (#1F2937) sobre camisa branca; 5 regata branca (#F9FAFB), mostra pele.
+- **`outfit` (6)**, modelo (cores abaixo são o padrão, `outfit_color` 0): 0 camiseta cinza (#E5E7EB), gola redonda; 1 camiseta rosa (#F2A0A0) gola V, mostra pele; 2 polo azul (#0EA5E9) com gola e botões; 3 camisa marrom (#7C2D12) de botões; 4 colete escuro (#1F2937) sobre camisa branca; 5 regata branca (#F9FAFB), mostra pele.
+- **`hair_color` (8)**: 0 castanho escuro (#2B1B12); 1 preto (#14110F); 2 castanho (#5A3A22); 3 loiro (#E3C16F); 4 ruivo (#B7461B); 5 grisalho (#A9ADB3); 6 azul (#2B6CB0); 7 rosa (#D64C8F).
+- **`eye_color` (3)**: 0 escuro (#1B1B1F); 1 castanho (#6B3F1F); 2 azul (#2B72C9).
+- **`outfit_color` (11)**: 0 padrão do modelo; 1 a 10 = índices 1 a 10 de `OUTFIT_COLORS` em `packages/avatar/src/parts.ts` (rosa, azul claro, marrom, grafite, branco, preto, azul, vermelho, verde, amarelo).
 - **`accessory` (3)**: 0 nenhum; 1 bigode (cor do cabelo); 2 brinco dourado (#F5B301). Óculos e boné de acessório **não existem**: os óculos escondem o piscar de olho, base dos sinais (ADR 0003).
 - **`bg_color` (8)**: 0 verde (#1E5631); 1 azul (#1D4ED8); 2 vermelho (#991B1B); 3 laranja (#D97706); 4 cinza (#4B5563); 5 roxo (#581C87); 6 laranja escuro (#C2410C); 7 turquesa (#0F766E). Cor chapada, sem degradê.
 

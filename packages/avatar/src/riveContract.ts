@@ -34,4 +34,7 @@ export const RIVE_INPUT_DOCS: Readonly<Record<AvatarPartKey, string>> = {
   outfit: 'Number: roupa',
   accessory: 'Number: acessório (0 = nenhum, 1 = bigode, 2 = brinco)',
   bg_color: 'Number: cor do fundo',
+  hair_color: 'Number: cor do cabelo, sobrancelhas e bigode',
+  eye_color: 'Number: cor da íris',
+  outfit_color: 'Number: cor principal da roupa (0 = padrão do modelo)',
 };

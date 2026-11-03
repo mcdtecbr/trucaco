@@ -1,6 +1,6 @@
 # Protocolo cliente ↔ servidor
 
-Referência curta do contrato entre o cliente (`apps/mobile`, Fase 3) e o servidor (`apps/server`). Fonte da verdade: `packages/protocol` (tipos, catálogos e `parseClientMessage`), `apps/server/src/http/` (REST) e `apps/server/src/rooms/TrucoRoom.ts` (sala). Operação, variáveis de ambiente e limites detalhados: `apps/server/README.md`. Versão do protocolo: `PROTOCOL_VERSION = 2` (`GET /health` devolve `{ "status": "ok", "protocol": 2 }`).
+Referência curta do contrato entre o cliente (`apps/mobile`, Fase 3) e o servidor (`apps/server`). Fonte da verdade: `packages/protocol` (tipos, catálogos e `parseClientMessage`), `apps/server/src/http/` (REST) e `apps/server/src/rooms/TrucoRoom.ts` (sala). Operação, variáveis de ambiente e limites detalhados: `apps/server/README.md`. Versão do protocolo: `PROTOCOL_VERSION = 3` (`GET /health` devolve `{ "status": "ok", "protocol": 3 }`).
 
 Ao divergir deste texto, o código vence e este documento deve ser corrigido. Itens marcados **a confirmar** dependem de decisão ou de validação ainda não feita.
 
@@ -230,8 +230,8 @@ A sala de espera é a "preparação": a dupla combina o significado dos sinais p
 
 ## Avatar
 
-`AvatarParts` (`packages/protocol/src/avatar.ts`): 8 partes inteiras, índice `0..n-1`, mais `voice` opcional. Contagens (`AVATAR_PART_COUNTS`): `face_shape` 4, `skin` 6, `hair` 8, `eyes` 4, `mouth` 4, `outfit` 6, `accessory` 3, `bg_color` 8; `voice` em `VOICE_IDS` (Fase 5b). O catálogo só cresce.
+`AvatarParts` (`packages/protocol/src/avatar.ts`): 11 partes inteiras, índice `0..n-1`, mais `voice` opcional. Contagens (`AVATAR_PART_COUNTS`): `face_shape` 4, `skin` 8, `hair` 8, `eyes` 4, `mouth` 4, `outfit` 6, `accessory` 3, `bg_color` 8, `hair_color` 8, `eye_color` 3, `outfit_color` 11; `voice` em `VOICE_IDS` (Fase 5b). O catálogo só cresce.
 
 - `PUT /me/avatar { parts }`: validado por `parseAvatarParts` (chaves exatas, sem chave extra, inteiros no intervalo, `voice` do catálogo). Qualquer outra coisa (texto livre incluso) é `400 INVALID_AVATAR`. A resposta devolve a cópia canônica.
-- `GET /me`: `avatar` é `AvatarParts | null`. Avatar gravado fora do catálogo (formato antigo) volta como `null`, sem erro; o cliente usa `DEFAULT_AVATAR_PARTS`. A migração `20261103150000_avatar_accessory_3` leva `accessory` 3/4 gravados (catálogo antigo, com óculos) para 0, preservando as outras partes; a coluna `parts` (JSON) não mudou de formato.
+- `GET /me`: `avatar` é `AvatarParts | null`. Avatar gravado fora do catálogo (formato antigo) volta como `null`, sem erro; o cliente usa `DEFAULT_AVATAR_PARTS`. A migração `20261103150000_avatar_accessory_3` leva `accessory` 3/4 gravados (catálogo antigo, com óculos) para 0, preservando as outras partes; a coluna `parts` (JSON) não mudou de formato. A migração `20261104120000_avatar_cores` acrescenta `hair_color` 0, `eye_color` 0 e `outfit_color` (cópia de `outfit`) aos avatares gravados, porque `parseAvatarParts` recusa o avatar inteiro se faltar chave (ADR 0004). `PROTOCOL_VERSION` foi a 3 por isso.
 - `players[i].avatar` no estado da mesa segue sendo o JSON em texto das partes do banco (`'{}'` sem avatar ou com avatar inválido). O cliente faz `parseAvatarParts(JSON.parse(...)) ?? DEFAULT_AVATAR_PARTS`.

@@ -4,6 +4,27 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Avatar: ampliação do catálogo, fatia 1 (cores) (2026-11-04), ainda sem commit
+
+Decisão em `docs/adr/0004-catalogo-do-avatar-cor-separada-de-forma.md`. Não validado em aparelho iOS/Android.
+
+#### Adicionado
+
+- `AvatarParts` ganha `hair_color` (8), `eye_color` (3) e `outfit_color` (11, 0 = padrão do modelo), ao fim de `AVATAR_PART_KEYS`; paletas `HAIR_COLORS`, `EYE_COLORS` e `OUTFIT_COLORS` ampliada em `packages/avatar/src/parts.ts`.
+- Migração de dados `20261104120000_avatar_cores` (idempotente).
+- Editor de avatar com as três cores, cada uma logo depois da sua forma.
+- `avatar.riv` (22,6 KB) com 11 Numbers, timelines e layers das cores.
+
+#### Alterado
+
+- `skin` passa de 6 para 8 opções (oliva e rosado).
+- `PROTOCOL_VERSION` de 2 para 3; `parseAvatarParts` segue estrito (falta de chave recusa o avatar).
+- Botão do polo `#F8FAFC` e coroa do boné `#1E2836`, para não colidir com outras cores no editor Rive.
+
+#### Divergências conhecidas
+
+- Pescoço, sombra do queixo e nariz foram ajustados só no Rive; `art.ts` e o fallback vetorial ainda não os têm.
+
 ### Fase 5: chat da dupla e combinado de sinais (2026-11-03), concluída com ressalvas
 
 Ressalvas: iOS, Android, leitor de tela, Safari e Firefox não foram testados; a silenciagem nativa (`expo-secure-store`) não foi validada em aparelho; o combinado de convidado some ao sair da conta e não tem expurgo; o estado da sala continua em memória por processo. Pendências (P3 da revisão, rota de retomada da fila pública): `docs/specs/2026-11-03-fase-5-relatorio.md`. Balões de chat na mesa (4 s) já existiam desde a Fase 3 (3H3).

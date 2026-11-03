@@ -155,7 +155,7 @@ describe('repositórios em memória (espelham as regras do SQL)', () => {
     const badParts: unknown[] = [
       { skin: 1, hat: 'cap', glasses: null, beard: false },
       { ...DEFAULT_AVATAR_PARTS, extra: 1 },
-      { ...DEFAULT_AVATAR_PARTS, skin: 6 },
+      { ...DEFAULT_AVATAR_PARTS, skin: 8 },
       { ...DEFAULT_AVATAR_PARTS, hair: '1' },
       { nested: { a: 1 } },
     ];

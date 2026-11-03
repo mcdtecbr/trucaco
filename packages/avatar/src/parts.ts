@@ -7,7 +7,7 @@ import { AVATAR_PART_COUNTS, type AvatarPartKey } from '@trucaco/protocol';
  */
 export const PART_VARIANT_NAMES: Readonly<Record<AvatarPartKey, readonly string[]>> = {
   face_shape: ['oval', 'quadrado', 'triângulo', 'redondo'],
-  skin: ['clara', 'dourada', 'morena', 'marrom', 'marrom escura', 'terrosa'],
+  skin: ['clara', 'dourada', 'morena', 'marrom', 'marrom escura', 'terrosa', 'oliva', 'rosada'],
   hair: ['careca', 'curto', 'afro', 'longo', 'coque', 'boné', 'chapéu', 'topete'],
   eyes: ['normal', 'sonolento', 'grande', 'pequeno'],
   mouth: ['sorriso suave', 'sorriso largo', 'aberta', 'pequena'],
@@ -21,6 +21,31 @@ export const PART_VARIANT_NAMES: Readonly<Record<AvatarPartKey, readonly string[
   ],
   accessory: ['nenhum', 'bigode', 'brinco'],
   bg_color: ['verde', 'azul', 'vermelho', 'laranja', 'cinza', 'roxo', 'laranja escuro', 'turquesa'],
+  hair_color: [
+    'castanho escuro',
+    'preto',
+    'castanho',
+    'loiro',
+    'ruivo',
+    'grisalho',
+    'azul',
+    'rosa',
+  ],
+  eye_color: ['escuro', 'castanho', 'azul'],
+  // Índice 0 = cor própria de cada modelo de roupa; 1..10 = cor escolhida (ver `resolveFill`).
+  outfit_color: [
+    'padrão da roupa',
+    'rosa',
+    'azul claro',
+    'marrom',
+    'grafite',
+    'branco',
+    'preto',
+    'azul',
+    'vermelho',
+    'verde',
+    'amarelo',
+  ],
 };
 
 /** Cor base e de sombra de cada pele, na ordem do input `skin` do rig. */
@@ -36,12 +61,32 @@ export const SKIN_COLORS: readonly SkinColor[] = [
   { base: '#8D5524', shade: '#673B15' },
   { base: '#523219', shade: '#361F0E' },
   { base: '#C67D5A', shade: '#A15538' },
+  { base: '#C9A56B', shade: '#A07E45' },
+  { base: '#F1C2AE', shade: '#D49A84' },
 ];
 
-/** O rig tem uma única cor de cabelo; o estilo é a variante de `hair`. */
-export const HAIR_COLOR = '#2B1B12';
+/** Cores de cabelo, sobrancelha e bigode (input `hair_color`). Boné e chapéu não mudam. */
+export const HAIR_COLORS: readonly string[] = [
+  '#2B1B12',
+  '#14110F',
+  '#5A3A22',
+  '#E3C16F',
+  '#B7461B',
+  '#A9ADB3',
+  '#2B6CB0',
+  '#D64C8F',
+];
 
-/** Cor principal de cada roupa (rótulo/UI; o desenho completo vem de `art.ts`). */
+/** Cor padrão do cabelo (índice 0). Mantida por compatibilidade. */
+export const HAIR_COLOR = HAIR_COLORS[0]!;
+
+/** Cores da íris/pupila (input `eye_color`). */
+export const EYE_COLORS: readonly string[] = ['#1B1B1F', '#6B3F1F', '#2B72C9'];
+
+/**
+ * Cores da roupa (input `outfit_color`). Índices 0..5 são as cores próprias dos 6 modelos (o modelo `n` usa
+ * `OUTFIT_COLORS[n]`); 6..10 são cores extras. `outfit_color` 0 = "padrão do modelo" (ver `resolveFill`).
+ */
 export const OUTFIT_COLORS: readonly string[] = [
   '#E5E7EB',
   '#F2A0A0',
@@ -49,6 +94,11 @@ export const OUTFIT_COLORS: readonly string[] = [
   '#7C2D12',
   '#1F2937',
   '#F9FAFB',
+  '#111827',
+  '#1D4ED8',
+  '#B91C1C',
+  '#15803D',
+  '#FACC15',
 ];
 
 export const BG_COLORS: readonly string[] = [

@@ -3,7 +3,7 @@ import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@tru
 import { SIGNALS } from '@trucaco/avatar';
 import { describe, expect, it, vi } from 'vitest';
 import { initialAvatar, samePartsAs } from './avatarEditorState';
-import { AvatarEditorView, PART_TITLES, variantLabel } from './AvatarEditorView';
+import { AvatarEditorView, EDITOR_PART_ORDER, PART_TITLES, variantLabel } from './AvatarEditorView';
 import type { AvatarEditorViewProps } from './AvatarEditorView';
 import { SeatAvatar } from './SeatAvatar';
 import { SignalPanel } from './SignalPanel';
@@ -85,6 +85,15 @@ describe('AvatarEditorView', () => {
     expect(failed).toContain('Sem conexão.');
     expect(failed).toContain('avatar-reload');
     expect(failed).toContain('avatar-back');
+  });
+
+  it('o editor mostra cada cor logo depois da sua forma e cobre todas as chaves', () => {
+    expect([...EDITOR_PART_ORDER].sort()).toEqual([...AVATAR_PART_KEYS].sort());
+    const i = (k: (typeof EDITOR_PART_ORDER)[number]) => EDITOR_PART_ORDER.indexOf(k);
+    expect(i('hair_color')).toBe(i('hair') + 1);
+    expect(i('eye_color')).toBe(i('eyes') + 1);
+    expect(i('outfit_color')).toBe(i('outfit') + 1);
+    expect(PART_TITLES.hair_color).toBe('Cor do cabelo');
   });
 
   it('rótulos vêm do catálogo; índice além do catálogo vira "Opção N"', () => {
