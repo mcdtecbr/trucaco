@@ -80,7 +80,17 @@ Pedido do usuário: piscar um olho ou o outro, e torcer a boca para um lado ou p
 - **Torção de boca:** `sig_mouth_l` (+10°) e `sig_mouth_r` (−10°) giram o Solo da boca (pivô na altura do nariz, então a boca também desloca ~11 px para o lado) e reduzem a escala X a 90%, chaves em 0, 30 e 60 quadros. Funciona com qualquer opção de boca, mas é rotação do conjunto, não deformação dos vértices.
 - Estados `sig_wink`, `sig_wink_r`, `sig_mouth_l`, `sig_mouth_r` na layer `Signal_Triggers`, cada um com Idle → estado pelo trigger e volta com Exit Time de 1000 ms.
 
-### Ossos: teste feito, migração adiada (03/11/2026)
+### Ossos: cabeça rígida feita (03/11/2026, depois)
+
+Decisão do usuário: **cabeça rígida**, sem Weight (a torção de boca continua sendo a rotação do Solo, não deformação de vértices). Feito no editor e exportado (`avatar.riv` de 16,8 KB, validado no runtime web: 15 triggers, 8 Numbers, 60 FPS, só o artboard `Avatar`):
+
+- `Root Bone 2` no nível do artboard (o Rive não deixa pôr osso dentro de grupo), com um **Translation Constraint** (Offset ligado, World/World) cujo alvo é `avatar_partes`: o osso soma o movimento do corpo (respiração, aceno etc.) ao seu próprio. O `Root Bone 2` fica em (0, 0) e a posição dele vira deslocamento aditivo; `Bone 1` é filho dele, com rotação 0.
+- Penduradas no `Bone 1` por Set Parent (botão direito na linha da Hierarchy): nose, brow_r, brow_l, cabelo da frente, acessório, tongue, mouth_inside, Solo da boca, Solo dos olhos, Solo do rosto e ears. Ficam em `avatar_partes`: neck_shadow, outfit, neck, cabelo de trás e BG. As posições locais das peças não mudaram, então as chaves antigas continuam valendo.
+- **Pivô no pescoço:** o osso gira em torno da própria origem, então cada chave de rotação vem com chaves de posição calculadas: posição = (I − R(θ))·d, com d = (256, 397). Para ±6° dá cerca de (42,9; −24,58) e (−40,1; 28,93).
+- `sig_head_shake`: rotação do osso 0 → +6° → −6° → +3° → 0 (quadros 0, 15, 30, 45, 60), além do movimento do corpo que já existia. `sig_nod`: chaves de Y do osso 0, 6, 0, 6, 0 (a cabeça desce mais que o corpo). `sig_chin_up`: Y do osso 0, −8, 0 (quadros 0, 30, 60). Os outros sinais não mudaram.
+- **Não feito:** `sig_shrug` (ombros) e a torção de boca por vértices. Backup antes de mexer: arquivo `avatar-backup-pre-ossos` na mesma pasta do Rive.
+
+### Ossos: teste inicial, antes da migração (03/11/2026)
 
 Teste no editor: um osso (ferramenta Bone, em Design) com uma peça pendurada por "Set Parent" (Alt+P) leva a peça junto quando gira; o teste foi desfeito. **Decisão: seguir sem ossos e fazer a migração depois** (pendência). O que a migração exige:
 
