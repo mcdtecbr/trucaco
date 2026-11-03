@@ -512,7 +512,17 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         {puff(50 + fw / 2 - 2)}
         <Animated.View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { transform: [{ rotate: rot('mouthRot') as string }] }]}
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              // gira em torno do centro da boca (y = 62), não do centro do rosto
+              transform: [
+                { translateY: 12 * u },
+                { rotate: rot('mouthRot') as string },
+                { translateY: -12 * u },
+              ],
+            },
+          ]}
         >
           {mouthBase}
         </Animated.View>
