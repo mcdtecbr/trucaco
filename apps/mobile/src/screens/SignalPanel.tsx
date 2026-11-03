@@ -1,5 +1,5 @@
 /**
- * Painel de sinais: 15 botões (um por sinal do catálogo), enviados ao SEGURAR o botão por 400 ms (um
+ * Painel de sinais: 16 botões (um por sinal do catálogo), enviados ao SEGURAR o botão por 400 ms (um
  * toque rápido não envia, para ninguém sinalizar sem querer). O sinal é público: os 4 da mesa veem,
  * inclusive adversários. O cooldown de 3 s é do servidor; aqui só é espelhado (botões desligados).
  * Leitor de tela: a ação de acessibilidade "activate" (e o clique sintético do web) envia direto,

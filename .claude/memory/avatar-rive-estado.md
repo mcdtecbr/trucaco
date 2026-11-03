@@ -18,6 +18,7 @@ metadata:
 **Validação feita:** runtime web (`@rive-app/canvas` 2.21.6) carrega o `.riv`, lê os 15 triggers e 8 Numbers, 60 FPS com 4 instâncias; `Avatar.web` testado com o `.riv` real; FPS do fallback novo no web: 60 (CPU 1x), 59,7 ocioso e 52,5 com sinais (CPU 4x). `rivFile.test.ts` confere os nomes dos inputs dentro do `.riv`.
 
 - **Catálogo em ampliação (04/11/2026, plano do artur-arquiteto, ADR 0004):** o usuário quer o catálogo das pranchas de referência (IA, só referência, NÃO versionar), em 5 fatias: 1 Cores (feita nesta branch: `skin` 8, `hair_color` 8, `eye_color` 3, `outfit_color` 11; `outfit_color` 0 = cor padrão do modelo; PROTOCOL_VERSION 3; `.riv` de 22,6 KB com 11 Numbers + 15 triggers), 2 Boca (5 opções) + línguas e sinal `mouth_open` (o 16º), 3 Rosto (face_shape 6, nose, brows, eyes 6), 4 Cabelo/barba/chapéu, 5 sombreado opcional. Óculos continuam fora. Ajustes de pescoço/sombra/nariz feitos só no Rive ainda não estão no `art.ts`. Receitas do editor em [[rive-editor-receitas]] e `docs/avatar-rive-estado.md`.
+- **Fatia 2 (04/11/2026, ADR 0005, branch feat/avatar-boca-linguas):** `mouth` com 5 opções (sem migração), sinal `mouth_open` (16º, `trig_mouth_open`, língua centrada), `tongue` agora com língua de lado; `.riv` de 25,8 KB com 11 Numbers + 16 triggers. Falta no Rive: transição de ida de `sig_tongue` e giro de cabeça/balanço da língua (só no fallback). Solo da boca: 5 grupos todos "Group", achar pela ordem. Receitas (mover nó = Alt+P; Ctrl+G; Bring to front pelo botão direito) em `docs/avatar-rive-estado.md`.
 
 **Pendências**
 

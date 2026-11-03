@@ -6,8 +6,12 @@ import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } 
 const base = DEFAULT_AVATAR_PARTS;
 
 describe('arte do avatar (mesmos paths do rig)', () => {
-  it('tem os 65 paths do rig, com nomes únicos e orçamento de vértices', () => {
-    expect(PARTS).toHaveLength(65);
+  it('tem os 75 paths do rig, com nomes únicos e orçamento de vértices', () => {
+    // 65 (Fatia 1) + 10: boca 4 (2), interior e dentes da boca 1 (2), interior da boca 2 (1) e 5 peças
+    // ocultas da boca aberta dos sinais (dentes de cima e de baixo, lábios aberto superior e inferior,
+    // língua centrada; `mouth_inside` e `tongue` já existiam). O orçamento de vértices continua 420
+    // (total atual: 403): as peças novas cabem nele, então não foi elevado.
+    expect(PARTS).toHaveLength(75);
     expect(new Set(PARTS.map((p) => p.name)).size).toBe(PARTS.length);
     expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(420);
   });
@@ -48,10 +52,13 @@ describe('arte do avatar (mesmos paths do rig)', () => {
       for (const p of PARTS.filter((q) => q.when && !q.hidden)) {
         expect(selectParts(parts).includes(p), p.name).toBe(p.when!(parts));
       }
-      // exatamente um rosto, um olho de cada lado por estilo, uma boca (2 lábios)
+      // exatamente um rosto, um olho de cada lado por estilo, uma boca (2 lábios + interior/dentes)
       const names = selectParts(parts).map((p) => p.name);
       expect(names.filter((n) => n.startsWith('face_'))).toHaveLength(1);
-      expect(names.filter((n) => /^mouth_\d_/.test(n))).toHaveLength(2);
+      const mouthParts = names.filter((n) => /^mouth_\d_/.test(n));
+      expect(mouthParts.filter((n) => /_(upper|lower)$/.test(n))).toHaveLength(2);
+      expect(new Set(mouthParts.map((n) => n[6])).size).toBe(1); // todas da mesma boca
+      expect(mouthParts[0]).toMatch(new RegExp(`^mouth_${parts.mouth}_`));
       expect(names.filter((n) => /^eye_white_\d$/.test(n))).toHaveLength(1);
       expect(names.filter((n) => /^eye_white_\d_r$/.test(n))).toHaveLength(1);
     }
@@ -78,9 +85,21 @@ describe('arte do avatar (mesmos paths do rig)', () => {
     }
   });
 
-  it('língua e interior da boca ficam ocultos em repouso e só entram com withHidden', () => {
-    expect(groupParts('tongue', base)).toHaveLength(0);
-    expect(groupParts('tongue', base, true).map((p) => p.name)).toEqual(['mouth_inside', 'tongue']);
+  it('boca aberta e línguas ficam ocultas em repouso e só entram com withHidden', () => {
+    for (const g of ['mouthOpen', 'tongueCenter', 'tongueSide'] as const) {
+      expect(groupParts(g, base), g).toHaveLength(0);
+    }
+    expect(groupParts('mouthOpen', base, true).map((p) => p.name)).toEqual([
+      'mouth_inside',
+      'mouth_open_teeth_upper',
+      'mouth_open_teeth_lower',
+      'mouth_open_lower',
+      'mouth_open_upper',
+    ]);
+    expect(groupParts('tongueCenter', base, true).map((p) => p.name)).toEqual(['tongue_center']);
+    expect(groupParts('tongueSide', base, true).map((p) => p.name)).toEqual(['tongue']);
+    // nenhuma peça da boca aberta cai no grupo da boca escolhida
+    expect(groupParts('mouth', base, true).every((p) => /^mouth_\d_/.test(p.name))).toBe(true);
   });
 
   it('cores de pele e fundo vêm do catálogo do rig', () => {

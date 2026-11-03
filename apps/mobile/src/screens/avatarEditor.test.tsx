@@ -114,15 +114,15 @@ describe('AvatarEditorScreen: helpers', () => {
 });
 
 describe('SignalPanel', () => {
-  it('fechado: só o botão "Sinais"; os 15 botões ficam atrás dele', () => {
+  it('fechado: só o botão "Sinais"; os 16 botões ficam atrás dele', () => {
     const out = renderToStaticMarkup(<SignalPanel connected onSend={() => true} />);
     expect(out).toContain('data-testid="signal-toggle"');
     expect(out).toContain('aria-label="Abrir sinais"');
     expect(out).not.toContain('signal-grid');
   });
 
-  it('o catálogo tem 15 sinais com nome', () => {
-    expect(SIGNALS).toHaveLength(15);
+  it('o catálogo tem 16 sinais com nome', () => {
+    expect(SIGNALS).toHaveLength(16);
     for (const s of SIGNALS) expect(s.name.length).toBeGreaterThan(3);
   });
 });
