@@ -4,7 +4,7 @@
  */
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { betCry, parseLegalAction } from '@trucaco/protocol';
-import type { LegalActionId } from '@trucaco/protocol';
+import type { LegalActionId, SignalId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
   BetButtons,
@@ -29,10 +29,12 @@ import {
 import type { HandResult, LayoutMode } from '@trucaco/ui';
 import type { SeatView, TableViewModel } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
-import type { ChatBubbleEntry, LingeringTrick } from '../table/tableStore';
+import type { ActiveSignal, ChatBubbleEntry, LingeringTrick } from '../table/tableStore';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
+import { SeatAvatar } from './SeatAvatar';
+import { SignalPanel } from './SignalPanel';
 
 export interface TableViewProps {
   vm: TableViewModel;
@@ -59,6 +61,10 @@ export interface TableViewProps {
   chatUnreadTotal: number;
   /** Balão de chat por assento (4 s). */
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  /** Sinal animando por assento. */
+  signals: Readonly<Record<number, ActiveSignal>>;
+  /** Preferência do sistema: sem animação, só destaque estático. */
+  reduceMotion: boolean;
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
@@ -70,6 +76,9 @@ export interface TableViewProps {
     toggleCover(): void;
     voteCancel(): void;
     openChat(): void;
+    /** Estável (método do controlador): alimenta o `SeatAvatar` memoizado. */
+    signalEnd(seat: number, key: number): void;
+    sendSignal(id: SignalId): boolean;
     askLeave(): void;
     cancelLeave(): void;
     leave(): void;
@@ -109,25 +118,43 @@ function Bubble({
   );
 }
 
+interface SeatSignals {
+  signals: Readonly<Record<number, ActiveSignal>>;
+  reduceMotion: boolean;
+  onSignalEnd(seat: number, key: number): void;
+}
+
 function Seat({
   s,
   vm,
   bubbles,
+  fx,
 }: {
   s: SeatView;
   vm: TableViewModel;
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  fx: SeatSignals;
 }) {
+  const status = s.nickname === '' && s.status === 'connected' ? 'empty' : s.status;
   return (
     <View testID={`table-seat-${s.seat}`} style={styles.seatBox}>
       <Bubble seat={s.seat} vm={vm} bubbles={bubbles} />
       <AvatarPlaceholder
         nickname={s.nickname || '—'}
-        status={s.nickname === '' && s.status === 'connected' ? 'empty' : s.status}
+        status={status}
         side={s.side}
         active={s.isTurn}
         caption={seatCaption(s, vm)}
         layout="column"
+        avatar={
+          <SeatAvatar
+            seat={s.seat}
+            parts={s.avatar}
+            signal={fx.signals[s.seat] ?? null}
+            reduceMotion={fx.reduceMotion}
+            onSignalEnd={fx.onSignalEnd}
+          />
+        }
       />
     </View>
   );
@@ -225,6 +252,11 @@ export function TableView(p: TableViewProps) {
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
+  const fx: SeatSignals = {
+    signals: p.signals,
+    reduceMotion: p.reduceMotion,
+    onSignalEnd: p.on.signalEnd,
+  };
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
   const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}`;
 
@@ -269,11 +301,11 @@ export function TableView(p: TableViewProps) {
   const board = (
     <View style={styles.board}>
       <View style={styles.partner}>
-        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} />
+        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} fx={fx} />
       </View>
       <View style={styles.middle}>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} />
+          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} fx={fx} />
         </View>
         <View style={styles.center} testID="trick">
           <PlayedCards
@@ -291,7 +323,7 @@ export function TableView(p: TableViewProps) {
           ) : null}
         </View>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} />
+          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} fx={fx} />
         </View>
       </View>
     </View>
@@ -406,6 +438,15 @@ export function TableView(p: TableViewProps) {
           side="mine"
           active={mineSeat.isTurn}
           caption="você"
+          avatar={
+            <SeatAvatar
+              seat={mineSeat.seat}
+              parts={mineSeat.avatar}
+              signal={fx.signals[mineSeat.seat] ?? null}
+              reduceMotion={fx.reduceMotion}
+              onSignalEnd={fx.onSignalEnd}
+            />
+          }
         />
       </View>
       <View style={styles.menuRow}>
@@ -443,6 +484,11 @@ export function TableView(p: TableViewProps) {
           <Text style={styles.menuText}>Sair da mesa</Text>
         </Pressable>
       </View>
+      {vm.mySeat >= 0 ? (
+        <View style={styles.signalRow}>
+          <SignalPanel connected={p.connected && !modalOpen} onSend={p.on.sendSignal} />
+        </View>
+      ) : null}
     </View>
   );
 
@@ -545,6 +591,7 @@ const styles = StyleSheet.create({
   coverOn: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
   menuRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'flex-end' },
   menuOff: { opacity: 0.55 },
+  signalRow: { width: '100%' },
   probe: { position: 'absolute', width: 1, height: 1, opacity: 0, overflow: 'hidden' },
   phone: { flex: 1 },
   phoneContent: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },

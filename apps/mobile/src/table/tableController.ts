@@ -4,13 +4,21 @@
  * está em `legalActions` do snapshot atual (a UI desabilita o resto; o servidor revalida).
  * Mensagens de sala que não são ação de jogo (`voteCancel`, `chat`) passam pelo protocol.
  */
+import { MAX_SIGNAL_DURATION_MS, signalInfo } from '@trucaco/avatar';
 import {
   ERROR_CODES,
   QUICK_PHRASES,
+  SIGNAL_IDS,
   parseClientMessage,
   parseLegalAction,
 } from '@trucaco/protocol';
-import type { ChatScope, ClientMessage, ErrorCode, PublicGameEvent } from '@trucaco/protocol';
+import type {
+  ChatScope,
+  ClientMessage,
+  ErrorCode,
+  PublicGameEvent,
+  SignalId,
+} from '@trucaco/protocol';
 import { PUBLIC_EVENT_TYPES, announcementFor } from '@trucaco/ui';
 import type { HandResult } from '@trucaco/ui';
 import { messageForAction } from './actionMessage';
@@ -27,6 +35,11 @@ export const NOTICE_MS = 3000;
 /** Balão de chat sobre o avatar (igual ao `CHAT_BUBBLE_MS` da UI). */
 export const BUBBLE_MS = 4000;
 export const PRESENCE_NOTE_MS = 5000;
+/**
+ * Se o avatar não avisar o fim do sinal (desmontou na troca de tela), o controlador libera o assento
+ * sozinho: a duração máxima de um sinal mais esta folga.
+ */
+export const SIGNAL_SAFETY_MS = MAX_SIGNAL_DURATION_MS + 500;
 /** Teto do histórico em memória. */
 const MAX_HISTORY = 200;
 /** Quanto tempo a última vaza fica na mesa depois que o servidor a limpa. */
@@ -102,6 +115,18 @@ export interface TableController {
   onTurnTimer(payload: unknown): void;
   onServerError(payload: unknown): void;
   onReconnected(): void;
+  /**
+   * Sinal (público) de um assento. Anima já se o assento está livre; se está animando, entra na fila de
+   * UMA posição; o que passar disso é descartado. O anúncio para o leitor de tela sai sempre.
+   */
+  onSignal(payload: unknown): void;
+  /**
+   * O avatar do assento terminou o sinal `key`: libera o assento e começa o da fila, se houver. `key`
+   * velho (o controlador já liberou por segurança) é ignorado.
+   */
+  onSignalEnd(seat: number, key: number): void;
+  /** Envia um sinal (mensagem `signal`). `false` = id inválido ou sem sala. */
+  sendSignal(signalId: string): boolean;
   /** Toque numa carta: seleciona; no mesmo item selecionado, confirma. */
   pressCard(actionId: string): void;
   /** Envia a ação se (e só se) ela estiver em `legalActions` e não houver outra em voo. */
@@ -201,6 +226,51 @@ export function createTableController(opts: TableControllerOptions): TableContro
   let closedTrick: ClosedTrick | null = null;
   let chatId = 0;
   const bubbleTimers = new Map<number, unknown>();
+  let signalKey = 0;
+  /** Fila de 1 posição por assento (sinal recebido durante a animação). */
+  const queuedSignals = new Map<number, SignalId>();
+  const signalTimers = new Map<number, unknown>();
+
+  function clearSignals(): void {
+    for (const h of signalTimers.values()) timers.clearTimeout(h);
+    signalTimers.clear();
+    queuedSignals.clear();
+  }
+
+  function startSignal(seat: number, id: SignalId): void {
+    const prev = signalTimers.get(seat);
+    if (prev !== undefined) timers.clearTimeout(prev);
+    signalTimers.set(
+      seat,
+      timers.setTimeout(() => endSignal(seat), SIGNAL_SAFETY_MS),
+    );
+    const cur = store.getState();
+    cur.patch({ signals: { ...cur.signals, [seat]: { id, key: ++signalKey } } });
+  }
+
+  function seatName(seat: number): string {
+    const vm = store.getState().vm;
+    if (vm !== null && seat === vm.mySeat) return 'Você';
+    const n = vm?.seats[seat]?.nickname;
+    return n !== undefined && n !== '' ? n : `Jogador ${seat + 1}`;
+  }
+
+  function endSignal(seat: number): void {
+    const t = signalTimers.get(seat);
+    if (t !== undefined) timers.clearTimeout(t);
+    signalTimers.delete(seat);
+    const next = queuedSignals.get(seat);
+    queuedSignals.delete(seat);
+    if (next !== undefined) {
+      startSignal(seat, next);
+      return;
+    }
+    const cur = store.getState();
+    if (cur.signals[seat] === undefined) return;
+    const rest = { ...cur.signals };
+    delete rest[seat];
+    cur.patch({ signals: rest });
+  }
 
   const clear = (h: unknown): void => {
     if (h !== null) timers.clearTimeout(h);
@@ -230,6 +300,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
       busyTimer = lingerTimer = null;
       for (const h of bubbleTimers.values()) timers.clearTimeout(h);
       bubbleTimers.clear();
+      clearSignals();
       trickPlays = [];
       closedTrick = null;
       if (!matchAnnounced) say('Nova partida começou.');
@@ -271,6 +342,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
             handLog: [],
             lingering: null,
             bubbles: {},
+            signals: {},
             busy: false,
             coverMode: false,
             errorCode: null,
@@ -500,6 +572,36 @@ export function createTableController(opts: TableControllerOptions): TableContro
       store.getState().patch({ errorCode: code, selected: null });
     },
 
+    onSignal(payload) {
+      if (typeof payload !== 'object' || payload === null) return;
+      const { seat, signalId } = payload as { seat?: unknown; signalId?: unknown };
+      if (typeof seat !== 'number' || !Number.isInteger(seat) || seat < 0 || seat > 3) return;
+      if (typeof signalId !== 'string' || !(SIGNAL_IDS as readonly string[]).includes(signalId)) {
+        return;
+      }
+      const id = signalId as SignalId;
+      say(`${seatName(seat)}: ${signalInfo(id).name}`);
+      if (store.getState().signals[seat] === undefined) {
+        startSignal(seat, id);
+        return;
+      }
+      // Animando: 1 na fila; se a fila já tem um, este é descartado.
+      if (!queuedSignals.has(seat)) queuedSignals.set(seat, id);
+    },
+
+    onSignalEnd(seat, key) {
+      if (store.getState().signals[seat]?.key !== key) return;
+      endSignal(seat);
+    },
+
+    sendSignal(signalId) {
+      const parsed = parseClientMessage({ type: 'signal', signalId });
+      if (!parsed.ok) return false;
+      if (!opts.send(parsed.message)) return false;
+      lastSend = 'other';
+      return true;
+    },
+
     onReconnected() {
       clear(noticeTimer);
       replayUntil = now() + REPLAY_WINDOW_MS;
@@ -603,6 +705,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
       busyTimer = noticeTimer = presenceTimer = lingerTimer = null;
       for (const h of bubbleTimers.values()) timers.clearTimeout(h);
       bubbleTimers.clear();
+      clearSignals();
       busySignature = '';
       handNumber = 0;
       replayUntil = 0;

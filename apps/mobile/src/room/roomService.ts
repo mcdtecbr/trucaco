@@ -63,6 +63,7 @@ export type TableSink = Pick<
   | 'onEvent'
   | 'onDesync'
   | 'onChat'
+  | 'onSignal'
   | 'onPresence'
   | 'onTurnTimer'
   | 'onServerError'
@@ -71,10 +72,11 @@ export type TableSink = Pick<
 >;
 
 /**
- * Mensagens do servidor que esta entrega ainda não usa (Fase 4): no-op para o SDK não avisar de tipo
- * sem handler. `event`, `presence`, `turnTimer` e `error` têm handler próprio em `attach`.
+ * Mensagens do servidor que esta entrega ainda não usa (efeitos `sfx`, Fase 5b): no-op para o SDK não
+ * avisar de tipo sem handler. `event`, `signal`, `chat`, `presence`, `turnTimer` e `error` têm handler
+ * próprio em `attach`.
  */
-const IGNORED_MESSAGES = ['signal', 'sfx'];
+const IGNORED_MESSAGES = ['sfx'];
 
 export function createRoomService(options: {
   getClient: () => RoomClientLike;
@@ -147,6 +149,9 @@ export function createRoomService(options: {
     tracker = mine;
     r.onMessage('chat', (p) => {
       if (live()) table?.onChat(p);
+    });
+    r.onMessage('signal', (p) => {
+      if (live()) table?.onSignal(p);
     });
     r.onMessage('presence', (p) => {
       if (live()) table?.onPresence(p);

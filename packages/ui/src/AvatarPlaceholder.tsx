@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, fontSize, fontWeight, radius, spacing, teamColors } from './tokens';
 
@@ -44,6 +45,12 @@ export interface AvatarPlaceholderProps {
   /** Destaca quem joga agora. */
   readonly active?: boolean;
   readonly layout?: 'row' | 'column';
+  /**
+   * Avatar desenhado pelo app (`<Avatar>` de `@trucaco/avatar`; `ui` não depende desse pacote). Quando
+   * presente e a vaga não está vazia, substitui o círculo com a inicial; o anel de time e o destaque
+   * de "vez" continuam. Vaga vazia mostra sempre o placeholder.
+   */
+  readonly avatar?: ReactNode;
   readonly testID?: string;
 }
 
@@ -68,13 +75,17 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
     >
       <View
         style={[
-          styles.circle,
+          p.avatar !== undefined && !empty ? styles.ring : styles.circle,
           empty && styles.circleEmpty,
           team !== null && !empty && { borderColor: team.main },
           p.active === true && styles.active,
         ]}
       >
-        <Text style={styles.initial}>{empty ? '·' : initialOf(p.nickname)}</Text>
+        {p.avatar !== undefined && !empty ? (
+          p.avatar
+        ) : (
+          <Text style={styles.initial}>{empty ? '·' : initialOf(p.nickname)}</Text>
+        )}
         {status !== undefined && !empty ? (
           <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
         ) : null}
@@ -107,6 +118,14 @@ const styles = StyleSheet.create({
     height: SIZE,
     borderRadius: radius.round,
     backgroundColor: colors.primary,
+    borderWidth: 3,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** Anel do avatar desenhado: o tamanho vem do conteúdo. */
+  ring: {
+    borderRadius: radius.round,
     borderWidth: 3,
     borderColor: colors.primary,
     alignItems: 'center',

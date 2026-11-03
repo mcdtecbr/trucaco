@@ -9,6 +9,7 @@ import {
   PRESENCE_NOTE_MS,
   REPLAY_MIN_AGE_MS,
   ACTION_ERRORS,
+  SIGNAL_SAFETY_MS,
   createTableController,
 } from './tableController';
 import { createTableStore, effectiveDeadline } from './tableStore';
@@ -40,7 +41,7 @@ function setup() {
     },
   });
   const fire = (ms: number) => {
-    for (const t of timers) {
+    for (const t of [...timers]) {
       if (!t.live || t.ms !== ms) continue;
       t.live = false;
       t.fn();
@@ -816,5 +817,110 @@ describe('revanche: RATE_LIMITED', () => {
     ctl.onServerError({ code: 'RATE_LIMITED' });
     expect(ctl.voteRematch()).toBe(true);
     expect(sent).toHaveLength(2);
+  });
+});
+
+describe('4E: sinais', () => {
+  it('3 sinais em 100 ms no mesmo assento: 2 animam (1 na fila) e o terceiro é descartado', () => {
+    const { ctl, store, said } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 1, signalId: 'wink', at: 1 });
+    const first = store.getState().signals[1];
+    expect(first?.id).toBe('wink');
+    ctl.onSignal({ seat: 1, signalId: 'nod', at: 2 }); // fila
+    ctl.onSignal({ seat: 1, signalId: 'smile', at: 3 }); // descartado
+    expect(store.getState().signals[1]).toEqual(first); // ainda o primeiro
+    // O avatar termina o primeiro: entra o da fila, com `key` novo.
+    ctl.onSignalEnd(1, first?.key ?? -1);
+    const second = store.getState().signals[1];
+    expect(second?.id).toBe('nod');
+    expect(second?.key).not.toBe(first?.key);
+    // Termina o segundo: nada mais na fila (o 'smile' não volta).
+    ctl.onSignalEnd(1, second?.key ?? -1);
+    expect(store.getState().signals[1]).toBeUndefined();
+    // O anúncio sai para os três.
+    expect(said).toEqual([
+      'Bia: Piscar um olho',
+      'Bia: Acenar com a cabeça',
+      'Bia: Sorriso contido',
+    ]);
+  });
+
+  it('assentos têm filas independentes; "key" velho ou sem sinal é ignorado', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 0, signalId: 'wink' });
+    ctl.onSignal({ seat: 2, signalId: 'wink' });
+    const s0 = store.getState().signals[0];
+    expect(s0).toBeDefined();
+    expect(store.getState().signals[2]).toBeDefined();
+    ctl.onSignalEnd(0, (s0?.key ?? 0) + 99); // key de outro sinal
+    expect(store.getState().signals[0]).toEqual(s0);
+    ctl.onSignalEnd(3, 1); // assento sem sinal
+    expect(store.getState().signals[3]).toBeUndefined();
+  });
+
+  it('o mesmo id duas vezes anima duas vezes (key novo)', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 1, signalId: 'wink' });
+    const a = store.getState().signals[1];
+    ctl.onSignal({ seat: 1, signalId: 'wink' });
+    ctl.onSignalEnd(1, a?.key ?? -1);
+    expect(store.getState().signals[1]?.id).toBe('wink');
+    expect(store.getState().signals[1]?.key).not.toBe(a?.key);
+  });
+
+  it('ignora payload inválido; anuncia "Você" para o próprio assento', () => {
+    const { ctl, store, said } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal(null);
+    ctl.onSignal({ seat: 9, signalId: 'wink' });
+    ctl.onSignal({ seat: 1.5, signalId: 'wink' });
+    ctl.onSignal({ seat: 1, signalId: 'inventado' });
+    ctl.onSignal({ seat: 1 });
+    expect(store.getState().signals).toEqual({});
+    expect(said).toEqual([]);
+    const me = store.getState().vm?.mySeat ?? -1;
+    ctl.onSignal({ seat: me, signalId: 'shrug' });
+    expect(said).toEqual(['Você: Encolher os ombros']);
+  });
+
+  it('segurança: se o avatar nunca avisar o fim, o controlador libera o assento', () => {
+    const { ctl, store, fire } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 1, signalId: 'wink' });
+    const old = store.getState().signals[1];
+    ctl.onSignal({ seat: 1, signalId: 'nod' });
+    fire(SIGNAL_SAFETY_MS); // libera o primeiro e começa o da fila
+    expect(store.getState().signals[1]?.id).toBe('nod');
+    // O fim tardio do primeiro (avatar lento) não derruba o segundo.
+    ctl.onSignalEnd(1, old?.key ?? -1);
+    expect(store.getState().signals[1]?.id).toBe('nod');
+    fire(SIGNAL_SAFETY_MS);
+    expect(store.getState().signals[1]).toBeUndefined();
+  });
+
+  it('reset e nova partida limpam sinais e fila', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 1, signalId: 'wink' });
+    ctl.onSignal({ seat: 1, signalId: 'nod' });
+    ctl.reset();
+    expect(store.getState().signals).toEqual({});
+    ctl.applyState(snapshot());
+    ctl.onSignal({ seat: 1, signalId: 'smile' });
+    expect(store.getState().signals[1]?.id).toBe('smile'); // a fila antiga não voltou
+  });
+
+  it('sendSignal valida pelo protocol e envia { type: signal }', () => {
+    const { ctl, sent, disconnect } = setup();
+    ctl.applyState(snapshot());
+    expect(ctl.sendSignal('wink')).toBe(true);
+    expect(sent).toEqual([{ type: 'signal', signalId: 'wink' }]);
+    expect(ctl.sendSignal('inventado')).toBe(false);
+    expect(sent).toHaveLength(1);
+    disconnect();
+    expect(ctl.sendSignal('nod')).toBe(false);
   });
 });

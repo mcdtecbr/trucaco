@@ -83,6 +83,7 @@ export function HomeScreen() {
         queueStart: () => void controller.startQueue(queueForm),
         queueCancel: () => void controller.cancelQueue(),
         settings: () => router.push('/settings'),
+        avatar: () => router.push('/avatar'),
       }}
     />
   );

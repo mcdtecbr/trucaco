@@ -74,6 +74,7 @@ export function SettingsScreen() {
         },
         save: () => void save(),
         logout: () => void logout(),
+        avatar: () => router.push('/avatar'),
         back: () => (router.canGoBack() ? router.back() : router.replace('/home')),
       }}
     />

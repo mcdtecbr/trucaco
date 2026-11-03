@@ -3,7 +3,7 @@
  * estado de UI local (carta selecionada, ação em voo, aviso). A fonte de verdade continua sendo o
  * servidor: nada aqui decide jogada.
  */
-import type { ChatScope } from '@trucaco/protocol';
+import type { ChatScope, SignalId } from '@trucaco/protocol';
 import type { HandResult } from '@trucaco/ui';
 import { createStore, useStore } from 'zustand';
 import type { TableViewModel } from './projectTable';
@@ -33,8 +33,16 @@ export interface ChatBubbleEntry {
   readonly text: string;
 }
 
+/** Sinal em animação sobre um assento. `key` muda a cada sinal (o mesmo id duas vezes anima duas vezes). */
+export interface ActiveSignal {
+  readonly id: SignalId;
+  readonly key: number;
+}
+
 export interface TableStoreState {
   readonly vm: TableViewModel | null;
+  /** Sinal animando por assento (um por vez; o controlador mantém a fila de 1 posição). */
+  readonly signals: Readonly<Record<number, ActiveSignal>>;
   /** Histórico das mãos, derivado de eventos. Descartado em salto de `seq`. */
   readonly history: readonly HandResult[];
   /** Linhas da mão em curso (derivadas de eventos); viram `details` ao fechar a mão. */
@@ -73,6 +81,7 @@ export interface TableStoreState {
 
 const INITIAL = {
   vm: null as TableViewModel | null,
+  signals: {} as Readonly<Record<number, ActiveSignal>>,
   history: [] as readonly HandResult[],
   handLog: [] as readonly string[],
   lingering: null as LingeringTrick | null,

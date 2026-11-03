@@ -17,6 +17,7 @@ import type { RunningServer } from '../net/integrationServer';
 import { createSession } from '../net/session';
 import type { Session } from '../net/session';
 import { createMemoryTokenStorage } from '../net/tokenStorageCore';
+import type { TokenStorage } from '../net/tokenStorageCore';
 import { createRoomService } from '../room/roomService';
 import type { RoomLike, RoomService } from '../room/roomService';
 import { createLobbyStore } from '../store/lobbyStore';
@@ -29,6 +30,7 @@ import { createTableStore } from './tableStore';
 import type { TableStore } from './tableStore';
 
 interface Player {
+  storage: TokenStorage;
   session: Session;
   gameClient: GameClient;
   rooms: RoomService;
@@ -82,7 +84,8 @@ function scan(node: unknown, inPrivate: boolean, pub: Set<string>, priv: Set<str
 }
 
 async function newPlayer(): Promise<Player> {
-  const session = createSession({ storage: createMemoryTokenStorage(), baseUrl: server.url });
+  const storage = createMemoryTokenStorage();
+  const session = createSession({ storage, baseUrl: server.url });
   expect((await session.start()).status).toBe('authenticated');
   const gameClient = createGameClient(session, { serverUrl: server.url });
   const roomStore = createRoomStore();
@@ -102,6 +105,7 @@ async function newPlayer(): Promise<Player> {
     },
   });
   const p: Player = {
+    storage,
     session,
     gameClient,
     rooms: undefined as never,
@@ -224,8 +228,9 @@ async function disposePlayers(): Promise<void> {
 }
 
 /** 4 jogadores sentados numa mesa privada recém-criada; a partida já começou. */
-async function seatedAndPlaying(): Promise<Player[]> {
+async function seatedAndPlaying(beforeSeat?: (ps: Player[]) => Promise<void>): Promise<Player[]> {
   players = await Promise.all([0, 1, 2, 3].map(() => newPlayer()));
+  await beforeSeat?.(players);
   const [owner, ...others] = players as [Player, Player, Player, Player];
   let code = '';
   const ownerCtl = createLobbyController({
@@ -570,4 +575,62 @@ describe('revanche contra o servidor real', () => {
     const firstPe2 = ps[0]!.pes.find((x) => x.match === 2)!.pe;
     expect(firstPe2).toBe((lastPe + 1) % 4);
   }, 150_000);
+});
+
+describe('4E/4F: sinais e avatar contra o servidor real', () => {
+  it('sinal de um jogador aparece nos 4 (inclusive no emissor) em menos de 500 ms; o seguinte, antes do cooldown, é recusado', async () => {
+    const ps = await seatedAndPlaying();
+    const sender = ps[0]!;
+    const seat = sender.tableStore.getState().vm!.mySeat;
+    const t0 = Date.now();
+    expect(sender.table.sendSignal('wink')).toBe(true);
+    await waitFor(
+      () => ps.every((p) => p.tableStore.getState().signals[seat]?.id === 'wink'),
+      'sinal chega aos 4',
+      2000,
+    );
+    expect(Date.now() - t0).toBeLessThan(500);
+    // Cooldown de 3 s por assento: o segundo sinal volta como RATE_LIMITED só para o emissor.
+    expect(sender.table.sendSignal('nod')).toBe(true);
+    await waitFor(() => sender.errors.includes('RATE_LIMITED'), 'RATE_LIMITED do cooldown', 3000);
+    for (const p of ps) if (p !== sender) expect(p.errors).toEqual([]);
+    // O servidor não manda sinal fora do catálogo; o controlador também nem envia.
+    expect(sender.table.sendSignal('inventado')).toBe(false);
+  }, 40_000);
+
+  it('avatar salvo por PUT /me/avatar vale para a mesa e sobrevive a um novo login', async () => {
+    const chosen = {
+      face_shape: 1,
+      skin: 3,
+      hair: 6,
+      eyes: 2,
+      mouth: 1,
+      outfit: 4,
+      accessory: 2,
+      bg_color: 5,
+    };
+    const ps = await seatedAndPlaying(async (all) => {
+      const s = all[1]!.session;
+      // Inválido é recusado e não altera nada.
+      await expect(s.api.updateAvatar({ ...chosen, hair: 99 })).rejects.toMatchObject({
+        status: 400,
+        code: 'INVALID_AVATAR',
+      });
+      expect((await s.api.updateAvatar(chosen)).avatar).toEqual(chosen);
+    });
+    const target = ps[1]!;
+    const seat = target.tableStore.getState().vm!.mySeat;
+    // Os outros 3 veem as partes escolhidas no assento dele.
+    for (const p of ps) {
+      expect(p.tableStore.getState().vm!.seats[seat]!.avatar).toEqual(chosen);
+    }
+    // Novo login (mesmo armazenamento): GET /me devolve o avatar.
+    const again = createSession({ storage: target.storage, baseUrl: server.url });
+    try {
+      expect((await again.start()).status).toBe('authenticated');
+      expect((await again.api.me()).avatar).toEqual(chosen);
+    } finally {
+      again.dispose();
+    }
+  }, 40_000);
 });

@@ -11,7 +11,13 @@ export interface SettingsViewProps {
   error: string | null;
   saved: boolean;
   appVersion: string;
-  on: { draft(text: string): void; save(): void; logout(): void; back(): void };
+  on: {
+    draft(text: string): void;
+    save(): void;
+    logout(): void;
+    back(): void;
+    avatar(): void;
+  };
 }
 
 export function SettingsView(p: SettingsViewProps) {
@@ -37,6 +43,17 @@ export function SettingsView(p: SettingsViewProps) {
           onPress={p.on.save}
           disabled={p.busy}
           testID="nickname-save"
+        />
+      </Card>
+      <Card>
+        <Heading>Avatar</Heading>
+        <Body muted>Escolha o rosto, o cabelo e a roupa que aparecem para a mesa.</Body>
+        <Button
+          label="Editar avatar"
+          variant="secondary"
+          onPress={p.on.avatar}
+          disabled={p.busy}
+          testID="settings-avatar"
         />
       </Card>
       <Card>

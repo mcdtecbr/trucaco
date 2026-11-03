@@ -1,10 +1,11 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveRegion, useAnnouncer, useLayoutMode } from '@trucaco/ui';
-import type { ChatScope, LegalActionId } from '@trucaco/protocol';
+import type { ChatScope, LegalActionId, SignalId } from '@trucaco/protocol';
 import type { ChatPanelProps } from './ChatPanel';
 import { errorMessage } from '../i18n/errors';
 import { isE2EMode } from '../net/config';
+import { useReduceMotion } from '../platform/useReduceMotion';
 import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
 import { useRoomStore } from '../store/roomStore';
@@ -91,6 +92,7 @@ function JoinedTable() {
     WAITING_SCOPES,
   );
   const chatUnreadTotal = useTableStore((s) => s.chatUnread.table);
+  const reduceMotion = useReduceMotion();
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle');
 
   // Saiu da tela (voltar, trocar de rota, fechar): sai da sala de forma consentida. Deps `[]`: a troca
@@ -130,6 +132,7 @@ function JoinedTable() {
         shareFeedback={feedback}
         chatPanel={chatPanel}
         chatUnreadTotal={chatUnreadTotal}
+        reduceMotion={reduceMotion}
         on={{
           share,
           leave,
@@ -188,6 +191,8 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   const coverMode = useTableStore((s) => s.coverMode);
   const chatUnread = useTableStore((s) => s.chatUnread);
   const bubbles = useTableStore((s) => s.bubbles);
+  const signals = useTableStore((s) => s.signals);
+  const reduceMotion = useReduceMotion();
   const chatPanel = useChatPanel(
     (seat) => vm?.seats[seat]?.nickname ?? '',
     vm?.mySeat ?? -1,
@@ -217,6 +222,8 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       chatUnreadTotal={chatUnread.table + chatUnread.partner}
       chatPanel={chatPanel}
       bubbles={bubbles}
+      signals={signals}
+      reduceMotion={reduceMotion}
       deadlineAt={deadlineAt}
       clockOffsetMs={clockOffsetMs}
       leaveConfirm={leaveConfirm}
@@ -231,6 +238,8 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
         toggleCover: () => table.setCoverMode(!coverMode),
         voteCancel: () => void table.voteCancel(),
         openChat: () => table.setChatOpen(true),
+        signalEnd: table.onSignalEnd,
+        sendSignal: (id: SignalId) => table.sendSignal(id),
         askLeave: () => table.setLeaveConfirm(true),
         cancelLeave: () => table.setLeaveConfirm(false),
         leave: onLeave,

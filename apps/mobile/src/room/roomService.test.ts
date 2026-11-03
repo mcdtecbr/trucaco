@@ -1,3 +1,4 @@
+import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { GameClientError } from '../net/colyseus';
 import { createRoomStore } from '../store/roomStore';
@@ -82,6 +83,7 @@ function setup() {
     onEvent: vi.fn(),
     onDesync: vi.fn(),
     onChat: vi.fn(),
+    onSignal: vi.fn(),
     onPresence: vi.fn(),
     onTurnTimer: vi.fn(),
     onServerError: vi.fn(),
@@ -314,5 +316,33 @@ describe('roomService alimentando a mesa', () => {
     t.rooms[0]!.emit('drop');
     expect(t.service.send({ type: 'bet' })).toBe(false);
     expect(t.rooms[0]!.sent).toHaveLength(1);
+  });
+});
+
+describe('4E: sinais', () => {
+  it('a mensagem signal chega ao controlador da mesa', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('msg:signal', { seat: 2, signalId: 'wink', at: 1 });
+    expect(t.table.onSignal).toHaveBeenCalledWith({ seat: 2, signalId: 'wink', at: 1 });
+  });
+
+  it('o estado da sala projeta o avatar (JSON) com fallback para o padrão', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const players = [
+      {
+        seat: 0,
+        nickname: 'Ana',
+        status: 'connected',
+        isBot: false,
+        avatar: JSON.stringify({ ...DEFAULT_AVATAR_PARTS, hair: 3 }),
+      },
+      { seat: 1, nickname: 'Bia', status: 'connected', isBot: false, avatar: '{lixo' },
+    ];
+    t.rooms[0]!.setState({ roomCode: 'ABCDEFGH', phase: 'waiting', players, privates: {} });
+    const seats = t.store.getState().seats;
+    expect(seats[0]?.avatar.hair).toBe(3);
+    expect(seats[1]?.avatar).toEqual(DEFAULT_AVATAR_PARTS);
   });
 });

@@ -3,7 +3,9 @@
  * jogável (3H) terá a própria projeção. A fonte de verdade continua sendo `room.state`.
  */
 import { isValidRoomCode } from '@trucaco/protocol';
+import type { AvatarParts } from '@trucaco/protocol';
 import { createStore, useStore } from 'zustand';
+import { avatarPartsOf } from '../table/avatarParts';
 
 export type RoomConnection = 'none' | 'joining' | 'connected' | 'reconnecting' | 'closed';
 
@@ -13,6 +15,7 @@ export interface LobbySeat {
   /** `empty` | `connected` | `away` | `bot`. */
   readonly status: string;
   readonly isBot: boolean;
+  readonly avatar: AvatarParts;
 }
 
 export interface RoomStoreState {
@@ -81,6 +84,7 @@ export function projectWaiting(json: unknown): WaitingProjection {
       nickname: typeof p['nickname'] === 'string' ? p['nickname'] : '',
       status: typeof p['status'] === 'string' ? p['status'] : 'empty',
       isBot: p['isBot'] === true,
+      avatar: avatarPartsOf(p['avatar']),
     });
   }
   seats.sort((a, b) => a.seat - b.seat);

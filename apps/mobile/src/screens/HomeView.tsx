@@ -62,6 +62,7 @@ export interface HomeViewProps {
     queueStart(): void;
     queueCancel(): void;
     settings(): void;
+    avatar(): void;
   };
 }
 
@@ -205,6 +206,13 @@ export function HomeView(p: HomeViewProps) {
         )}
       </Card>
 
+      <Button
+        label="Meu avatar"
+        variant="secondary"
+        onPress={p.on.avatar}
+        disabled={locked}
+        testID="open-avatar"
+      />
       <Button
         label="Configurações"
         variant="secondary"

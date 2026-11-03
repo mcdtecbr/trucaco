@@ -3,6 +3,7 @@ import { errorMessage } from '../i18n/errors';
 import { formatCodeDisplay } from '../lobby/codeInput';
 import type { LobbySeat, RoomConnection } from '../store/roomStore';
 import { AvatarPlaceholder, colors, fontSize, spacing } from '@trucaco/ui';
+import { SeatAvatar } from './SeatAvatar';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
@@ -10,6 +11,9 @@ import { Screen } from '../ui/Screen';
 import { Body, Card, ErrorText, Heading, Notice, Title } from '../ui/Typography';
 
 export const TABLE_SEATS = 4;
+
+/** Na espera não há sinais (o servidor só os aceita com a partida em andamento). */
+const NO_SIGNAL_END = (): void => undefined;
 
 export interface WaitingRoomViewProps {
   roomCode: string;
@@ -24,6 +28,8 @@ export interface WaitingRoomViewProps {
   /** Painel de chat da mesa (só escopo `table`) ou null. Omitido = sem chat. */
   chatPanel?: ChatPanelProps | null;
   chatUnreadTotal?: number;
+  /** Preferência do sistema de menos movimento (animações ociosas do avatar). */
+  reduceMotion?: boolean;
   on: { share(): void; leave(): void; openChat?(): void };
 }
 
@@ -87,6 +93,19 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
                 <AvatarPlaceholder
                   nickname={empty ? '—' : seat.nickname}
                   caption={seatCaption(seat, i === p.mySeat)}
+                  {...(seat !== undefined && !empty
+                    ? {
+                        avatar: (
+                          <SeatAvatar
+                            seat={i}
+                            parts={seat.avatar}
+                            signal={null}
+                            reduceMotion={p.reduceMotion === true}
+                            onSignalEnd={NO_SIGNAL_END}
+                          />
+                        ),
+                      }
+                    : {})}
                 />
               </View>
             );

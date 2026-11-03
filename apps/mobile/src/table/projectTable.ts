@@ -10,6 +10,7 @@ import {
   isHandPhaseId,
   isTablePhase,
   parseLegalAction,
+  type AvatarParts,
   type CardSnapshot,
   type HandPhaseId,
   type LegalActionId,
@@ -17,6 +18,7 @@ import {
   type Suit,
   type TablePhase,
 } from '@trucaco/protocol';
+import { avatarPartsOf } from './avatarParts';
 import { asAvatarStatus, asRank, asSuit, screenPosition } from '@trucaco/ui';
 import type { AvatarStatus, ScreenPosition } from '@trucaco/ui';
 
@@ -28,6 +30,8 @@ export interface SeatView {
   readonly nickname: string;
   readonly status: AvatarStatus;
   readonly isBot: boolean;
+  /** Partes do avatar (objeto estável por texto, ver `avatarPartsOf`). */
+  readonly avatar: AvatarParts;
   readonly handSize: number;
   readonly team: 0 | 1;
   /** Perspectiva: minha dupla (azul) ou adversária (laranja). */
@@ -216,6 +220,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
       nickname: str(p['nickname']),
       status: isBot && status !== 'empty' ? 'bot' : status,
       isBot,
+      avatar: avatarPartsOf(p['avatar']),
       handSize: Math.max(0, num(p['handSize'])),
       team,
       side: team === myTeam ? 'mine' : 'theirs',

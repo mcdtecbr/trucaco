@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { BootView } from './BootView';
 import { HomeView } from './HomeView';
@@ -34,6 +35,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
       queueStart: noop,
       queueCancel: noop,
       settings: noop,
+      avatar: noop,
     },
     ...over,
   };
@@ -45,6 +47,7 @@ const seat = (n: number, nickname: string, status = 'connected') => ({
   nickname,
   status,
   isBot: status === 'bot',
+  avatar: DEFAULT_AVATAR_PARTS,
 });
 function waiting(over: Partial<WaitingRoomViewProps> = {}): string {
   return renderToStaticMarkup(
@@ -201,7 +204,7 @@ describe('SettingsView e BootView', () => {
         error="Esse apelido já está em uso. Escolha outro."
         saved={false}
         appVersion="1.2.3"
-        on={{ draft: noop, save: noop, logout: noop, back: noop }}
+        on={{ draft: noop, save: noop, logout: noop, back: noop, avatar: noop }}
       />,
     );
     expect(html).toContain('Atual: Zé');

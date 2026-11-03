@@ -7,6 +7,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
+import { SIGNALS } from '@trucaco/avatar';
 import { useStore } from 'zustand';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ClientMessage } from '@trucaco/protocol';
@@ -82,6 +83,8 @@ function Screen({ h }: { h: Harness }) {
       probe={false}
       chatUnreadTotal={s.chatUnread.table + s.chatUnread.partner}
       bubbles={s.bubbles}
+      signals={s.signals}
+      reduceMotion={false}
       chatPanel={
         s.chatOpen
           ? {
@@ -116,6 +119,8 @@ function Screen({ h }: { h: Harness }) {
         toggleCover: () => undefined,
         voteCancel: () => void table.voteCancel(),
         openChat: () => table.setChatOpen(true),
+        signalEnd: table.onSignalEnd,
+        sendSignal: (id) => table.sendSignal(id),
         askLeave: () => undefined,
         cancelLeave: () => undefined,
         leave: () => undefined,
@@ -463,5 +468,62 @@ describe('revanche: interação real', () => {
     expect(host.textContent).toContain('Aguardando a mesa (1 votou)');
     click(must('rematch'));
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe('4E: sinais na mesa', () => {
+  /** Registra cada valor de `signals` (o avatar do jsdom pode terminar o sinal já dentro do `act`). */
+  function recordSignals(): Array<Record<number, { id: string }>> {
+    const seen: Array<Record<number, { id: string }>> = [];
+    h.store.subscribe((s, prev) => {
+      if (s.signals !== prev.signals) seen.push(s.signals);
+    });
+    return seen;
+  }
+
+  it('o sinal recebido chega ao avatar do assento e o fim do sinal libera o assento', () => {
+    mount(snapshot());
+    expect(byTestId('avatar-1')).not.toBeNull();
+    expect(byTestId('avatar-1-signal-wink')).toBeNull();
+    const seen = recordSignals();
+    act(() => h.table.onSignal({ seat: 1, signalId: 'wink', at: 1 }));
+    expect(seen[0]?.[1]?.id).toBe('wink');
+    expect(seen[0]?.[2]).toBeUndefined(); // só o assento que sinalizou
+    // O avatar avisou o fim (onSignalEnd -> controlador): o assento ficou livre.
+    expect(h.store.getState().signals[1]).toBeUndefined();
+  });
+
+  it('o meu próprio sinal também é entregue ao meu avatar (público para os 4)', () => {
+    mount(snapshot());
+    const me = h.store.getState().vm?.mySeat ?? -1;
+    const seen = recordSignals();
+    act(() => h.table.onSignal({ seat: me, signalId: 'nod', at: 1 }));
+    expect(seen[0]?.[me]?.id).toBe('nod');
+  });
+
+  it('painel: abrir mostra os 12 sinais com nome; toque rápido NÃO envia', () => {
+    mount(snapshot());
+    expect(byTestId('signal-grid')).toBeNull();
+    click(must('signal-toggle'));
+    expect(byTestId('signal-grid')).not.toBeNull();
+    for (const s of SIGNALS) {
+      const b = must(`signal-${s.id}`);
+      expect(b.textContent).toBe(s.name);
+      expect(b.getAttribute('aria-label')).toBe(s.name);
+    }
+    expect(h.sent).toEqual([]);
+  });
+
+  it('painel: clique sem toque prévio (leitor de tela) envia e inicia o cooldown visual', () => {
+    mount(snapshot());
+    click(must('signal-toggle'));
+    click(must('signal-nod'));
+    expect(h.sent).toEqual([{ type: 'signal', signalId: 'nod' }]);
+    // Fechou e entrou em cooldown: não envia outro até acabar.
+    expect(byTestId('signal-grid')).toBeNull();
+    expect(must('signal-toggle').textContent).toContain('aguarde');
+    click(must('signal-toggle'));
+    click(must('signal-wink'));
+    expect(h.sent).toHaveLength(1);
   });
 });
