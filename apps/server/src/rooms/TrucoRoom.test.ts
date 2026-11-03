@@ -2409,6 +2409,12 @@ describe('TrucoRoom: onze/dez decidido pela dupla', () => {
     expect(lastEventOf(game, 'specialDecided')?.seat).toBe(2);
     await settle(game, 'bot aceitou');
     expect(game.server.series?.match.hand.phase).toBe('specialDecision');
+    // O patch do estado chega ao cliente depois do evento: espera por condição, não por instante.
+    await until(
+      () => handOf(game.players[0] as Player).specialAccepted.length === 1,
+      'cliente 0 vê o aceite do bot',
+    );
+    expect(handOf(game.players[0] as Player).phase).toBe('specialDecision');
     expect(handOf(game.players[0] as Player).specialAccepted).toEqual([2]);
     (game.players[0] as Player).room.send('special', { decision: 'play' });
     await until(() => game.server.series?.match.hand.phase === 'playing', 'mão começa', 3000);
