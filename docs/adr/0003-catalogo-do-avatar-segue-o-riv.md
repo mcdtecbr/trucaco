@@ -27,4 +27,4 @@ O `assets/rive/avatar.riv` foi montado no editor Rive (26,7 KB, 65 paths) e vali
 - Dependência nova: `react-native-svg` (parte do SDK Expo).
 - Dados de desenvolvimento com `accessory` 3/4 são ajustados pela migração; o cliente que tinha esses valores em cache volta ao padrão.
 - Semântica dos índices mudou (ex.: `hair` 6 era "black power", agora é "chapéu"): testes e e2e que citam nomes por índice precisam de releitura.
-- O orçamento de FPS com 6 avatares (cada um com vários `<Svg>`) precisa ser medido (`apps/mobile/e2e/perf/avatarPerf.perf.ts`).
+- Desempenho medido em 03/11/2026 (`apps/mobile/e2e/perf/avatarPerf.perf.ts`, Chromium, 4 avatares, web): sem limite de CPU, 60,0 FPS ocioso e 60,0 FPS com 4 rajadas de sinais; com CPU 4x de throttle, 59,7 FPS ocioso e 52,5 FPS com sinais (4,3% dos quadros acima de 33 ms). A medição de 02/11/2026 do fallback antigo (ADR 0002) deu 36 a 40 FPS ocioso e 14,6 a 21,7 FPS com sinais no mesmo throttle, então o fallback novo não piorou o web (os números vêm de execuções em momentos diferentes, na mesma máquina de desenvolvimento). **Continua sem medição em aparelho** iOS/Android.
