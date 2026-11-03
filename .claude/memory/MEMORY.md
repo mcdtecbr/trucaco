@@ -1,7 +1,11 @@
-- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0 a 5 concluídas (com ressalvas, 2026-11-02 e 2026-11-03); próxima: Fase 5b (áudio, depende de decisões do usuário) ou Fase 6; avatar de produção é vetorial, Rive pendente (sem `.riv`)
-- [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
+- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0 a 5 concluídas (com ressalvas, 2026-11-02 e 2026-11-03); próxima: Fase 5b (áudio, depende de decisões do usuário) ou Fase 6; avatar de produção é vetorial; `avatar.riv` já montado e no develop (ver Avatar Rive)
+- [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, gh instalado, Docker, Codex (erro 740), worktree curto, Prettier nos md
 - [Git: modo atual](feedback_git_convencao.md) — commit e push DIRETO na develop, sem PR, até o usuário avisar; nunca mexer na master
 - [Handoff Fase 5](handoff-fase-5.md) — estado após a Fase 5 (2026-11-03), próximo passo (5b ou 6), pendências, o que não foi validado, armadilhas do Windows/Git Bash (inclui o `pnpm` que quebra o `turbo run`) e do servidor para retomar
 - [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
 - [Resposta de aposta e onze/dez](decisao_resposta_aposta_onze_dez.md) — usuário: só um jogador responde truco/retruco; onze/dez: os dois decidem, um correr = dupla corre
 - [Ideia de arte: tela de carregamento](ideia_arte_tela_carregamento.md) — imagem conceito guardada para a Fase 7; sem marcas de terceiros, não está no repo
+- [Avatar Rive: estado](avatar-rive-estado.md) — `avatar.riv` no develop (26,7 KB, 15 sinais, 8 Numbers); catálogo e fallback seguem o `.riv` (ADR 0003); pendências: licença/splash do Rive, aparelho, ossos
+- [Receitas do editor Rive](rive-editor-receitas.md) — como operar o editor Rive por automação: receitas validadas, coordenadas, armadilhas
+- [PR e revisão](feedback_pr_e_revisao.md) — gh instalado, abrir o link do PR, Codex só com o diff no prompt (erro 740), worktree curto, pedir autorização para downloads
+- [Autonomia no Rive](feedback_autonomia_rive.md) — o agente faz o trabalho no editor Rive; nunca gerar o .riv por código
