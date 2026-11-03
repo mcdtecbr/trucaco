@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { BG_COLORS, SKIN_COLORS } from './parts';
+import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } from './art';
 
 const base = DEFAULT_AVATAR_PARTS;
@@ -92,5 +93,22 @@ describe('arte do avatar (mesmos paths do rig)', () => {
   it('conta vértices de elipse e retângulo', () => {
     expect(countVertices('M0,0L1,0L1,1L0,1Z')).toBe(4);
     expect(countVertices('M0,0C1,1 2,2 3,3Q4,4 5,5Z')).toBe(3);
+  });
+  it('a ordem efetiva de desenho (cabelo de trás/orelhas, corpo, cabeça) segue as camadas do rig', () => {
+    // O pescoço fica atrás da roupa e as orelhas e o cabelo de trás atrás do pescoço; o rosto vem depois.
+    for (const outfit of [0, 1, 2, 3, 4, 5]) {
+      for (const hair of [0, 2, 3]) {
+        const c = { ...DEFAULT_AVATAR_PARTS, outfit, hair };
+        const drawn = (['headBack', 'body', 'head'] as const)
+          .flatMap((g) => groupParts(g, c))
+          .map((p) => p.name);
+        const expected = PARTS.filter((p) => !p.when || p.when(c))
+          .filter((p) => ['headBack', 'body', 'head'].includes(artGroup(p) ?? ''))
+          .map((p, i) => ({ p, i }))
+          .sort((a, b) => a.p.layer - b.p.layer || a.i - b.i)
+          .map(({ p }) => p.name);
+        expect(drawn, `outfit ${outfit} hair ${hair}`).toEqual(expected);
+      }
+    }
   });
 });

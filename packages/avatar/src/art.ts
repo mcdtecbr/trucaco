@@ -484,8 +484,9 @@ export function countVertices(d: string): number {
 
 /** Grupos animados do fallback: cada um vira um `<Svg>` dentro de um `Animated.View`. */
 export type ArtGroup =
-  | 'back' // cabelo de trás, ombros e roupa (fundo é a cor do círculo)
-  | 'head' // orelhas, pescoço, rosto
+  | 'headBack' // cabelo de trás e orelhas: acompanham a cabeça, ficam ATRÁS do pescoço e da roupa
+  | 'body' // pescoço, ombros e roupa (fundo é a cor do círculo)
+  | 'head' // rosto e o que vem por cima dele
   | 'nose'
   | 'eyeL'
   | 'eyeR'
@@ -504,8 +505,8 @@ export function artGroup(p: Part): ArtGroup | null {
   if (p.name === 'mouth_inside' || p.name === 'tongue') return 'tongue';
   if (p.name.startsWith('mouth_')) return 'mouth';
   if (p.layer === 1) return null;
-  if (p.layer === 2) return 'back';
-  if (p.layer === 3) return p.name === 'ears' || p.name === 'neck' ? 'head' : 'back';
+  if (p.layer === 2) return 'headBack';
+  if (p.layer === 3) return p.name === 'ears' ? 'headBack' : 'body';
   if (p.layer === 4) return 'head';
   return 'front'; // layers 6 e 7
 }

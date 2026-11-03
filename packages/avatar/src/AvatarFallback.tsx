@@ -189,6 +189,17 @@ export function AvatarFallback(props: AvatarFallbackProps) {
     />
   );
 
+  const headStyle = [
+    StyleSheet.absoluteFill,
+    {
+      transform: [
+        { translateX: ch('headX', u) as number },
+        { translateY: ch('headY', u) as number },
+        { rotate: rot('headRot') as string },
+      ],
+    },
+  ];
+
   return (
     <View
       accessible
@@ -203,26 +214,20 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         overflow: 'hidden',
       }}
     >
-      {/* cabelo de trás, ombros e roupa (o fundo é a cor do círculo) */}
+      {/* cabelo de trás e orelhas: acompanham a cabeça, mas ficam atrás do pescoço e da roupa */}
+      <Animated.View style={headStyle}>
+        <View style={at(FULL)}>{layer('headBack', FULL)}</View>
+      </Animated.View>
+
+      {/* pescoço, ombros e roupa (o fundo é a cor do círculo) */}
       <Animated.View
         style={[at(FULL), { transform: [{ translateY: shoulderY as unknown as number }] }]}
       >
-        {layer('back', FULL)}
+        {layer('body', FULL)}
       </Animated.View>
 
       {/* cabeça e tudo que acompanha o rosto */}
-      <Animated.View
-        style={[
-          StyleSheet.absoluteFill,
-          {
-            transform: [
-              { translateX: ch('headX', u) as number },
-              { translateY: ch('headY', u) as number },
-              { rotate: rot('headRot') as string },
-            ],
-          },
-        ]}
-      >
+      <Animated.View style={headStyle}>
         <View style={at(FULL)}>{layer('head', FULL)}</View>
         <Animated.View
           style={[
