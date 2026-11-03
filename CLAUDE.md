@@ -11,6 +11,9 @@ Importada automaticamente no início de toda sessão (estado das fases, ambiente
 @.claude/memory/feedback_git_convencao.md
 @.claude/memory/trucaco-ambiente-dev.md
 @.claude/memory/handoff-fase-5.md
+@.claude/memory/avatar-rive-estado.md
+@.claude/memory/feedback_pr_e_revisao.md
+@.claude/memory/feedback_autonomia_rive.md
 
 Documentos de referência, leia antes de qualquer tarefa não trivial:
 
@@ -85,6 +88,6 @@ Documentos de referência, leia antes de qualquer tarefa não trivial:
 - **Nomes**: código em inglês (`playCard`, `callTruco`), termos do jogo mantidos em português quando não há tradução natural (`manilha`, `vira`, `zap`, `maoDeOnze`). Docs e commits em português.
 - **Commits**: `tipo(escopo): descrição` em pt-BR (`feat`, `fix`, `chore`, `docs`, `test`, `build`, `ci`). Escopos: `rules`, `server`, `mobile`, `avatar`, `protocol`, `ui`, `infra`, `docs`, `agents`.
 - **Git, modo atual (desde 2026-11-01)**: trabalhar, commitar e dar push **direto na `develop`**, sem branch de feature e **sem PR**, até o usuário avisar para abrir PR. Isso substitui a regra padrão abaixo enquanto durar; nunca mexer na `master`. Detalhes em `.claude/memory/feedback_git_convencao.md`.
-- **Git, regra padrão**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs pela API REST do GitHub (o `gh` não está instalado; ver `.claude/memory/trucaco-ambiente-dev.md`), não pela API do Azure DevOps.
+- **Git, regra padrão**: segue a skill `convencao-git` do usuário (Git Flow adaptado: `feature/*` → `develop` por PR; `develop` → `master` por PR só quando o usuário pedir). **Ajuste deste projeto**: remoto é o GitHub (`mcdtecbr/trucaco`), PRs pelo `gh` (instalado em 2026-11-03; ver `.claude/memory/feedback_pr_e_revisao.md` e `trucaco-ambiente-dev.md`), não pela API do Azure DevOps.
 - **Variáveis de ambiente**: toda variável nova entra em `.env.example` com valor de exemplo seguro e na seção de ambiente do `apps/server/README.md`. `.env` nunca versionado.
 - **Dependência nova**: só com justificativa no relatório do agente.

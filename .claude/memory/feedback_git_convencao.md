@@ -7,6 +7,8 @@ metadata:
 
 **Modo atual (ordem do usuário em 2026-11-01):** seguir todos os planos **direto na `develop`**, com commit e push na própria `develop`, **sem branch de feature e sem PR**, até o usuário avisar para gerar PR. Isso é autorização permanente para esse modo: pode commitar e dar push na `develop` sem perguntar a cada vez. Continua valendo: nunca mexer na `master`, stage por caminho, procurar segredos no diff, rodar a verificação antes de commitar. Quando o usuário mandar abrir PR, voltar ao fluxo abaixo (e perguntar se quer um PR único com tudo desde o último PR mesclado, #2).
 
+**Atualização 2026-11-03:** o usuário passou a pedir PR para `develop` (PRs #3 a #6, avatar Rive) e a mergear ele mesmo. No trabalho do avatar o fluxo é branch, PR e o usuário mergeia, com o `gh` (ver [[feedback_pr_e_revisao]]). Não é certo que o modo "direto na develop" tenha acabado para as outras frentes: na dúvida, perguntar.
+
 **Fluxo padrão (a retomar)** da skill `convencao-git` do usuário: `feature/*` sai da `develop` e volta por PR; `develop` → `master` por PR apenas quando o usuário pedir; nunca push direto em `develop` ou `master`.
 
 - Stage por caminho explícito, nunca `git add -A` nem `git add .`. Procurar segredos no diff antes do commit.
