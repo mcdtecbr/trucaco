@@ -12,7 +12,7 @@ const valid = { ...DEFAULT_AVATAR_PARTS };
 describe('catálogo de partes do avatar', () => {
   it('contagens combinadas', () => {
     expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([
-      4, 8, 8, 4, 4, 6, 3, 8, 8, 3, 11,
+      4, 8, 8, 4, 5, 6, 3, 8, 8, 3, 11,
     ]);
     expect(AVATAR_PART_KEYS.slice(-3)).toEqual(['hair_color', 'eye_color', 'outfit_color']);
   });

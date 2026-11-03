@@ -90,7 +90,7 @@ describe('render estático', () => {
     }
   });
 
-  it('os 15 sinais renderizam em pose e marcam o sinal ativo', () => {
+  it('os 16 sinais renderizam em pose e marcam o sinal ativo', () => {
     const idle = fallbackHtml(DEFAULT_AVATAR_PARTS);
     const htmls = new Set<string>();
     for (const id of SIGNAL_IDS) {

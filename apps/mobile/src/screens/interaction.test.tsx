@@ -517,7 +517,7 @@ describe('4E: sinais na mesa', () => {
     expect(seen[0]?.[me]?.id).toBe('nod');
   });
 
-  it('painel: abrir mostra os 15 sinais com nome; toque rápido NÃO envia', () => {
+  it('painel: abrir mostra os 16 sinais com nome; toque rápido NÃO envia', () => {
     mount(snapshot());
     expect(byTestId('signal-grid')).toBeNull();
     click(must('signal-toggle'));
@@ -545,7 +545,7 @@ describe('4E: sinais na mesa', () => {
 });
 
 describe('5D: combinar sinais', () => {
-  it('abre pela mesa com os 15 sinais, sugestão como placeholder e contador 0/60', () => {
+  it('abre pela mesa com os 16 sinais, sugestão como placeholder e contador 0/60', () => {
     mount(snapshot());
     expect(byTestId('codes-panel')).toBeNull();
     click(must('open-codes'));

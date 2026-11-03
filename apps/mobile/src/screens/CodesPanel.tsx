@@ -1,5 +1,5 @@
 /**
- * Painel "Combinar sinais" (apresentação pura): os 15 sinais do catálogo, cada um com um campo para o
+ * Painel "Combinar sinais" (apresentação pura): os 16 sinais do catálogo, cada um com um campo para o
  * significado combinado com o parceiro. Abre na sala de espera (a "preparação") e na mesa. O combinado
  * é privado da dupla: o servidor só o envia aos dois assentos. Todo texto vai como `<Text>`/`TextInput`
  * (nunca HTML). O significado tradicional do catálogo é só sugestão (placeholder), nunca valor salvo.

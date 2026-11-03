@@ -138,6 +138,28 @@ Receitas do editor aprendidas:
 - Transições: clique direito no estado e "Connect to...". A condição (`input = n`) se edita na seta da transição.
 - **Cuidado com hex repetido entre peças:** Selected Colors agrupa por valor, então editar um hex muda todas as peças que o compartilham, inclusive as que não deveriam mudar (foi o caso do botão do polo e da coroa do boné). Dê um hex único à peça que não deve acompanhar a cor antes de editar.
 
+## Fatia 2: bocas, línguas e sinal `mouth_open` (04/11/2026)
+
+Ampliação do catálogo, fatia 2 de 5 (ADR 0005). `avatar.riv` de 25,8 KB, só o artboard `Avatar`, state machine `Main`, **11 Numbers e 16 triggers**.
+
+- Solo da boca com 5 grupos (todos chamados "Group"; renomear no editor não funciona, identificar pela ordem). Timelines `mouth_0..mouth_4` refeitas; a layer `mouth` ganhou o estado `mouth_4` (`mouth = 4`).
+- Grupo `boca2` com as 7 peças da boca aberta, filho do `Bone 1`, na frente, opacidade base 0 (`tongue` e `tongue_center` também com 0).
+- Timelines `sig_mouth_open` e `sig_tongue` (novas/refeitas), 60 quadros, chaves em 0, 10, 50 e 60: Solo da boca 100→0→0→100, `boca2` 0→100→100→0, língua 0→100→100→0.
+- Input `trig_mouth_open` e estado `sig_mouth_open` na layer `Signal_Triggers`: ida de 150 ms com interpolação Cubic e condição `trig_mouth_open`; volta por Exit Time de 1000 ms.
+- Validado no runtime web (`@rive-app/canvas` 2.21.6): 16 triggers, 11 Numbers, `Main`, só `Avatar`, as 5 bocas certas e os dois sinais (capturados 350 ms após o gatilho) com boca 0, 1 e 4. `rivFile.test.ts` confere os 16 triggers e as animações `mouth_4`, `sig_mouth_open` e `sig_tongue` (o `.riv` exportado guarda nomes de animações e inputs, não de objetos). Aparelho iOS/Android não testado.
+- **Pendências e divergências:** (1) a transição de ida de `sig_tongue` (150 ms, Cubic) não foi feita, porque o ponto ficava escondido atrás de outros no grafo; (2) no fallback o sinal `tongue` também gira a cabeça (5°) e balança a língua, e no Rive esses dois movimentos não foram feitos (só a troca de opacidades); (3) os ajustes de pescoço, sombra do queixo e nariz da fatia 1 seguem só no Rive.
+
+Receitas do editor aprendidas:
+
+- **Mover um nó de pai:** clicar no canvas vazio para limpar a seleção, selecionar a linha, `Alt+P`, esperar 1 s e clicar na linha do novo pai.
+- **Agrupar:** `Ctrl+G`.
+- **Ordem de desenho:** botão direito > Move (passar o mouse, sem clicar) > Bring to front.
+- Multisseleção na Hierarchy é instável. "Draw Order +" do inspetor cria Draw Rule: evitar.
+- O campo numérico só aceita `Ctrl+A` depois de aparecer a borda azul (senão vira atalho).
+- Criar timeline pelo "+" esperando 1 s, com o foco fora do campo de busca.
+- Chaves: clique na régua (10 quadros ≈ 98,6 px) e o losango do campo.
+- "Connect to and from..." num estado Animation State cria ida e volta de uma vez.
+
 ## Cor de pele por Number: CONFIRMADA no editor (03/11/2026)
 
 Teste no arquivo do Rive (editor 0.9.517, prévia da state machine): timelines `skin_0` (chave de cor FCE4D6 em `face_oval`) e `skin_1` (E0AC69), dois estados na layer, transições `skin = 1` e `skin = 0`, Entry ligado a `skin_0`. Na prévia, `skin` 0→1 trocou o rosto para E0AC69 e 1→0 voltou. **Sem data binding e sem duplicar paths**: o plano A vale e o orçamento de 68 paths se mantém. Falta testar no runtime (web/nativo) e escalar para 6 tons e as 11 formas.

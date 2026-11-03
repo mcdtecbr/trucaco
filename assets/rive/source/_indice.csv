@@ -43,13 +43,23 @@ brow_r.svg;5;sempre;#2B1B12
 nose.svg;5;sempre;shade
 mouth_0_upper.svg;5;mouth=0;#B4443A
 mouth_0_lower.svg;5;mouth=0;#B4443A
+mouth_1_inside.svg;5;mouth=1;#3B0D0D
+mouth_1_teeth.svg;5;mouth=1;#F8FAFC
 mouth_1_upper.svg;5;mouth=1;#B4443A
 mouth_1_lower.svg;5;mouth=1;#B4443A
-mouth_2_upper.svg;5;mouth=2;#B4443A
-mouth_2_lower.svg;5;mouth=2;#B4443A
+mouth_2_inside.svg;5;mouth=2;#3B0D0D
+mouth_2_upper.svg;5;mouth=2;#9A3430
+mouth_2_lower.svg;5;mouth=2;#9A3430
 mouth_3_upper.svg;5;mouth=3;#B4443A
 mouth_3_lower.svg;5;mouth=3;#B4443A
+mouth_4_upper.svg;5;mouth=4;#B4443A
+mouth_4_lower.svg;5;mouth=4;#B4443A
 mouth_inside.svg;5;sempre;#3B0D0D (oculto)
+mouth_open_teeth_upper.svg;5;sempre;#F8FAFC (oculto)
+mouth_open_teeth_lower.svg;5;sempre;#F8FAFC (oculto)
+mouth_open_lower.svg;5;sempre;#B4443A (oculto)
+mouth_open_upper.svg;5;sempre;#B4443A (oculto)
+tongue_center.svg;5;sempre;#E36B7C (oculto)
 tongue.svg;5;sempre;#E36B7C (oculto)
 acc_mustache.svg;6;accessory=1;#2B1B12
 acc_earring.svg;6;accessory=2;#F5B301

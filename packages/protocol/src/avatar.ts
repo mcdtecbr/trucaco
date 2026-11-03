@@ -32,7 +32,7 @@ export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   skin: 8,
   hair: 8,
   eyes: 4,
-  mouth: 4,
+  mouth: 5,
   outfit: 6,
   accessory: 3,
   bg_color: 8,

@@ -4,6 +4,26 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Avatar: ampliação do catálogo, fatia 2 (bocas e línguas) (2026-11-04), sem commit final
+
+Decisão em `docs/adr/0005-boca-5-opcoes-e-sinal-mouth-open.md`. Não validado em aparelho iOS/Android.
+
+#### Adicionado
+
+- `mouth` ganha a 5ª opção (lábios cheios com cantinhos); sem migração, pois o intervalo só cresce.
+- Sinal `mouth_open` ("Abrir a boca", 16º de `SIGNAL_IDS`, trigger `trig_mouth_open`, 1000 ms): boca aberta com língua centrada.
+- Fallback vetorial: peças da boca aberta e das línguas (75 paths, 403 vértices) e canais `mouthOpacity`, `mouthOpenOpacity`, `tongueCenterOpacity` e `tongueSideOpacity`.
+- `avatar.riv` (25,8 KB) com 11 Numbers e 16 triggers: Solo da boca com 5 grupos, grupo `boca2` e timelines `sig_mouth_open` e `sig_tongue`.
+
+#### Alterado
+
+- Desenho das bocas 0 a 3 no estilo das pranchas de referência (o índice mantém o tipo de boca).
+- Sinal `tongue` (mesmo id e trigger) passa a mostrar a língua de lado.
+
+#### Divergências conhecidas
+
+- No Rive faltam a transição de ida de `sig_tongue` e os movimentos de cabeça (5°) e balanço da língua que o fallback faz.
+
 ### Avatar: ampliação do catálogo, fatia 1 (cores) (2026-11-04), ainda sem commit
 
 Decisão em `docs/adr/0004-catalogo-do-avatar-cor-separada-de-forma.md`. Não validado em aparelho iOS/Android.

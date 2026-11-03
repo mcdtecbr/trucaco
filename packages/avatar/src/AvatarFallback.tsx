@@ -51,7 +51,9 @@ const REGIONS = {
   browL: [172, 178, 80, 44],
   browR: [260, 178, 80, 44],
   mouth: [200, 296, 112, 72],
-  tongue: [226, 300, 60, 72],
+  mouthOpen: [196, 300, 120, 72],
+  tongueCenter: [230, 330, 52, 56],
+  tongueSide: [248, 326, 72, 52],
 } as const satisfies Partial<Record<ArtGroup, Region>>;
 
 function evenly(n: number): number[] {
@@ -116,7 +118,11 @@ export function AvatarFallback(props: AvatarFallbackProps) {
   const eyeRScale = Animated.multiply(blinkScale, ch('winkRScaleY'));
   const pupilX = ch('pupilX', u);
   const smileOp = ch('smileOpacity');
-  const baseMouthOp: Num = has('smileOpacity') ? Animated.subtract(1, smileOp) : 1;
+  // boca escolhida: esmaece com o sorriso e some enquanto a boca aberta dos sinais aparece
+  const smileMouthOp: Num = has('smileOpacity') ? Animated.subtract(1, smileOp) : 1;
+  const baseMouthOp: Num = has('mouthOpacity')
+    ? Animated.multiply(smileMouthOp, ch('mouthOpacity'))
+    : smileMouthOp;
 
   /** Um `<Svg>` com os paths de um grupo, recortado em `region`. */
   const layer = (group: ArtGroup, region: Region, withHidden = false): ReactNode => {
@@ -298,18 +304,39 @@ export function AvatarFallback(props: AvatarFallbackProps) {
             ]}
           />
         ) : null}
-        {/* interior da boca e língua: ocultos no rig, só aparecem no sinal de língua */}
-        {has('tongueOpacity') ? (
+        {/* boca aberta (lábios, interior e dentes) e línguas: ocultas no rig, só aparecem nos sinais
+            `mouth_open` (língua centrada) e `tongue` (língua de lado) */}
+        {has('mouthOpenOpacity') ? (
+          <Animated.View
+            style={[at(REGIONS.mouthOpen), { opacity: ch('mouthOpenOpacity') as number }]}
+          >
+            {layer('mouthOpen', REGIONS.mouthOpen, true)}
+          </Animated.View>
+        ) : null}
+        {has('tongueCenterOpacity') ? (
           <Animated.View
             style={[
-              at(REGIONS.tongue),
+              at(REGIONS.tongueCenter),
               {
-                opacity: ch('tongueOpacity') as number,
+                opacity: ch('tongueCenterOpacity') as number,
                 transform: [{ translateY: ch('tongueY', u) as number }],
               },
             ]}
           >
-            {layer('tongue', REGIONS.tongue, true)}
+            {layer('tongueCenter', REGIONS.tongueCenter, true)}
+          </Animated.View>
+        ) : null}
+        {has('tongueSideOpacity') ? (
+          <Animated.View
+            style={[
+              at(REGIONS.tongueSide),
+              {
+                opacity: ch('tongueSideOpacity') as number,
+                transform: [{ translateY: ch('tongueY', u) as number }],
+              },
+            ]}
+          >
+            {layer('tongueSide', REGIONS.tongueSide, true)}
           </Animated.View>
         ) : null}
         <View style={at(FULL)}>{layer('front', FULL)}</View>

@@ -80,21 +80,21 @@ Quem não é o dono de um assento não o recupera: o servidor recusa antes de ga
 
 Enviadas com `room.send(tipo, payload)`. O payload NUNCA leva `seat`: o servidor deriva o assento da sessão, e um campo extra (inclusive `seat`) resulta em `error INVALID_PAYLOAD`.
 
-| Tipo          | Payload                                                          | Observação                                                                                   |
-| ------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `play`        | `{ card: { rank, suit }, covered? }`                             | `covered: true` joga carta coberta (a partir da 2ª vaza)                                     |
-| `playBlind`   | `{ index }` (0 a 2)                                              | Mão de ferro: carta escolhida às cegas, por posição                                          |
-| `bet`         | `{}`                                                             | O servidor escolhe `callBet` ou `raiseBet` pelo estado. Quem pede ou aumenta é sempre humano |
-| `accept`      | `{}`                                                             | Aceita o truco pendente                                                                      |
-| `run`         | `{}`                                                             | Corre do truco pendente (a decisão da mão de onze/dez é `special`)                           |
-| `special`     | `{ decision: 'play' \| 'run' }`                                  | Decisão da mão de onze/dez                                                                   |
-| `signal`      | `{ signalId }`                                                   | Sinal de truco, público na mesa. Id de `SIGNAL_IDS`                                          |
-| `sfx`         | `{ sfxId }`                                                      | Efeito sonoro. Id de `SFX_IDS`                                                               |
-| `chat`        | `{ scope: 'partner' \| 'table', text }` ou `{ scope, phraseId }` | Texto OU frase rápida, nunca os dois. Ver seção 9                                            |
-| `voteCancel`  | `{}`                                                             | Voto para cancelar a série (unanimidade dos humanos conectados)                              |
-| `voteRematch` | `{}`                                                             | Voto por "Jogar de novo" na janela de revanche (ver abaixo). Chave extra: `INVALID_PAYLOAD`  |
-| `setCode`     | `{ signalId, meaning }`                                          | Combinado da dupla: significado de um sinal (vazio apaga). Ver "Combinado da dupla"          |
-| `ready`       | `{}`                                                             | Não inicia a partida. O cliente o envia ao ligar os handlers; o servidor reenvia `codes`     |
+| Tipo          | Payload                                                          | Observação                                                                                                                      |
+| ------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `play`        | `{ card: { rank, suit }, covered? }`                             | `covered: true` joga carta coberta (a partir da 2ª vaza)                                                                        |
+| `playBlind`   | `{ index }` (0 a 2)                                              | Mão de ferro: carta escolhida às cegas, por posição                                                                             |
+| `bet`         | `{}`                                                             | O servidor escolhe `callBet` ou `raiseBet` pelo estado. Quem pede ou aumenta é sempre humano                                    |
+| `accept`      | `{}`                                                             | Aceita o truco pendente                                                                                                         |
+| `run`         | `{}`                                                             | Corre do truco pendente (a decisão da mão de onze/dez é `special`)                                                              |
+| `special`     | `{ decision: 'play' \| 'run' }`                                  | Decisão da mão de onze/dez                                                                                                      |
+| `signal`      | `{ signalId }`                                                   | Sinal de truco, público na mesa. Id de `SIGNAL_IDS` (16 sinais; o 16º, `mouth_open`, entrou na ampliação do catálogo, ADR 0005) |
+| `sfx`         | `{ sfxId }`                                                      | Efeito sonoro. Id de `SFX_IDS`                                                                                                  |
+| `chat`        | `{ scope: 'partner' \| 'table', text }` ou `{ scope, phraseId }` | Texto OU frase rápida, nunca os dois. Ver seção 9                                                                               |
+| `voteCancel`  | `{}`                                                             | Voto para cancelar a série (unanimidade dos humanos conectados)                                                                 |
+| `voteRematch` | `{}`                                                             | Voto por "Jogar de novo" na janela de revanche (ver abaixo). Chave extra: `INVALID_PAYLOAD`                                     |
+| `setCode`     | `{ signalId, meaning }`                                          | Combinado da dupla: significado de um sinal (vazio apaga). Ver "Combinado da dupla"                                             |
+| `ready`       | `{}`                                                             | Não inicia a partida. O cliente o envia ao ligar os handlers; o servidor reenvia `codes`                                        |
 
 Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (seção 8). Id fora do catálogo: `INVALID_SIGNAL` ou `INVALID_SFX`.
 

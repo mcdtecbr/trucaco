@@ -19,7 +19,10 @@ export type PoseChannel =
   | 'pupilX'
   | 'noseX'
   | 'noseScale'
-  | 'tongueOpacity'
+  | 'mouthOpacity' // boca escolhida (1 em repouso; some enquanto a boca aberta aparece)
+  | 'mouthOpenOpacity' // grupo da boca aberta (lábios, interior e dentes)
+  | 'tongueCenterOpacity'
+  | 'tongueSideOpacity'
   | 'tongueY'
   | 'biteOpacity'
   | 'puffOpacity'
@@ -42,7 +45,10 @@ export const NEUTRAL: Readonly<Record<PoseChannel, number>> = {
   pupilX: 0,
   noseX: 0,
   noseScale: 1,
-  tongueOpacity: 0,
+  mouthOpacity: 1,
+  mouthOpenOpacity: 0,
+  tongueCenterOpacity: 0,
+  tongueSideOpacity: 0,
   tongueY: -3,
   biteOpacity: 0,
   puffOpacity: 0,
@@ -79,10 +85,20 @@ export const POSES: Readonly<Record<SignalId, Pose>> = {
     puffOpacity: [0, 1, 1, 1, 1, 1, 0],
     puffScale: [0.6, 1, 1.1, 1, 1.1, 1, 0.6],
   },
+  // Troca a boca escolhida pela boca aberta com a língua DE LADO ("Tenho um 3").
   tongue: {
-    tongueOpacity: [0, 1, 1, 1, 1, 1, 0],
+    mouthOpacity: [1, 0, 0, 0, 0, 0, 1],
+    mouthOpenOpacity: [0, 1, 1, 1, 1, 1, 0],
+    tongueSideOpacity: [0, 1, 1, 1, 1, 1, 0],
     tongueY: [-3, 2, 3, 2, 3, 2, -3],
     headRot: [0, 5, 5, 5, 5, 5, 0],
+  },
+  // Boca aberta com dentes e a língua CENTRADA (sinal livre).
+  mouth_open: {
+    mouthOpacity: [1, 0, 0, 0, 0, 0, 1],
+    mouthOpenOpacity: [0, 1, 1, 1, 1, 1, 0],
+    tongueCenterOpacity: [0, 1, 1, 1, 1, 1, 0],
+    tongueY: [-3, 2, 3, 2, 3, 2, -3],
   },
   nose_twitch: {
     noseX: [0, 1.6, -1.6, 1.6, -1.6, 1.6, -1.6, 0],
