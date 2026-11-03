@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { BG_COLORS, SKIN_COLORS } from './parts';
-import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } from './art';
 
 const base = DEFAULT_AVATAR_PARTS;
