@@ -8,12 +8,19 @@ import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
 import type { Room } from '@colyseus/core';
 import { ColyseusTestServer, boot } from '@colyseus/testing';
-import { MAX_MESSAGE_BYTES, QUICK_PHRASE_IDS, SFX_IDS, SIGNAL_IDS } from '@trucaco/protocol';
+import {
+  MAX_MESSAGE_BYTES,
+  PARTNER_CODE_MAX_LENGTH,
+  QUICK_PHRASE_IDS,
+  SFX_IDS,
+  SIGNAL_IDS,
+} from '@trucaco/protocol';
 import type { ErrorCode, RoomOptions } from '@trucaco/protocol';
-import { mulberry32, nextSeat, pendingSeat } from '@trucaco/rules';
+import { mulberry32, nextSeat, pendingSeat, teamOf } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { FinishedMatchInput, MatchRepository } from '../db/types';
+import { NotPartnersError } from '../db/types';
+import type { FinishedMatchInput, MatchRepository, PartnerCodesMap } from '../db/types';
 import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
@@ -52,7 +59,64 @@ const gateRepo: MatchRepository = {
   listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
 };
 
+/** Combinado da dupla (Fase 5): armazém falso de `partner_codes` e vínculo "jogaram juntos". */
+const pairKey = (a: string, b: string): string => [a, b].sort().join('|');
+const codeStore = {
+  codes: new Map<string, PartnerCodesMap>(),
+  played: new Set<string>(),
+  saved: [] as { key: string; codes: PartnerCodesMap }[],
+  failLoad: false,
+};
+const resetCodeStore = (): void => {
+  codeStore.codes.clear();
+  codeStore.played.clear();
+  codeStore.saved.length = 0;
+  codeStore.failLoad = false;
+};
+const codesUsers: NonNullable<TrucoRoomConfig['users']> = {
+  getPartnerCodes: (a, b) => {
+    if (codeStore.failLoad) return Promise.reject(new Error('banco fora'));
+    return Promise.resolve(codeStore.codes.get(pairKey(a, b)) ?? null);
+  },
+  havePlayedTogether: (a, b) => Promise.resolve(codeStore.played.has(pairKey(a, b))),
+  savePartnerCodes: (a, b, codes) => {
+    const key = pairKey(a, b);
+    if (!codeStore.played.has(key)) return Promise.reject(new NotPartnersError());
+    codeStore.codes.set(key, codes);
+    codeStore.saved.push({ key, codes });
+    return Promise.resolve();
+  },
+};
+/** Como o banco: partida `finished` vincula os pares da mesma dupla. */
+const codesMatches: MatchRepository = {
+  saveMatch: (input) => {
+    if (input.status === 'finished') {
+      for (const x of input.players) {
+        for (const y of input.players) {
+          if (x.userId !== null && y.userId !== null && x.seat < y.seat && x.team === y.team) {
+            codeStore.played.add(pairKey(x.userId, y.userId));
+          }
+        }
+      }
+    }
+    return Promise.resolve('1');
+  },
+  listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
+};
+
 const VARIANTS: Record<string, TrucoRoomConfig> = {
+  'truco-codes': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    chatCooldownMs: 50,
+    codesCooldownMs: 300,
+    matches: codesMatches,
+    users: codesUsers,
+  },
   'truco-rematch-gate': {
     ...FAST,
     rngSeed: 13,
@@ -319,6 +383,7 @@ interface Inbox {
   signals: { seat: number; signalId: string; at: number }[];
   sfxs: { seat: number; sfxId: string; at: number }[];
   chats: { scope: string; seat: number; text?: string; phraseId?: string; at: number }[];
+  codes: { codes: Record<string, string>; by: number; at: number }[];
 }
 const inboxes = new WeakMap<object, Inbox>();
 const inboxOf = (p: Player): Inbox => inboxes.get(p.room) as Inbox;
@@ -328,11 +393,24 @@ const SECRETS: string[] = [];
 /** Liga handlers e o detector de vazamento a um cliente (entrada normal ou reconexão). */
 function wirePlayer(game: Game, p: Player): void {
   const { room, seat } = p;
-  const inbox: Inbox = { signals: [], sfxs: [], chats: [] };
+  const inbox: Inbox = { signals: [], sfxs: [], chats: [], codes: [] };
   inboxes.set(room, inbox);
   room.onMessage('signal', (m: Inbox['signals'][number]) => inbox.signals.push(m));
   room.onMessage('sfx', (m: Inbox['sfxs'][number]) => inbox.sfxs.push(m));
-  room.onMessage('chat', (m: Inbox['chats'][number]) => inbox.chats.push(m));
+  room.onMessage('chat', (m: Inbox['chats'][number]) => {
+    inbox.chats.push(m);
+    // Detector de vazamento: chat da dupla de OUTRO time nunca pode chegar a este assento.
+    if (m.scope === 'partner' && teamOf(m.seat) !== teamOf(seat)) {
+      game.leaks.push(`chat da dupla do assento ${m.seat} chegou ao assento ${seat}`);
+    }
+  });
+  room.onMessage('codes', (m: Inbox['codes'][number]) => {
+    inbox.codes.push(m);
+    // Detector de vazamento: o combinado só circula dentro do time (autor no time do destinatário).
+    if (m.by !== -1 && teamOf(m.by) !== teamOf(seat)) {
+      game.leaks.push(`combinado do assento ${m.by} chegou ao assento ${seat}`);
+    }
+  });
   room.onMessage('event', (m: Received) => {
     p.events.push(m);
     game.leaks.push(...eventViolations(m.event, seat, `evento seq ${m.seq} assento ${seat}`));
@@ -1917,13 +1995,16 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
     expect(inboxOf(game.players[1] as Player).chats).toHaveLength(1);
   });
 
-  it('(h) fora de playing: signal/sfx/chat da dupla ignorados; chat da mesa vale na espera e depois', async () => {
+  it('(h) fora de playing: signal/sfx ignorados (e chat da dupla após o fim); chat da mesa vale na espera e depois', async () => {
     const game = await createGame('truco-soc', OPTS, 2);
     const [p0, p1] = game.players as [Player, Player];
     expect(game.server.series).toBeNull();
     p0.room.send('signal', { signalId: 'wink' });
     p0.room.send('sfx', { sfxId: SFX_FIRST });
     p0.room.send('chat', { scope: 'partner', text: 'na espera' });
+    // Chat da dupla vale na espera (Fase 5): só o eco chega a p0; p1 é adversário e nunca recebe.
+    await until(() => inboxOf(p0).chats.length === 1, 'eco do chat da dupla na espera');
+    await sleep(450);
     p0.room.send('chat', { scope: 'table', text: 'oi sala' });
     await until(() => inboxOf(p1).chats.length === 1, 'chat da mesa na espera');
     await sleep(QUIET_MS);
@@ -2509,5 +2590,232 @@ describe('TrucoRoom: sinais do bot (4B)', () => {
     back.room.send('signal', { signalId: 'wink' });
     await until(() => inboxOf(p0).signals.length === 1, 'sinal do humano que voltou');
     expect(inboxOf(p0).signals[0]?.seat).toBe(3);
+  });
+});
+
+describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', () => {
+  const NAME = 'truco-codes';
+  const P = 'cp';
+  const at = (g: Game, seat: number): Player => g.players[seat] as Player;
+  const lastCodes = (p: Player): Record<string, string> | undefined =>
+    inboxOf(p).codes[inboxOf(p).codes.length - 1]?.codes;
+  // `ready`: o cliente já ligou os handlers; o servidor reenvia o combinado (o do `onJoin` pode se perder).
+  const readyAll = (g: Game): void => g.players.forEach((p) => p.room.send('ready'));
+  const texts = (p: Player): string => JSON.stringify(inboxOf(p).codes.map((c) => c.codes));
+
+  async function started(): Promise<Game> {
+    resetCodeStore();
+    const game = await createGame(NAME, OPTS, 4, P);
+    await until(() => game.server.series !== null, 'série iniciada');
+    // O par é carregado logo após o 4º sentar: cada dupla recebe o baseline (`codes` vazio, by -1).
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    return game;
+  }
+
+  it('chat da dupla na ESPERA chega ao parceiro e ao eco; adversários nunca', async () => {
+    resetCodeStore();
+    const game = await createGame(NAME, OPTS, 3, P);
+    expect(game.server.series).toBeNull();
+    const [p0, p1, p2] = game.players as [Player, Player, Player];
+    p0.room.send('chat', { scope: 'partner', text: 'combinado-secreto-1' });
+    await until(
+      () => inboxOf(p0).chats.length === 1 && inboxOf(p2).chats.length === 1,
+      'dupla recebeu',
+    );
+    expect(inboxOf(p2).chats[0]).toMatchObject({ scope: 'partner', seat: 0 });
+    await sleep(QUIET_MS);
+    expect(inboxOf(p1).chats).toEqual([]);
+    // O 4º assento entra depois: não recebe o histórico.
+    const p3Room = await t.connectTo<Room>(game.server as unknown as Room, {
+      userId: `${P}-3`,
+      nickname: 'Jogador 3',
+    });
+    const p3: Player = {
+      seat: 3,
+      room: p3Room,
+      events: [],
+      errors: [],
+      turnTimers: [],
+      presences: [],
+      gone: false,
+    };
+    wirePlayer(game, p3);
+    game.players.push(p3);
+    await sleep(QUIET_MS);
+    expect(inboxOf(p3).chats).toEqual([]);
+    assertNoLeaks(game);
+  });
+
+  it('setCode: só os 2 assentos da dupla recebem o mapa; adversários nada', async () => {
+    const game = await started();
+    SECRETS.push('zap-na-manga-42');
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    p0.room.send('setCode', { signalId: 'wink', meaning: ' zap-na-manga-42 ' });
+    await until(
+      () => lastCodes(p0)?.['wink'] !== undefined && lastCodes(p2)?.['wink'] !== undefined,
+      'dupla',
+    );
+    for (const p of [p0, p2]) {
+      expect(lastCodes(p)).toEqual({ wink: 'zap-na-manga-42' });
+      expect(inboxOf(p).codes[inboxOf(p).codes.length - 1]?.by).toBe(0);
+    }
+    // o parceiro edita outro sinal: o mapa completo volta aos dois
+    p2.room.send('setCode', { signalId: 'nod', meaning: 'tenho três' });
+    await until(() => lastCodes(p0)?.['nod'] === 'tenho três', 'edição do parceiro');
+    expect(lastCodes(p2)).toEqual({ wink: 'zap-na-manga-42', nod: 'tenho três' });
+    await sleep(QUIET_MS);
+    for (const opp of [p1, p3]) {
+      expect(texts(opp)).not.toContain('zap-na-manga-42');
+      expect(texts(opp)).not.toContain('tenho três');
+      // só o baseline vazio do PRÓPRIO time
+      expect(inboxOf(opp).codes.every((c) => Object.keys(c.codes).length === 0)).toBe(true);
+    }
+    // o combinado não vai a log nem ao estado (SECRETS vigia patches e refs)
+    expect(logLines.join('\n')).not.toContain('zap-na-manga-42');
+    assertNoLeaks(game);
+    SECRETS.length = 0;
+  });
+
+  it('setCode: cooldown dá RATE_LIMITED sem entrega e libera depois; vazio apaga', async () => {
+    const game = await started();
+    const [p0, , p2] = game.players as [Player, Player, Player];
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'um' });
+    p0.room.send('setCode', { signalId: 'nod', meaning: 'dois' });
+    await until(() => p0.errors.includes('RATE_LIMITED'), 'RATE_LIMITED');
+    await until(() => lastCodes(p2)?.['wink'] === 'um', 'primeira entregue');
+    expect(lastCodes(p2)).toEqual({ wink: 'um' });
+    await sleep(350);
+    p0.room.send('setCode', { signalId: 'wink', meaning: '   ' });
+    await until(() => Object.keys(lastCodes(p2) ?? { x: '' }).length === 0, 'apagado');
+  });
+
+  it('setCode inválido: id fora do catálogo INVALID_PAYLOAD; texto sujo e acima de 60 CHAT_BLOCKED; nada entregue', async () => {
+    const game = await started();
+    const [p0, p1, p2] = game.players as [Player, Player, Player];
+    const before = inboxOf(p2).codes.length;
+    p0.room.send('setCode', { signalId: 'inexistente', meaning: 'x' });
+    await until(() => p0.errors.includes('INVALID_PAYLOAD'), 'INVALID_PAYLOAD');
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'a‍b' });
+    await until(() => p0.errors.includes('CHAT_BLOCKED'), 'CHAT_BLOCKED (ZWJ)');
+    // a rejeição acima gastou o cooldown do combinado
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'x'.repeat(PARTNER_CODE_MAX_LENGTH + 1) });
+    await until(() => p0.errors.includes('RATE_LIMITED'), 'RATE_LIMITED após rejeição');
+    await sleep(350);
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'x'.repeat(PARTNER_CODE_MAX_LENGTH + 1) });
+    await until(
+      () => p0.errors.filter((c) => c === 'CHAT_BLOCKED').length === 2,
+      'CHAT_BLOCKED (61)',
+    );
+    // `seat` vindo do cliente é recusado
+    p1.room.send('setCode', { signalId: 'wink', meaning: 'x', seat: 0 });
+    await until(() => p1.errors.includes('INVALID_PAYLOAD'), 'seat extra recusado');
+    await sleep(QUIET_MS);
+    expect(inboxOf(p2).codes.length).toBe(before);
+  });
+
+  it('sem parceiro humano sentado o setCode é ignorado em silêncio', async () => {
+    resetCodeStore();
+    const game = await createGame(NAME, OPTS, 2, P);
+    const [p0] = game.players as [Player, Player];
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'sozinho' });
+    await sleep(QUIET_MS);
+    expect(p0.errors).toEqual([]);
+    expect(inboxOf(p0).codes).toEqual([]);
+  });
+
+  it('parceiro que sai da espera: quem ficou recebe o combinado vazio', async () => {
+    resetCodeStore();
+    const game = await createGame(NAME, OPTS, 3, P);
+    const [p0, , p2] = game.players as [Player, Player, Player];
+    await until(() => inboxOf(p0).codes.length === 1, 'baseline');
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'x' });
+    await until(() => lastCodes(p2)?.['wink'] === 'x', 'entregue');
+    await p2.room.leave();
+    await until(() => inboxOf(p0).codes.length === 3, 'vazio ao ficar sozinho');
+    expect(lastCodes(p0)).toEqual({});
+    expect(inboxOf(p0).codes[2]?.by).toBe(-1);
+  });
+
+  it('par já vinculado: carrega do banco e grava a cada edição', async () => {
+    resetCodeStore();
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    codeStore.played.add(key);
+    codeStore.codes.set(key, { nod: 'guardado' });
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    const [p0, p1, p2] = game.players as [Player, Player, Player];
+    await until(() => lastCodes(p2)?.['nod'] === 'guardado', 'carregado do banco');
+    expect(inboxOf(p2).codes.at(-1)?.by).toBe(-1);
+    await sleep(QUIET_MS);
+    expect(texts(p1)).not.toContain('guardado');
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'novo' });
+    await until(() => codeStore.saved.length === 1, 'gravado na hora');
+    expect(codeStore.saved[0]).toEqual({ key, codes: { nod: 'guardado', wink: 'novo' } });
+  });
+
+  it('falha do banco ao carregar não derruba a mesa: combinado vazio, sem texto no log', async () => {
+    resetCodeStore();
+    codeStore.failLoad = true;
+    const game = await createGame(NAME, OPTS, 4, P);
+    await until(() => inboxOf(game.players[0] as Player).codes.length === 1, 'baseline vazio');
+    expect(lastCodes(game.players[0] as Player)).toEqual({});
+    expect(logLines.join('\n')).not.toContain('banco fora');
+  });
+
+  it('par novo: não grava na hora; grava depois da 1ª partida finalizada; cancelada não grava', async () => {
+    const game = await started();
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'tenho zap' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'tenho zap', 'entregue');
+    await sleep(QUIET_MS);
+    expect(codeStore.saved).toEqual([]);
+    await drive(game, () => (game.server.series?.winner ?? null) !== null, 'fim da série');
+    await until(() => codeStore.saved.length >= 1, 'gravado após a partida');
+    expect(codeStore.saved.every((s) => s.key === pairKey(`${P}-0`, `${P}-2`))).toBe(true);
+    expect(codeStore.saved.at(-1)?.codes).toEqual({ wink: 'tenho zap' });
+    await t.cleanup();
+    // série cancelada: nada gravado
+    const g2 = await started();
+    at(g2, 1).room.send('setCode', { signalId: 'nod', meaning: 'cancelado' });
+    await until(() => lastCodes(at(g2, 3))?.['nod'] === 'cancelado', 'entregue');
+    for (const p of g2.players) p.room.send('voteCancel');
+    await until(() => (g2.server.state as { phase: string }).phase === 'finished', 'cancelada');
+    await sleep(QUIET_MS);
+    expect(codeStore.saved).toEqual([]);
+  });
+
+  it('reconexão reenvia o combinado só ao assento retomado; adversário nada', async () => {
+    const game = await started();
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'tenho zap' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'tenho zap', 'entregue');
+    await dropSeat(game, 0);
+    const room = await reconnectWith(at(game, 0), `dev:${P}-0`);
+    const back: Player = { ...at(game, 0), room, events: [], errors: [], gone: false };
+    wirePlayer(game, back);
+    game.players[0] = back;
+    await until(() => inboxOf(back).codes.length >= 1, 'combinado reenviado');
+    expect(lastCodes(back)).toEqual({ wink: 'tenho zap' });
+    expect(inboxOf(back).codes.at(-1)?.by).toBe(-1);
+    await sleep(QUIET_MS);
+    expect(texts(at(game, 1))).not.toContain('tenho zap');
+    expect(texts(at(game, 3))).not.toContain('tenho zap');
+    assertNoLeaks(game);
+  });
+
+  it('chat da dupla em jogo: adversários nunca recebem (nos 4 assentos)', async () => {
+    const game = await started();
+    for (let seat = 0; seat < 4; seat++) {
+      at(game, seat).room.send('chat', { scope: 'partner', text: `dupla-${seat}` });
+      await sleep(80);
+    }
+    await until(() => game.players.every((p) => inboxOf(p).chats.length >= 2), 'entregues');
+    await sleep(QUIET_MS);
+    for (let seat = 0; seat < 4; seat++) {
+      const got = inboxOf(at(game, seat))
+        .chats.map((c) => c.seat)
+        .sort();
+      expect(got).toEqual([seat, (seat + 2) % 4].sort());
+    }
+    assertNoLeaks(game);
   });
 });

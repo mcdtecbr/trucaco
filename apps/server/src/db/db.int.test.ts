@@ -241,7 +241,7 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
     it('avatar: catálogo no repositório, teto de tamanho no banco, formato antigo vira null', async () => {
       const u = await guest('Gil');
       await expect(
-        users.saveAvatar(u.id, { hat: 'x'.repeat(141) } as unknown as AvatarParts),
+        users.saveAvatar(u.id, { hat: 'x'.repeat(61) } as unknown as AvatarParts),
       ).rejects.toBeInstanceOf(InvalidInputError);
       await expect(
         db().$executeRaw`INSERT INTO avatars (user_id, parts, updated_at)
@@ -341,13 +341,13 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
       await expect(insert(lo, hi)).rejects.toThrow(/partner_codes_user_a_id_user_b_id_key/);
     });
 
-    it('significado de até 140 caracteres, só signalId do catálogo; teto de 16 KB no banco', async () => {
+    it('significado de até 60 caracteres, só signalId do catálogo; teto de 16 KB no banco', async () => {
       const a = await guest('Ana');
       const b = await guest('Beto');
       await makePartners(a.id, b.id);
-      await users.savePartnerCodes(a.id, b.id, { wink: 'x'.repeat(140) });
+      await users.savePartnerCodes(a.id, b.id, { wink: 'x'.repeat(60) });
       const badCodes: PartnerCodesMap[] = [
-        { wink: 'x'.repeat(141) },
+        { wink: 'x'.repeat(61) },
         { naoExiste: 'x' },
         { '': 'x' },
       ];

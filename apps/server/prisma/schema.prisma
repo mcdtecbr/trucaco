@@ -168,7 +168,7 @@ model PartnerCodes {
   id        String   @id @default(uuid()) @db.Uuid
   userAId   String   @map("user_a_id") @db.Uuid
   userBId   String   @map("user_b_id") @db.Uuid
-  // { [signalId]: significado }, até 140 caracteres por significado (validado no repositório).
+  // { [signalId]: significado }, até 60 caracteres por significado (validado no repositório).
   codes     Json
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

@@ -28,6 +28,12 @@ export const CHAT_COOLDOWN_MS = 2000;
 /** Tamanho máximo de uma mensagem de chat. */
 export const CHAT_MAX_LENGTH = 140;
 
+/** Tamanho máximo do significado combinado de um sinal (único teto, também no banco). */
+export const PARTNER_CODE_MAX_LENGTH = 60;
+
+/** Intervalo mínimo entre dois `setCode` do mesmo assento. */
+export const CODES_COOLDOWN_MS = 1000;
+
 /** Variantes de truco suportadas. */
 export const VARIANT_IDS = ['paulista', 'mineiro'] as const;
 

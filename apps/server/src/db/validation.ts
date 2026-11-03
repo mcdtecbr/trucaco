@@ -1,10 +1,10 @@
-import { CHAT_MAX_LENGTH, SIGNAL_IDS, parseAvatarParts } from '@trucaco/protocol';
+import { PARTNER_CODE_MAX_LENGTH, SIGNAL_IDS, parseAvatarParts } from '@trucaco/protocol';
 import type { AvatarParts } from '@trucaco/protocol';
 import { InvalidInputError, type FinishedMatchInput, type PartnerCodesMap } from './types';
 
 export const NICKNAME_MIN = 3;
 export const NICKNAME_MAX = 16;
-export const PARTNER_CODE_MAX = CHAT_MAX_LENGTH;
+export const PARTNER_CODE_MAX = PARTNER_CODE_MAX_LENGTH;
 export const REPORT_TEXT_MAX = 500;
 export const UINT32_MAX = 4294967295;
 /** Tetos de tamanho (bytes de JSON) por coluna; os mesmos valores dos CHECKs `*_size_check`. */
@@ -69,7 +69,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `signalId` só do catálogo, no máximo um significado por sinal, cada um com até 140 caracteres. */
+/** `signalId` só do catálogo, no máximo um significado por sinal, cada um com até 60 caracteres. */
 export function assertPartnerCodes(codes: PartnerCodesMap): void {
   if (!isPlainObject(codes)) throw new InvalidInputError('Códigos inválidos.');
   const entries = Object.entries(codes);

@@ -117,15 +117,15 @@ describe('repositórios em memória (espelham as regras do SQL)', () => {
     expect(await users.getPartnerCodes(b.id, a.id)).toEqual({ wink: 'zap' });
   });
 
-  it('códigos: só signalId do catálogo, valor até 140 caracteres; bloqueio idempotente', async () => {
+  it('códigos: só signalId do catálogo, valor até 60 caracteres; bloqueio idempotente', async () => {
     const { users, matches } = createMemoryRepositories();
     const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
     const b = await users.createGuest({ providerSubject: 'b', nickname: 'Beto' });
     await matches.saveMatch(finished(a.id, b.id, null, null));
-    const all = Object.fromEntries(SIGNAL_IDS.map((id) => [id, 'x'.repeat(140)]));
+    const all = Object.fromEntries(SIGNAL_IDS.map((id) => [id, 'x'.repeat(60)]));
     await users.savePartnerCodes(a.id, b.id, all);
     const badCodes: PartnerCodesMap[] = [
-      { wink: 'x'.repeat(141) },
+      { wink: 'x'.repeat(61) },
       { naoExiste: 'x' },
       JSON.parse('{"__proto__":"x"}') as PartnerCodesMap,
       { '': 'x' },

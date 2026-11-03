@@ -42,7 +42,7 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 
 | Coluna                      | Teto no banco (`pg_column_size`, valor não comprimido) | Validação na aplicação                                                                                                                                             |
 | --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `partner_codes.codes`       | < 16 KB (`partner_codes_codes_size_check`)             | `signalId` só de `SIGNAL_IDS` (`@trucaco/protocol`), no máximo 12 chaves, valor string até `CHAT_MAX_LENGTH` (140)                                                 |
+| `partner_codes.codes`       | < 16 KB (`partner_codes_codes_size_check`)             | `signalId` só de `SIGNAL_IDS` (`@trucaco/protocol`), no máximo 12 chaves, valor string até `PARTNER_CODE_MAX_LENGTH` (60)                                          |
 | `avatars.parts`             | < 16 KB (`avatars_parts_size_check`)                   | objeto plano validado por `parseAvatarParts` (`@trucaco/protocol`): exatamente as chaves de `AVATAR_PART_KEYS` com índices inteiros do catálogo e `voice` opcional |
 | `matches.options` / `games` | < 16 KB / < 64 KB                                      | mesmos tetos em bytes de JSON (`JSON_LIMITS`)                                                                                                                      |
 | `matches.deals` / `events`  | < 1 MB / < 2 MB                                        | idem; uma partida real fica na ordem de centenas de KB                                                                                                             |
@@ -104,7 +104,7 @@ Prazos são propostas para o usuário confirmar (privacidade/jurídico); mudar u
 ### Observações e limites conhecidos
 
 - O `CHECK` de assento é 0..3. A mesa de 6 (Fase 8) troca `match_players_seat_check` e `match_players_team_check` (`team = seat % 2` continua válido).
-- O tamanho de 140 caracteres por código de `partner_codes`, o catálogo de `signalId` e a forma de `AvatarParts` são validados no repositório/servidor; o banco só impõe tipo e teto de bytes (o Postgres não permite subconsulta em `CHECK`).
+- O tamanho de 60 caracteres por código de `partner_codes`, o catálogo de `signalId` e a forma de `AvatarParts` são validados no repositório/servidor; o banco só impõe tipo e teto de bytes (o Postgres não permite subconsulta em `CHECK`).
 - `lower()` depende do locale do cluster para letras não ASCII: o conjunto de caracteres do apelido já é restrito (política acima), mas o banco precisa ser UTF-8 com locale UTF-8.
 - `gen_random_uuid()` não é usado como default: o Prisma gera o UUID no cliente. Inserções SQL diretas precisam informar `id`.
 

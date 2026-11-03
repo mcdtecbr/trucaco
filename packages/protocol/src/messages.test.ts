@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CHAT_MAX_LENGTH, parseClientMessage, type ClientMessage } from './index';
+import {
+  CHAT_MAX_LENGTH,
+  PARTNER_CODE_MAX_LENGTH,
+  parseClientMessage,
+  type ClientMessage,
+} from './index';
 
 const ok = (raw: unknown, message: ClientMessage): void =>
   expect(parseClientMessage(raw)).toEqual({ ok: true, message });
@@ -184,5 +189,51 @@ describe('parseClientMessage robustez', () => {
     };
     ok(raw, { type: 'signal', signalId: 'wink' });
     expect(reads).toBe(1);
+  });
+});
+
+describe('setCode (combinado da dupla)', () => {
+  it('aceita sinal do catálogo e limpa o texto como o chat', () => {
+    ok(
+      { type: 'setCode', signalId: 'wink', meaning: '  tenho zap ' },
+      { type: 'setCode', signalId: 'wink', meaning: 'tenho zap' },
+    );
+    ok(
+      { type: 'setCode', signalId: 'nod', meaning: 'a\nb' },
+      { type: 'setCode', signalId: 'nod', meaning: 'a b' },
+    );
+  });
+  it('significado vazio ou só espaços apaga o combinado', () => {
+    ok(
+      { type: 'setCode', signalId: 'wink', meaning: '' },
+      { type: 'setCode', signalId: 'wink', meaning: '' },
+    );
+    ok(
+      { type: 'setCode', signalId: 'wink', meaning: '   ' },
+      { type: 'setCode', signalId: 'wink', meaning: '' },
+    );
+  });
+  it('teto de 60 code points: 60 passa, 61 vira CHAT_BLOCKED', () => {
+    const sixty = 'é'.repeat(PARTNER_CODE_MAX_LENGTH);
+    ok(
+      { type: 'setCode', signalId: 'wink', meaning: sixty },
+      { type: 'setCode', signalId: 'wink', meaning: sixty },
+    );
+    bad({ type: 'setCode', signalId: 'wink', meaning: sixty + 'x' }, 'CHAT_BLOCKED');
+    bad({ type: 'setCode', signalId: 'wink', meaning: 'x'.repeat(5000) }, 'CHAT_BLOCKED');
+  });
+  it('texto sujo (ZWJ, controle, bidi, zalgo) vira CHAT_BLOCKED', () => {
+    for (const meaning of ['a‍b', 'a b', 'a‮b', 'a' + '́'.repeat(6)]) {
+      bad({ type: 'setCode', signalId: 'wink', meaning }, 'CHAT_BLOCKED');
+    }
+  });
+  it('id fora do catálogo, tipos errados e campos extras (seat) são INVALID_PAYLOAD', () => {
+    bad({ type: 'setCode', signalId: 'inexistente', meaning: 'x' });
+    bad({ type: 'setCode', signalId: 'wink' });
+    bad({ type: 'setCode', meaning: 'x' });
+    bad({ type: 'setCode', signalId: 'wink', meaning: 5 });
+    bad({ type: 'setCode', signalId: 7, meaning: 'x' });
+    bad({ type: 'setCode', signalId: 'wink', meaning: 'x', seat: 1 });
+    bad({ type: 'setCode', signalId: '__proto__', meaning: 'x' });
   });
 });

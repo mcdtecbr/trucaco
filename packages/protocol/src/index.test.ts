@@ -5,6 +5,8 @@ import {
   CHAT_MAX_COMBINING_RUN,
   CHAT_MAX_LENGTH,
   MAX_MESSAGE_BYTES,
+  CODES_COOLDOWN_MS,
+  PARTNER_CODE_MAX_LENGTH,
   SIGNAL_COOLDOWN_MS,
   PROTOCOL_VERSION,
   QUICK_PHRASES,
@@ -55,6 +57,8 @@ describe('limites de ação', () => {
     expect(ACTION_MIN_INTERVAL_MS).toBeGreaterThan(0);
     expect(ACTION_MIN_INTERVAL_MS).toBeLessThan(SIGNAL_COOLDOWN_MS);
     expect(CHAT_COOLDOWN_MS).toBeLessThan(SIGNAL_COOLDOWN_MS);
+    expect(PARTNER_CODE_MAX_LENGTH).toBe(60);
+    expect(CODES_COOLDOWN_MS).toBeLessThan(SIGNAL_COOLDOWN_MS);
     expect(CHAT_MAX_COMBINING_RUN).toBeGreaterThan(0);
   });
 });

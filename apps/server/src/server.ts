@@ -184,6 +184,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
   defineTrucoRoom(colyseus, {
     ...room,
     ...(deps.matches !== undefined ? { matches: deps.matches } : {}),
+    ...(deps.users !== undefined ? { users: deps.users } : {}),
   });
   // O roteador do core só é registrado em `listen`; o nosso listener entra à frente dele depois disso.
   const listen = colyseus.listen.bind(colyseus);

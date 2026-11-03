@@ -6,6 +6,7 @@ import type { Seat } from './room';
 import {
   CHAT_MAX_COMBINING_RUN,
   CHAT_MAX_LENGTH,
+  PARTNER_CODE_MAX_LENGTH,
   QUICK_PHRASE_IDS,
   SFX_IDS,
   SIGNAL_IDS,
@@ -28,6 +29,7 @@ export type ClientMessage =
   | { readonly type: 'sfx'; readonly sfxId: SfxId }
   | { readonly type: 'chat'; readonly scope: ChatScope; readonly text: string }
   | { readonly type: 'chat'; readonly scope: ChatScope; readonly phraseId: QuickPhraseId }
+  | { readonly type: 'setCode'; readonly signalId: SignalId; readonly meaning: string }
   | { readonly type: 'voteCancel' }
   | { readonly type: 'voteRematch' }
   | { readonly type: 'ready' };
@@ -65,6 +67,13 @@ export type ServerMessage =
     }
   // Sem `message`: o cliente traduz pelo `code`. O servidor nunca repassa exceção/texto interno.
   | { readonly type: 'error'; readonly code: ErrorCode }
+  // Combinado da dupla: SÓ para os 2 assentos do time. `by` = -1 quando carregado do banco.
+  | {
+      readonly type: 'codes';
+      readonly codes: Readonly<Partial<Record<SignalId, string>>>;
+      readonly by: Seat | -1;
+      readonly at: number;
+    }
   | { readonly type: 'presence'; readonly seat: Seat; readonly status: PresenceStatus }
   | { readonly type: 'turnTimer'; readonly seat: Seat; readonly deadlineAt: number };
 
@@ -138,8 +147,8 @@ const COMBINING = /^\p{M}$/u;
  * O texto NÃO é escapado aqui (`<img onerror>` passa intacto): escapar/renderizar como texto puro é
  * responsabilidade do cliente.
  */
-function cleanChatText(raw: string): string | null {
-  if (raw.length > CHAT_MAX_LENGTH * 2) return null;
+function cleanChatText(raw: string, max: number = CHAT_MAX_LENGTH): string | null {
+  if (raw.length > max * 2) return null;
   if (!isWellFormed(raw)) return null;
   const text = raw.normalize('NFC');
   let out = '';
@@ -152,10 +161,10 @@ function cleanChatText(raw: string): string | null {
     run = COMBINING.test(c) ? run + 1 : 0;
     if (run > CHAT_MAX_COMBINING_RUN) return null;
     out += c;
-    if (++count > CHAT_MAX_LENGTH + 64) return null;
+    if (++count > max + 64) return null;
   }
   const trimmed = out.trim();
-  if (trimmed.length === 0 || [...trimmed].length > CHAT_MAX_LENGTH) return null;
+  if (trimmed.length === 0 || [...trimmed].length > max) return null;
   return trimmed;
 }
 
@@ -223,6 +232,19 @@ function parseUnsafe(input: unknown): ParseResult {
         return { ok: false, code: 'INVALID_SFX' };
       }
       return good({ type, sfxId: raw.sfxId as SfxId });
+    }
+    case 'setCode': {
+      if (!onlyKeys(raw, ['type', 'signalId', 'meaning'])) return BAD;
+      if (typeof raw.signalId !== 'string' || typeof raw.meaning !== 'string') return BAD;
+      if (!(SIGNAL_IDS as readonly string[]).includes(raw.signalId)) return BAD;
+      const signalId = raw.signalId as SignalId;
+      // Vazio (só espaços) apaga o combinado; o resto passa pela mesma limpeza do chat, teto 60.
+      if (raw.meaning.length <= PARTNER_CODE_MAX_LENGTH * 2 && raw.meaning.trim() === '') {
+        return good({ type, signalId, meaning: '' });
+      }
+      const meaning = cleanChatText(raw.meaning, PARTNER_CODE_MAX_LENGTH);
+      if (meaning === null) return { ok: false, code: 'CHAT_BLOCKED' };
+      return good({ type, signalId, meaning });
     }
     case 'chat': {
       const { scope } = raw;

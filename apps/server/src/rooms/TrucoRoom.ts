@@ -23,6 +23,7 @@ import type { AuthContext, Client, Server } from '@colyseus/core';
 import {
   ACTION_MIN_INTERVAL_MS,
   CHAT_COOLDOWN_MS,
+  CODES_COOLDOWN_MS,
   DEFAULT_REMATCH_WINDOW_MS,
   REMATCH_MIN_HUMANS,
   RECONNECT_SECONDS,
@@ -77,7 +78,7 @@ import type { TableState } from '../game/schema';
 import { log } from '../logger';
 import { AuthError, bearerFromHeader } from '../auth/authService';
 import { InvalidInputError } from '../db/types';
-import type { JsonValue, MatchRepository } from '../db/types';
+import type { JsonValue, MatchRepository, UserRepository } from '../db/types';
 import { GRANT_KEY, getLobby } from '../lobby/lobby';
 import type { Grant } from '../lobby/lobby';
 import { randomRoomCode } from '../lobby/roomCode';
@@ -177,6 +178,32 @@ export interface TrucoRoomConfig {
   readonly chatCooldownMs?: number;
   /** Onde gravar a partida ao terminar (2H). Ausente: nada é gravado. Nunca vem do cliente. */
   readonly matches?: MatchRepository;
+  /**
+   * Combinado de sinais da dupla (Fase 5): lê e grava `partner_codes`. Ausente: o combinado vive só na
+   * sala (nada é lido nem gravado). Nunca vem do cliente.
+   */
+  readonly users?: Pick<
+    UserRepository,
+    'getPartnerCodes' | 'savePartnerCodes' | 'havePlayedTogether'
+  >;
+  /** Intervalo mínimo entre `setCode` do mesmo assento. Padrão `CODES_COOLDOWN_MS`. */
+  readonly codesCooldownMs?: number;
+}
+
+/** Combinado de uma dupla nesta mesa (em memória da sala; o texto nunca vai a log, estado nem replay). */
+interface PairCodes {
+  /** Par de `userId` ordenado: muda quando o ocupante de um dos dois assentos muda (espera). */
+  readonly key: string;
+  readonly a: string;
+  readonly b: string;
+  readonly codes: Partial<Record<SignalId, string>>;
+  /** Sinais editados nesta mesa (a leitura do banco, assíncrona, não pode sobrescrevê-los). */
+  readonly touched: Set<SignalId>;
+  loaded: boolean;
+  /** O par já jogou junto uma partida finalizada: edições são gravadas na hora. */
+  linked: boolean;
+  /** Gravações em série: a última edição sempre vence. */
+  chain: Promise<void>;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`: JWT + banco; nunca do payload do cliente). */
@@ -279,6 +306,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly lastSignalAt = new Map<Seat, number>();
   private readonly lastSfxAt = new Map<Seat, number>();
   private readonly lastChatAt = new Map<Seat, number>();
+  private readonly lastCodeAt = new Map<Seat, number>();
+  /** Combinado por time (0 e 1); existe só com os dois assentos ocupados por humanos distintos. */
+  private readonly pairs = new Map<number, PairCodes>();
   /**
    * Expirações de turno seguidas por assento. Ao chegar a `IDLE_TIMEOUTS` o assento aparece como
    * `away`; qualquer ação aceita zera.
@@ -511,6 +541,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     // O core NÃO cria `client.view`: sem isto o cliente receberia o estado sem o bloco privado.
     client.view = createSeatView(this.state, seat);
     log.info('truco: jogador sentou', { room: this.roomId, seat });
+    this.syncPairs();
     if (this.userBySeat.size === TABLE_SEATS) {
       this.lock().catch((err: unknown) => log.error('truco: lock falhou', { err: String(err) }));
       // Adiado para o próximo tick do relógio: o 4º cliente já terminou de entrar e recebe os
@@ -601,6 +632,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.seatPresence.delete(seat);
       this.reconnectCount.delete(seat);
       setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty' });
+      this.syncPairs();
       if (this.startTimer !== null) {
         this.startTimer.clear();
         this.startTimer = null;
@@ -843,6 +875,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.rearmBot(series);
     }
     if (this.currentTurn !== null) client.send('turnTimer', this.currentTurn);
+    this.sendCodesTo(client, seat);
     this.afterRosterChange();
   }
 
@@ -1015,6 +1048,15 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     const parsed = parseClientMessage(buildRaw(type, payload));
     if (!parsed.ok) {
+      if (parsed.code === 'CHAT_BLOCKED' && type === 'setCode') {
+        // Significado recusado pela limpeza: não é abuso (sem strike), mas custa o cooldown do combinado.
+        const cooldown = this.config.codesCooldownMs ?? CODES_COOLDOWN_MS;
+        this.reject(
+          client,
+          this.cooldownPassed(this.lastCodeAt, seat, cooldown) ? parsed.code : 'RATE_LIMITED',
+        );
+        return;
+      }
       if (parsed.code === 'CHAT_BLOCKED') {
         // Texto recusado pela limpeza (ex.: emoji com ZWJ) não é abuso: sem strike nem expulsão.
         // Mas custa cooldown de chat (o MESMO de `social`, inclusive para quem acerta depois), para
@@ -1037,9 +1079,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       case 'chat':
         this.social(client, seat, msg);
         return;
+      case 'setCode':
+        this.setCode(client, seat, msg);
+        return;
       case 'ready':
-        // Decisão: a partida começa quando o 4º jogador entra; `ready` é aceito e ignorado.
-        log.debug('truco: ready ignorado', { seat });
+        // A partida começa quando o 4º jogador entra: `ready` não a inicia. Serve de "já registrei os
+        // handlers": reenvia o combinado da dupla a este assento (o baseline enviado no `onJoin` pode
+        // chegar antes de o cliente ligar o handler de `codes`).
+        if (this.allowAction(seat)) this.sendCodesTo(client, seat);
         return;
       default:
         break;
@@ -1135,8 +1182,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   /**
    * Sinais, sfx e chat (2F). O assento é SEMPRE o do servidor (`seatBySession`); a mensagem de saída
    * leva `seat` do remetente. Decisões:
-   * - Fora de `playing` (espera, série encerrada/cancelada): `signal`/`sfx` e chat da dupla são
-   *   IGNORADOS em silêncio (sem erro, sem gastar cooldown). Chat da mesa vale em qualquer fase.
+   * - Fora de `playing` (espera, série encerrada/cancelada): `signal`/`sfx` são IGNORADOS em silêncio
+   *   (sem erro, sem gastar cooldown); o chat da dupla também, EXCETO na espera (Fase 5: a sala de espera
+   *   é a preparação da dupla). Chat da mesa vale em qualquer fase.
    * - Dentro do cooldown: `RATE_LIMITED` ao remetente, nada é enviado (igual ao rate limit de ações);
    *   não gera strike.
    * - `signal`/`sfx`: broadcast PÚBLICO aos 4 (é o design: adversários também veem).
@@ -1162,7 +1210,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const playing = series !== null && !isSeriesOver(series);
     const at = Date.now();
     if (msg.type === 'chat') {
-      if (msg.scope === 'partner' && !playing) return;
+      // Chat da dupla vale na espera (série ainda nula) e em jogo; depois do fim da série é ignorado.
+      if (msg.scope === 'partner' && series !== null && !playing) return;
       if (
         !this.cooldownPassed(this.lastChatAt, seat, this.config.chatCooldownMs ?? CHAT_COOLDOWN_MS)
       ) {
@@ -1534,12 +1583,200 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     });
     const repo = this.config.matches;
     if (input === null || repo === undefined) return;
-    const saving = recorder.save(repo, input, this.roomId);
-    this.pendingSaves.push(saving);
-    void saving.finally(() => {
-      const i = this.pendingSaves.indexOf(saving);
+    // Par novo: o combinado só é gravado depois que a 1ª partida finalizada do par foi gravada
+    // (`savePartnerCodes` exige o vínculo). Série cancelada não grava.
+    const saving = recorder.save(repo, input, this.roomId).then(async (ok) => {
+      if (ok && finished) await this.persistNewPairs();
+      return ok;
+    });
+    this.track(saving);
+  }
+
+  private track(p: Promise<boolean>): void {
+    this.pendingSaves.push(p);
+    void p.finally(() => {
+      const i = this.pendingSaves.indexOf(p);
       if (i >= 0) this.pendingSaves.splice(i, 1);
     });
+  }
+
+  // ---------------------------------------------------------------- combinado da dupla (Fase 5)
+
+  private teamSeats(team: number): Seat[] {
+    const out: Seat[] = [];
+    for (let s = 0; s < TABLE_SEATS; s++) if (teamOf(s) === team) out.push(s);
+    return out;
+  }
+
+  /** Reavalia os dois times: par novo (ou desfeito) recarrega o combinado do banco. */
+  private syncPairs(): void {
+    for (const team of [0, 1]) {
+      const [s1, s2] = this.teamSeats(team);
+      const a = s1 === undefined ? undefined : this.userBySeat.get(s1);
+      const b = s2 === undefined ? undefined : this.userBySeat.get(s2);
+      const key = a !== undefined && b !== undefined && a !== b ? [a, b].sort().join('|') : null;
+      const cur = this.pairs.get(team);
+      if (cur?.key === key) continue;
+      if (cur !== undefined) this.pairs.delete(team);
+      if (a === undefined || b === undefined || key === null) {
+        // Par desfeito: o parceiro que ficou volta a ver o combinado vazio.
+        if (cur !== undefined) this.sendEmptyCodes(team);
+        continue;
+      }
+      const state: PairCodes = {
+        key,
+        a,
+        b,
+        codes: {},
+        touched: new Set(),
+        loaded: false,
+        linked: false,
+        chain: Promise.resolve(),
+      };
+      this.pairs.set(team, state);
+      void this.loadPair(team, state);
+    }
+  }
+
+  private async loadPair(team: number, state: PairCodes): Promise<void> {
+    const users = this.config.users;
+    let stored: Readonly<Record<string, string>> | null = null;
+    let linked = false;
+    if (users !== undefined) {
+      try {
+        [stored, linked] = await Promise.all([
+          users.getPartnerCodes(state.a, state.b),
+          users.havePlayedTogether(state.a, state.b),
+        ]);
+      } catch (err) {
+        // Sem ids nem texto no log: o combinado começa vazio e a mesa segue.
+        log.warn('truco: combinado não carregado', {
+          room: this.roomId,
+          name: err instanceof Error ? err.name : 'unknown',
+        });
+      }
+    }
+    if (this.closing || this.pairs.get(team) !== state) return;
+    for (const [id, meaning] of Object.entries(stored ?? {})) {
+      if (!(SIGNAL_IDS as readonly string[]).includes(id) || typeof meaning !== 'string') continue;
+      if (state.touched.has(id as SignalId)) continue;
+      state.codes[id as SignalId] = meaning;
+    }
+    state.linked = linked;
+    state.loaded = true;
+    this.sendCodes(team, -1);
+    if (linked && state.touched.size > 0) this.persistPair(state);
+  }
+
+  /** Destino SÓ pelo time do servidor: sockets vivos dos 2 assentos; bot e assento caído não recebem. */
+  private codesRecipients(team: number): Client[] {
+    const out: Client[] = [];
+    for (const c of this.clients) {
+      const to = this.seatBySession.get(c.sessionId);
+      if (to === undefined || teamOf(to) !== team) continue;
+      if (this.botSeats.has(to) || this.droppedSeats.has(to)) continue;
+      out.push(c);
+    }
+    return out;
+  }
+
+  private codesPayload(
+    codes: Partial<Record<SignalId, string>>,
+    by: Seat | -1,
+  ): Omit<Extract<ServerMessage, { type: 'codes' }>, 'type'> {
+    return { codes: { ...codes }, by, at: Date.now() };
+  }
+
+  private sendCodes(team: number, by: Seat | -1): void {
+    const state = this.pairs.get(team);
+    if (state === undefined) return;
+    const payload = this.codesPayload(state.codes, by);
+    for (const c of this.codesRecipients(team)) c.send('codes', payload);
+  }
+
+  private sendEmptyCodes(team: number): void {
+    const payload = this.codesPayload({}, -1);
+    for (const c of this.codesRecipients(team)) c.send('codes', payload);
+  }
+
+  /** Reenvio na retomada/reconexão: só ao próprio assento e só com o combinado já carregado. */
+  private sendCodesTo(client: Client, seat: Seat): void {
+    const state = this.pairs.get(teamOf(seat));
+    if (state === undefined || !state.loaded) return;
+    client.send('codes', this.codesPayload(state.codes, -1));
+  }
+
+  /** `setCode`: o assento é o do servidor; o time (e portanto o destino) deriva dele, nunca da mensagem. */
+  private setCode(
+    client: Client,
+    seat: Seat,
+    msg: Extract<ClientMessage, { type: 'setCode' }>,
+  ): void {
+    if (
+      this.closing ||
+      this.expelledSeats.has(seat) ||
+      this.botSeats.has(seat) ||
+      this.droppedSeats.has(seat)
+    ) {
+      return;
+    }
+    const team = teamOf(seat);
+    const state = this.pairs.get(team);
+    // Sem parceiro humano sentado não há com quem combinar: ignorado em silêncio, sem gastar cooldown.
+    if (state === undefined) return;
+    if (
+      !this.cooldownPassed(this.lastCodeAt, seat, this.config.codesCooldownMs ?? CODES_COOLDOWN_MS)
+    ) {
+      this.reject(client, 'RATE_LIMITED');
+      return;
+    }
+    if (msg.meaning === '') delete state.codes[msg.signalId];
+    else state.codes[msg.signalId] = msg.meaning;
+    state.touched.add(msg.signalId);
+    // Só metadados: o texto do combinado nunca vai a log.
+    log.debug('truco: combinado', {
+      room: this.roomId,
+      seat,
+      signalId: msg.signalId,
+      length: [...msg.meaning].length,
+    });
+    this.sendCodes(team, seat);
+    if (state.linked) this.persistPair(state);
+  }
+
+  /** Grava o mapa atual (upsert) em segundo plano; falha só loga (sem ids nem texto). */
+  private persistPair(state: PairCodes): void {
+    const users = this.config.users;
+    if (users === undefined) return;
+    state.chain = state.chain
+      .then(() =>
+        users.savePartnerCodes(
+          state.a,
+          state.b,
+          Object.fromEntries(Object.entries(state.codes).filter(([, v]) => typeof v === 'string')),
+        ),
+      )
+      .catch((err: unknown) => {
+        log.warn('truco: combinado não gravado', {
+          room: this.roomId,
+          name: err instanceof Error ? err.name : 'unknown',
+        });
+      });
+    this.track(state.chain.then(() => true));
+  }
+
+  /** Depois da 1ª partida finalizada gravada: grava o combinado dos pares ainda não vinculados. */
+  private async persistNewPairs(): Promise<void> {
+    for (const [team, state] of this.pairs) {
+      if (state.linked || !state.loaded || Object.keys(state.codes).length === 0) continue;
+      const [s1, s2] = this.teamSeats(team);
+      const a = s1 === undefined ? undefined : this.userBySeat.get(s1);
+      const b = s2 === undefined ? undefined : this.userBySeat.get(s2);
+      if (a === undefined || b === undefined || a === b) continue;
+      state.linked = true;
+      this.persistPair(state);
+      await state.chain;
+    }
   }
 
   // ---------------------------------------------------------------- timer e projeção

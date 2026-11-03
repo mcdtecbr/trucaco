@@ -93,7 +93,8 @@ Enviadas com `room.send(tipo, payload)`. O payload NUNCA leva `seat`: o servidor
 | `chat`        | `{ scope: 'partner' \| 'table', text }` ou `{ scope, phraseId }` | Texto OU frase rápida, nunca os dois. Ver seção 9                                            |
 | `voteCancel`  | `{}`                                                             | Voto para cancelar a série (unanimidade dos humanos conectados)                              |
 | `voteRematch` | `{}`                                                             | Voto por "Jogar de novo" na janela de revanche (ver abaixo). Chave extra: `INVALID_PAYLOAD`  |
-| `ready`       | `{}`                                                             | Aceito e ignorado pelo servidor (reservado)                                                  |
+| `setCode`     | `{ signalId, meaning }`                                          | Combinado da dupla: significado de um sinal (vazio apaga). Ver "Combinado da dupla"          |
+| `ready`       | `{}`                                                             | Não inicia a partida. O cliente o envia ao ligar os handlers; o servidor reenvia `codes`     |
 
 Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (seção 8). Id fora do catálogo: `INVALID_SIGNAL` ou `INVALID_SFX`.
 
@@ -105,6 +106,7 @@ Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (se
 | `signal`    | `{ seat, signalId, at }`                           | Sinal de um assento, para os 4                                                        |
 | `sfx`       | `{ seat, sfxId, at }`                              | Efeito sonoro, para os 4                                                              |
 | `chat`      | `{ scope, seat, text \| phraseId, at }`            | `partner`: só a dupla e o eco ao remetente. `table`: os 4                             |
+| `codes`     | `{ codes, by, at }`                                | Combinado da dupla, SÓ aos 2 assentos do time (ver "Combinado da dupla")              |
 | `presence`  | `{ seat, status: 'online' \| 'away' \| 'bot' }`    | Mudança de presença de um assento                                                     |
 | `turnTimer` | `{ seat, deadlineAt }`                             | Prazo do turno atual (epoch ms). Turno de 20 s                                        |
 | `error`     | `{ code }` (só `code`; sem texto de erro)          | Mensagem recusada. O estado não muda                                                  |
@@ -168,21 +170,22 @@ Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e
 
 ## 8. Cooldowns, limites e expulsão
 
-| Limite                                                                | Valor                                                  | Resposta                                                       |
-| --------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| Sinal por assento                                                     | 3 s (`SIGNAL_COOLDOWN_MS`)                             | `error RATE_LIMITED` ao remetente; sem strike                  |
-| Efeito sonoro por assento                                             | 5 s (`SFX_COOLDOWN_MS`)                                | `error RATE_LIMITED`; sem strike                               |
-| Chat por assento (partner e table)                                    | 2 s (`CHAT_COOLDOWN_MS`)                               | `error RATE_LIMITED`; texto recusado também consome o cooldown |
-| Intervalo entre ações do mesmo assento                                | 150 ms (`ACTION_MIN_INTERVAL_MS`)                      | `error RATE_LIMITED`                                           |
-| Mensagens por segundo por conexão                                     | 30                                                     | acima disso o core derruba a conexão (`CloseCode.WITH_ERROR`)  |
-| Tamanho máximo de mensagem                                            | 1024 bytes (`MAX_MESSAGE_BYTES`, limite do transporte) | conexão cai acima disso                                        |
-| Payload inválido (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) | 5 em 10 s                                              | expulsão com código 1008 e assento vai para o bot, sem janela  |
+| Limite                                                                | Valor                                                  | Resposta                                                                        |
+| --------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Sinal por assento                                                     | 3 s (`SIGNAL_COOLDOWN_MS`)                             | `error RATE_LIMITED` ao remetente; sem strike                                   |
+| Efeito sonoro por assento                                             | 5 s (`SFX_COOLDOWN_MS`)                                | `error RATE_LIMITED`; sem strike                                                |
+| Chat por assento (partner e table)                                    | 2 s (`CHAT_COOLDOWN_MS`)                               | `error RATE_LIMITED`; texto recusado também consome o cooldown                  |
+| Combinado (`setCode`) por assento                                     | 1 s (`CODES_COOLDOWN_MS`)                              | `error RATE_LIMITED`; texto recusado (`CHAT_BLOCKED`) também consome o cooldown |
+| Intervalo entre ações do mesmo assento                                | 150 ms (`ACTION_MIN_INTERVAL_MS`)                      | `error RATE_LIMITED`                                                            |
+| Mensagens por segundo por conexão                                     | 30                                                     | acima disso o core derruba a conexão (`CloseCode.WITH_ERROR`)                   |
+| Tamanho máximo de mensagem                                            | 1024 bytes (`MAX_MESSAGE_BYTES`, limite do transporte) | conexão cai acima disso                                                         |
+| Payload inválido (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) | 5 em 10 s                                              | expulsão com código 1008 e assento vai para o bot, sem janela                   |
 
 `voteRematch` também passa por esse limite de 150 ms (o servidor aplica o controle antes de tratar `voteCancel` e `voteRematch`). Pendência de produto: isentar o voto de revanche.
 
 **Bot sinaliza (só bot de verdade).** O bot de ausência (assento de humano que caiu e virou bot, que mantém apelido e avatar do humano) NÃO sinaliza; o cooldown do humano também não é gasto por bot. Ao começar cada mão (`handStarted`), cada assento de bot de vaga (bot desde o início) sorteia com 30 % de chance (`DEFAULT_BOT_SIGNAL_CHANCE`) 1 sinal aleatório de `SIGNAL_IDS` e o transmite como qualquer `signal`, com o `seat` do bot. Respeita o mesmo cooldown de 3 s do assento (em cooldown, não sinaliza) e só vale com a série em jogo. O sorteio não usa o RNG da partida (baralho e replay não mudam). O bot continua sem pedir nem aumentar aposta. **Hoje o sorteio não dispara:** nenhum caminho do servidor cria vaga de bot (`botSeats` só recebe o bot de ausência), então nenhum bot sinaliza.
 
-Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora disso, são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase.
+Sinal e sfx só valem em `playing` (série em andamento); fora disso são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase. O chat da dupla vale na espera (antes da série existir) e em `playing`; depois do fim da série é ignorado. `setCode` vale em qualquer fase com a dupla humana sentada.
 
 ## 9. Chat e texto livre
 
@@ -190,6 +193,17 @@ Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora di
 - Texto recusado (controle, formatação e zero-width, como ZWJ, marcas bidi, mais de 3 marcas combinantes seguidas, ou vazio depois da limpeza) responde `error CHAT_BLOCKED`. Não é abuso: não conta strike nem expulsa.
 - **Renderize chat só como `<Text>` (texto puro)**. Nunca HTML, `dangerouslySetInnerHTML`, WebView nem Markdown. O servidor não escapa o texto (ele chega como foi digitado, já limpo de controles).
 - Texto de chat nunca vai a log, ao schema, ao replay ou ao banco.
+
+### Combinado da dupla (`setCode` e `codes`)
+
+A sala de espera é a "preparação": a dupla combina o significado dos sinais por chat da dupla (já liberado na espera) e pelo combinado, e o combinado também pode ser editado durante a partida.
+
+- `setCode { signalId, meaning }`: `signalId` de `SIGNAL_IDS` (fora do catálogo: `INVALID_PAYLOAD`, com strike); `meaning` passa pela MESMA limpeza do chat com teto `PARTNER_CODE_MAX_LENGTH` (60 code points). `meaning` vazio (ou só espaços) apaga o combinado daquele sinal. Texto recusado (controle, ZWJ, bidi, zalgo, acima de 60): `error CHAT_BLOCKED`, sem strike. `seat` no payload é `INVALID_PAYLOAD`. Cooldown por assento `CODES_COOLDOWN_MS` (1 s): `RATE_LIMITED`.
+- `codes { codes, by, at }`: `codes` é o mapa COMPLETO `{ [signalId]?: string }` da dupla; `by` é o assento que editou, ou `-1` quando veio do banco, de reconexão ou do `ready`. Vai SÓ aos sockets vivos dos 2 assentos do time (destino pelo `teamOf` do servidor, inclusive o eco a quem editou). Adversário nunca recebe; bot de ausência e assento caído não recebem e nada é enfileirado. Nunca há espectadores.
+- Quando chega: ao formar o par humano na mesa (carrega `partner_codes` do banco; sem registro, mapa vazio), a cada edição, ao reconectar ou retomar o assento e quando o cliente envia `ready` (o baseline enviado no `onJoin` pode chegar antes de o cliente ligar o handler: envie `ready` depois de registrar `onMessage('codes')`). Se um dos dois assentos é liberado na espera, o parceiro que ficou recebe `codes` vazio (`by: -1`) e o par novo recarrega.
+- Sem parceiro humano sentado (parceiro ausente, vazio ou bot), `setCode` é ignorado em silêncio.
+- Persistência: par que já jogou uma partida finalizada junto grava (upsert em `partner_codes`) a cada edição, em segundo plano. Par novo grava ao fim da 1ª partida finalizada (série cancelada não grava). Falha do banco só é logada (sem ids nem texto) e não afeta a mesa. As rotas REST `GET` e `PUT /me/partners/:partnerId/codes` seguem como estão (mesmo teto de 60).
+- O texto do combinado nunca vai a log, ao schema, ao `eventLog`, ao replay nem ao banco da partida (`matches`). Renderize como `<Text>`. `PROTOCOL_VERSION` segue 2 (mudança aditiva).
 
 ## 10. Erros (`error { code }`)
 

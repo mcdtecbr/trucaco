@@ -115,7 +115,7 @@ export interface ReportRecord {
   readonly createdAt: Date;
 }
 
-/** `signalId -> significado` (até 140 caracteres cada). */
+/** `signalId -> significado` (até 60 caracteres cada). */
 export type PartnerCodesMap = { readonly [signalId: string]: string };
 
 /**
@@ -152,7 +152,7 @@ export interface UserRepository {
   getPartnerCodes(userId: string, partnerId: string): Promise<PartnerCodesMap | null>;
   /**
    * Upsert. `InvalidInputError` se o `signalId` não for do catálogo, algum significado passar de
-   * 140 caracteres ou userId === partnerId; `NotPartnersError` se não houver vínculo
+   * 60 caracteres ou userId === partnerId; `NotPartnersError` se não houver vínculo
    * (`havePlayedTogether`).
    */
   savePartnerCodes(userId: string, partnerId: string, codes: PartnerCodesMap): Promise<void>;
