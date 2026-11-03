@@ -56,7 +56,7 @@ Divergências do plano original (sem `LobbyRoom`, JWT HS256, código de 8 caract
 - **Logout e "sair de todos os aparelhos"**: `revokeAllForUser` existe, sem rota.
 - **Google, Apple e `POST /auth/link`**: respondem `501` (Fase 3).
 - **Homóglifos no apelido**: letras latinas parecidas passam na validação (sem skeleton/confusables).
-- **Avatar com texto livre**: `parts` aceita texto de até 140 caracteres; validar contra o catálogo do rig na Fase 4.
+- **Avatar com texto livre**: resolvido na Fase 4 (63f861c): `parts` é validado por `parseAvatarParts` contra o catálogo (8 partes com contagens fixas); avatar antigo fora do catálogo volta como padrão.
 - **Janela do access JWT**: até 15 min de acesso após revogação (logout, reuso), porque o WebSocket já aberto não consulta o Redis.
 - **Usuário órfão** se o Redis falha em `createGuest` (sem `delete` no repositório).
 - **Validação de Docker e CI no GitHub**: o workflow ainda não rodou no GitHub, e o container de desenvolvimento não tem Docker. A sequência do CI foi reproduzida localmente.

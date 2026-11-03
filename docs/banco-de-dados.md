@@ -40,12 +40,12 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 
 ### Tetos de tamanho dos jsonb
 
-| Coluna                      | Teto no banco (`pg_column_size`, valor não comprimido) | Validação na aplicação                                                                                                      |
-| --------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `partner_codes.codes`       | < 16 KB (`partner_codes_codes_size_check`)             | `signalId` só de `SIGNAL_IDS` (`@trucaco/protocol`), no máximo 12 chaves, valor string até `CHAT_MAX_LENGTH` (140)          |
-| `avatars.parts`             | < 16 KB (`avatars_parts_size_check`)                   | objeto plano, até 32 chaves (`AVATAR_PARTS_MAX_KEYS`), valores escalares, strings até 140; o significado das partes é do 2G |
-| `matches.options` / `games` | < 16 KB / < 64 KB                                      | mesmos tetos em bytes de JSON (`JSON_LIMITS`)                                                                               |
-| `matches.deals` / `events`  | < 1 MB / < 2 MB                                        | idem; uma partida real fica na ordem de centenas de KB                                                                      |
+| Coluna                      | Teto no banco (`pg_column_size`, valor não comprimido) | Validação na aplicação                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `partner_codes.codes`       | < 16 KB (`partner_codes_codes_size_check`)             | `signalId` só de `SIGNAL_IDS` (`@trucaco/protocol`), no máximo 12 chaves, valor string até `CHAT_MAX_LENGTH` (140)                                                 |
+| `avatars.parts`             | < 16 KB (`avatars_parts_size_check`)                   | objeto plano validado por `parseAvatarParts` (`@trucaco/protocol`): exatamente as chaves de `AVATAR_PART_KEYS` com índices inteiros do catálogo e `voice` opcional |
+| `matches.options` / `games` | < 16 KB / < 64 KB                                      | mesmos tetos em bytes de JSON (`JSON_LIMITS`)                                                                                                                      |
+| `matches.deals` / `events`  | < 1 MB / < 2 MB                                        | idem; uma partida real fica na ordem de centenas de KB                                                                                                             |
 
 Decisão do 2H: o `MatchRecorder` limita o próprio buffer de eventos (6000 eventos e 1 MB de texto JSON) e, ao estourar, descarta o excedente e marca `logTruncated`/`eventsDropped` em `options` (seção "Partidas"). Nada é descartado em silêncio. `saveMatch` ainda lança `InvalidInputError` se o banco recusar um teto real (CHECK).
 

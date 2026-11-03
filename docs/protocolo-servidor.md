@@ -180,7 +180,7 @@ Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e
 
 `voteRematch` também passa por esse limite de 150 ms (o servidor aplica o controle antes de tratar `voteCancel` e `voteRematch`). Pendência de produto: isentar o voto de revanche.
 
-**Bot sinaliza.** Ao começar cada mão (`handStarted`), cada assento de bot sorteia com 30 % de chance (`DEFAULT_BOT_SIGNAL_CHANCE`) 1 sinal aleatório de `SIGNAL_IDS` e o transmite como qualquer `signal`, com o `seat` do bot. Respeita o mesmo cooldown de 3 s do assento (em cooldown, não sinaliza) e só vale com a série em jogo. O sorteio não usa o RNG da partida (baralho e replay não mudam). O bot continua sem pedir nem aumentar aposta.
+**Bot sinaliza (só bot de verdade).** O bot de ausência (assento de humano que caiu e virou bot, que mantém apelido e avatar do humano) NÃO sinaliza; o cooldown do humano também não é gasto por bot. Ao começar cada mão (`handStarted`), cada assento de bot de vaga (bot desde o início) sorteia com 30 % de chance (`DEFAULT_BOT_SIGNAL_CHANCE`) 1 sinal aleatório de `SIGNAL_IDS` e o transmite como qualquer `signal`, com o `seat` do bot. Respeita o mesmo cooldown de 3 s do assento (em cooldown, não sinaliza) e só vale com a série em jogo. O sorteio não usa o RNG da partida (baralho e replay não mudam). O bot continua sem pedir nem aumentar aposta.
 
 Sinal, sfx e chat da dupla só valem em `playing` (série em andamento). Fora disso, são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase.
 

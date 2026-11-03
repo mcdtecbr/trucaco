@@ -2439,19 +2439,33 @@ describe('TrucoRoom: onze/dez decidido pela dupla', () => {
 // ------------------------------------------------------------------------------------------------
 
 describe('TrucoRoom: sinais do bot (4B)', () => {
-  it('bot sinaliza no handStarted e o sinal chega aos clientes com o seat do bot', async () => {
+  // Hoje não há vaga de bot desde o início; simulamos uma incluindo o assento em `botSeats`
+  // (sem passar por `becomeBot`, que marca bot de ausência).
+  type Internals = { botSeats: Set<number>; botSignals(): void };
+
+  it('bot de ausência NÃO sinaliza no handStarted', async () => {
     const game = await startedRec('truco-botsig');
     const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
-    // Antes de existir bot, nenhum sinal.
-    expect(inboxOf(p0).signals).toEqual([]);
     p3.gone = true;
     await p3.room.leave();
     await until(() => statusOf(game, 3) === 'bot', 'assento 3 bot');
     const hands = logCount(game, 'handStarted');
     await drive(game, () => logCount(game, 'handStarted') > hands, 'nova mão');
+    await sleep(150);
+    for (const p of [p0, p1, p2]) expect(inboxOf(p).signals).toEqual([]);
+    assertNoLeaks(game);
+  });
+
+  it('bot de vaga sinaliza e o sinal chega aos clientes com o seat do bot', async () => {
+    const game = await startedRec('truco-botsig');
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    expect(inboxOf(p0).signals).toEqual([]);
+    const internals = game.server as unknown as Internals;
+    internals.botSeats.add(3);
+    internals.botSignals();
     await until(
-      () => [p0, p1, p2].every((p) => inboxOf(p).signals.length >= 1),
-      'sinal do bot nos 3 vivos',
+      () => [p0, p1, p2, p3].every((p) => inboxOf(p).signals.length >= 1),
+      'sinal do bot nos 4',
     );
     for (const p of [p0, p1, p2]) {
       for (const m of inboxOf(p).signals) {
@@ -2461,22 +2475,33 @@ describe('TrucoRoom: sinais do bot (4B)', () => {
     }
     // Sinal não entra no log de eventos do motor.
     expect(game.server.eventLog.some((e) => JSON.stringify(e).includes('signalId'))).toBe(false);
-    assertNoLeaks(game);
   });
 
-  it('sem sinal do bot enquanto o assento está em cooldown', async () => {
+  it('sem sinal do bot de vaga enquanto o assento está em cooldown', async () => {
     const game = await startedRec('truco-botsig-long');
     const [p0, , , p3] = game.players as [Player, Player, Player, Player];
-    // Humano do assento 3 gasta o cooldown (30 s) e sai: o bot herda o cooldown do assento.
     p3.room.send('signal', { signalId: 'wink' });
     await until(() => inboxOf(p0).signals.length === 1, 'sinal do humano');
+    const internals = game.server as unknown as Internals;
+    internals.botSeats.add(3);
+    internals.botSignals();
+    await sleep(100);
+    expect(inboxOf(p0).signals).toHaveLength(1);
+    expect(inboxOf(p0).signals[0]?.signalId).toBe('wink');
+  });
+
+  it('humano que retoma o assento depois de bot de ausência sinaliza sem herdar cooldown', async () => {
+    const game = await startedRec('truco-botsig-long');
+    const [p0, , , p3] = game.players as [Player, Player, Player, Player];
     p3.gone = true;
     await p3.room.leave();
     await until(() => statusOf(game, 3) === 'bot', 'assento 3 bot');
     const hands = logCount(game, 'handStarted');
     await drive(game, () => logCount(game, 'handStarted') > hands, 'nova mão');
-    await sleep(100);
-    expect(inboxOf(p0).signals).toHaveLength(1);
-    expect(inboxOf(p0).signals[0]?.signalId).toBe('wink');
+    const back = await joinAgain(game, 3);
+    await until(() => statusOf(game, 3) === 'connected', 'assento 3 de volta');
+    back.room.send('signal', { signalId: 'wink' });
+    await until(() => inboxOf(p0).signals.length === 1, 'sinal do humano que voltou');
+    expect(inboxOf(p0).signals[0]?.seat).toBe(3);
   });
 });

@@ -1,4 +1,5 @@
 import { memo, useCallback } from 'react';
+import { View } from 'react-native';
 import { Avatar } from '@trucaco/avatar';
 import type { AvatarParts } from '@trucaco/protocol';
 import type { ActiveSignal } from '../table/tableStore';
@@ -25,14 +26,18 @@ export const SeatAvatar = memo(function SeatAvatar(p: SeatAvatarProps) {
   const end = useCallback(() => {
     if (signal !== null) onSignalEnd(seat, signal.key);
   }, [seat, signal, onSignalEnd]);
+  // O assento já tem nome acessível (apelido e status no `AvatarPlaceholder`): o desenho sai da
+  // árvore de acessibilidade para o leitor de tela não repetir "Avatar" quatro vezes.
   return (
-    <Avatar
-      parts={p.parts}
-      size={SEAT_AVATAR_SIZE}
-      signal={signal}
-      onSignalEnd={end}
-      reduceMotion={p.reduceMotion}
-      testID={`avatar-${seat}`}
-    />
+    <View accessible={false} aria-hidden importantForAccessibility="no-hide-descendants">
+      <Avatar
+        parts={p.parts}
+        size={SEAT_AVATAR_SIZE}
+        signal={signal}
+        onSignalEnd={end}
+        reduceMotion={p.reduceMotion}
+        testID={`avatar-${seat}`}
+      />
+    </View>
   );
 });

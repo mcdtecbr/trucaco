@@ -289,6 +289,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private closeTimer: Timer | null = null;
   /** Assentos cujo humano saiu de vez: o bot joga. Persiste até o dono voltar (mesmo `userId`). */
   private readonly botSeats = new Set<Seat>();
+  /** Bots de AUSÊNCIA (humano que caiu): não sinalizam; o assento mantém apelido/avatar do humano. */
+  private readonly absenceBotSeats = new Set<Seat>();
   /** Assentos com socket caído e janela de reconexão aberta (`allowReconnection`). */
   private readonly droppedSeats = new Set<Seat>();
   /** Assentos expulsos por abuso (strikes): a queda seguinte NÃO abre janela de reconexão. */
@@ -771,6 +773,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
 
   private becomeBot(seat: Seat): void {
     this.botSeats.add(seat);
+    this.absenceBotSeats.add(seat);
     // O humano saiu de vez: o vínculo global é liberado (pode jogar em outra mesa); o assento dele
     // segue reservado ao bot e ele só volta com o código (mesa privada) ou pelo próprio `userId`.
     const owner = this.userBySeat.get(seat);
@@ -814,6 +817,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private resume(client: Client, seat: Seat): void {
     this.reconnectCount.set(seat, (this.reconnectCount.get(seat) ?? 0) + 1);
     this.botSeats.delete(seat);
+    this.absenceBotSeats.delete(seat);
     this.droppedSeats.delete(seat);
     this.timeouts.set(seat, 0);
     // O core copia a view ANTIGA para o novo `Client`; ela é descartada e recriada.
@@ -1105,7 +1109,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   /**
-   * Sinais dos bots: ao começar uma mão, cada assento de bot sorteia (chance `botSignalChance`) 1 sinal
+   * Sinais dos bots de verdade (vagas de bot desde o início; bot de ausência NÃO sinaliza): ao começar
+   * uma mão, cada assento de bot sorteia (chance `botSignalChance`) 1 sinal
    * do catálogo. Respeita o MESMO cooldown dos humanos (`lastSignalAt`) e só vale com a série em jogo.
    * Usa aleatoriedade própria: nunca consome o RNG da partida (sorteio e replay seguem iguais).
    */
@@ -1117,6 +1122,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const random = this.config.botSignalRandom ?? Math.random;
     const cooldown = this.config.signalCooldownMs ?? SIGNAL_COOLDOWN_MS;
     for (const seat of [...this.botSeats].sort((a, b) => a - b)) {
+      if (this.absenceBotSeats.has(seat)) continue;
       if (random() >= chance) continue;
       const signalId =
         SIGNAL_IDS[Math.min(SIGNAL_IDS.length - 1, Math.floor(random() * SIGNAL_IDS.length))];

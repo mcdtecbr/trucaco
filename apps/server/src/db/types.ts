@@ -131,7 +131,7 @@ export interface UserRepository {
   /** Troca o apelido (`validateNickname`). `NicknameTakenError` se já existe (sem diferenciar caixa); `InvalidInputError` se inválido ou usuário inexistente. */
   updateNickname(id: string, nickname: string): Promise<void>;
 
-  /** `AvatarParts` como JSON (objeto plano, até 32 chaves, valores escalares curtos); o significado das partes é do servidor (2G). */
+  /** `AvatarParts` como JSON (objeto plano validado por `parseAvatarParts` de `@trucaco/protocol`: exatamente as chaves de `AVATAR_PART_KEYS` com índices inteiros do catálogo e `voice` opcional). */
   getAvatar(userId: string): Promise<AvatarParts | null>;
   saveAvatar(userId: string, parts: AvatarParts): Promise<void>;
 

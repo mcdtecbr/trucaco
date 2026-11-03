@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { initialAvatar, samePartsAs } from './avatarEditorState';
 import { AvatarEditorView, PART_TITLES, variantLabel } from './AvatarEditorView';
 import type { AvatarEditorViewProps } from './AvatarEditorView';
+import { SeatAvatar } from './SeatAvatar';
 import { SignalPanel } from './SignalPanel';
 
 const noop = vi.fn();
@@ -24,6 +25,26 @@ function editor(over: Partial<AvatarEditorViewProps> = {}): string {
     />,
   );
 }
+
+describe('acessibilidade do avatar', () => {
+  it('o avatar do assento fica fora da árvore de acessibilidade (sem "Avatar" repetido)', () => {
+    const out = renderToStaticMarkup(
+      <SeatAvatar
+        seat={2}
+        parts={DEFAULT_AVATAR_PARTS}
+        signal={null}
+        reduceMotion={false}
+        onSignalEnd={noop}
+      />,
+    );
+    expect(out).toMatch(/aria-hidden="true"[^>]*>/);
+    expect(out).toContain('data-testid="avatar-2"');
+  });
+
+  it('a pré-visualização do criador tem rótulo próprio', () => {
+    expect(editor()).toContain('Pré-visualização do seu avatar');
+  });
+});
 
 describe('AvatarEditorView', () => {
   it('mostra a pré-visualização e todas as variantes de todas as partes, marcando a escolhida', () => {
