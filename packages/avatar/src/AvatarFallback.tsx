@@ -83,6 +83,9 @@ export function AvatarFallback(props: AvatarFallbackProps) {
     outfit: safeIndex('outfit', parsed.outfit),
     accessory: safeIndex('accessory', parsed.accessory),
     bg_color: safeIndex('bg_color', parsed.bg_color),
+    hair_color: safeIndex('hair_color', parsed.hair_color),
+    eye_color: safeIndex('eye_color', parsed.eye_color),
+    outfit_color: safeIndex('outfit_color', parsed.outfit_color),
   };
   const bg = BG_COLORS[cfg.bg_color] ?? BG_COLORS[0]!;
   const skin = resolveFill('skin', cfg);

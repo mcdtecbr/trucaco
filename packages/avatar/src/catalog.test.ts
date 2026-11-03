@@ -9,6 +9,8 @@ import {
 import {
   BG_COLORS,
   HAIR_COLOR,
+  HAIR_COLORS,
+  EYE_COLORS,
   OUTFIT_COLORS,
   PART_VARIANT_NAMES,
   SKIN_COLORS,
@@ -63,7 +65,6 @@ describe('contrato do rig', () => {
       expect(new Set(PART_VARIANT_NAMES[key]).size).toBe(AVATAR_PART_COUNTS[key]);
     }
     expect(SKIN_COLORS).toHaveLength(AVATAR_PART_COUNTS.skin);
-    expect(OUTFIT_COLORS).toHaveLength(AVATAR_PART_COUNTS.outfit);
     expect(BG_COLORS).toHaveLength(AVATAR_PART_COUNTS.bg_color);
     expect(new Set(SKIN_COLORS.map((c) => c.base)).size).toBe(SKIN_COLORS.length);
     expect(new Set(BG_COLORS).size).toBe(BG_COLORS.length);
@@ -72,6 +73,13 @@ describe('contrato do rig', () => {
       expect(c.shade).toMatch(/^#[0-9A-F]{6}$/);
     }
     expect(HAIR_COLOR).toBe('#2B1B12');
+    expect(HAIR_COLORS).toHaveLength(AVATAR_PART_COUNTS.hair_color);
+    expect(EYE_COLORS).toHaveLength(AVATAR_PART_COUNTS.eye_color);
+    expect(OUTFIT_COLORS).toHaveLength(AVATAR_PART_COUNTS.outfit_color);
+    for (const list of [HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS]) {
+      expect(new Set(list).size).toBe(list.length);
+      for (const c of list) expect(c).toMatch(/^#[0-9A-F]{6}$/);
+    }
   });
 
   it('o catálogo segue o avatar.riv: contagens e nomes', () => {

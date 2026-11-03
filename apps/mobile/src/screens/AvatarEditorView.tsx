@@ -5,7 +5,7 @@
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Avatar, PART_VARIANT_NAMES } from '@trucaco/avatar';
-import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS } from '@trucaco/protocol';
+import { AVATAR_PART_COUNTS } from '@trucaco/protocol';
 import type { AvatarPartKey, AvatarParts } from '@trucaco/protocol';
 import { MIN_TOUCH, colors, fontSize, radius, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
@@ -25,7 +25,25 @@ export const PART_TITLES: Readonly<Record<AvatarPartKey, string>> = {
   outfit: 'Roupa',
   accessory: 'Acessório',
   bg_color: 'Fundo',
+  hair_color: 'Cor do cabelo',
+  eye_color: 'Cor dos olhos',
+  outfit_color: 'Cor da roupa',
 };
+
+/** Ordem de exibição no editor: cada cor logo depois da sua forma (a ordem do contrato é outra). */
+export const EDITOR_PART_ORDER: readonly AvatarPartKey[] = [
+  'face_shape',
+  'skin',
+  'hair',
+  'hair_color',
+  'eyes',
+  'eye_color',
+  'mouth',
+  'outfit',
+  'outfit_color',
+  'accessory',
+  'bg_color',
+];
 
 /** Texto da variante `index` da parte `key` (cai em "Opção N" se o catálogo do avatar for menor). */
 export function variantLabel(key: AvatarPartKey, index: number): string {
@@ -126,7 +144,7 @@ export function AvatarEditorView(p: AvatarEditorViewProps) {
           testID="avatar-preview"
         />
       </View>
-      {AVATAR_PART_KEYS.map((key) => (
+      {EDITOR_PART_ORDER.map((key) => (
         <PartPicker
           key={key}
           partKey={key}

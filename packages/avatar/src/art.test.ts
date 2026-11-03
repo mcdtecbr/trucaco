@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
-import { BG_COLORS, SKIN_COLORS } from './parts';
+import { BG_COLORS, EYE_COLORS, HAIR_COLORS, OUTFIT_COLORS, SKIN_COLORS } from './parts';
 import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } from './art';
 
 const base = DEFAULT_AVATAR_PARTS;
@@ -87,6 +87,7 @@ describe('arte do avatar (mesmos paths do rig)', () => {
     expect(resolveFill('skin', { ...base, skin: 2 })).toBe(SKIN_COLORS[2]!.base);
     expect(resolveFill('shade', { ...base, skin: 2 })).toBe(SKIN_COLORS[2]!.shade);
     expect(resolveFill('bg', { ...base, bg_color: 7 })).toBe(BG_COLORS[7]);
+    expect(SKIN_COLORS).toHaveLength(8);
   });
 
   it('conta vértices de elipse e retângulo', () => {
@@ -109,5 +110,66 @@ describe('arte do avatar (mesmos paths do rig)', () => {
         expect(drawn, `outfit ${outfit} hair ${hair}`).toEqual(expected);
       }
     }
+  });
+});
+
+describe('cores como dimensão própria', () => {
+  it('resolveFill de hair/iris por índice, todo índice válido', () => {
+    for (let i = 0; i < AVATAR_PART_COUNTS.hair_color; i++) {
+      expect(resolveFill('hair', { ...base, hair_color: i })).toBe(HAIR_COLORS[i]);
+    }
+    for (let i = 0; i < AVATAR_PART_COUNTS.eye_color; i++) {
+      expect(resolveFill('iris', { ...base, eye_color: i })).toBe(EYE_COLORS[i]);
+    }
+    expect(resolveFill('iris', base)).toBe('#1B1B1F');
+    expect(resolveFill('hair', base)).toBe('#2B1B12');
+  });
+
+  it('resolveFill de outfit: 0 = cor própria do modelo; 6..10 = cor escolhida', () => {
+    for (let o = 0; o < AVATAR_PART_COUNTS.outfit; o++) {
+      expect(resolveFill('outfit', { ...base, outfit: o })).toBe(OUTFIT_COLORS[o]);
+    }
+    for (let i = 1; i < AVATAR_PART_COUNTS.outfit_color; i++) {
+      expect(resolveFill('outfit', { ...base, outfit: 2, outfit_color: i })).toBe(OUTFIT_COLORS[i]);
+    }
+  });
+
+  it('o padrão preserva as cores antigas dos paths', () => {
+    const legacy: Record<string, string> = {
+      outfit_tee_v: '#F2A0A0',
+      outfit_polo: '#0EA5E9',
+      outfit_shirt: '#7C2D12',
+      outfit_vest: '#1F2937',
+      outfit_tank: '#F9FAFB',
+      outfit_tee_crew: '#E5E7EB',
+      eye_pupil_0: '#1B1B1F',
+      brow_l: '#2B1B12',
+      hair_short: '#2B1B12',
+      acc_mustache: '#2B1B12',
+    };
+    for (const [name, color] of Object.entries(legacy)) {
+      const p = PARTS.find((x) => x.name === name)!;
+      const o = name.startsWith('outfit_')
+        ? {
+            outfit: [
+              'outfit_tee_crew',
+              'outfit_tee_v',
+              'outfit_polo',
+              'outfit_shirt',
+              'outfit_vest',
+              'outfit_tank',
+            ].indexOf(name),
+          }
+        : {};
+      expect(resolveFill(p.fill, { ...base, ...o }), name).toBe(color);
+    }
+  });
+
+  it('chapéus e bonés não mudam e as cores não alteram a seleção de peças', () => {
+    for (const name of ['cap_crown', 'cap_brim', 'hat_crown', 'hat_brim']) {
+      expect(PARTS.find((x) => x.name === name)!.fill).toMatch(/^#/);
+    }
+    const names = (c: typeof base) => selectParts(c).map((p) => p.name);
+    expect(names({ ...base, hair_color: 7, eye_color: 2, outfit_color: 10 })).toEqual(names(base));
   });
 });
