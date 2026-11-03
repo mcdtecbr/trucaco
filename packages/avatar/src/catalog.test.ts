@@ -19,13 +19,14 @@ import { RIVE_CONTRACT, RIVE_INPUT_DOCS } from './riveContract';
 import { MAX_SIGNAL_DURATION_MS, SIGNALS, signalInfo, signalTrigger } from './signals';
 
 describe('catálogo de sinais', () => {
-  it('todo SignalId tem entrada com trigger trig_<id>, na ordem do protocolo', () => {
+  it('todo SignalId tem entrada com trigger trig_<id> (wink usa trig_wink_l), na ordem do protocolo', () => {
     expect(SIGNALS.map((s) => s.id)).toEqual([...SIGNAL_IDS]);
     for (const id of SIGNAL_IDS) {
       const info = signalInfo(id);
-      expect(info.trigger).toBe(`trig_${id}`);
-      expect(signalTrigger(id)).toBe(`trig_${id}`);
-      expect(RIVE_CONTRACT.triggers[id]).toBe(`trig_${id}`);
+      const trigger = id === 'wink' ? 'trig_wink_l' : `trig_${id}`;
+      expect(info.trigger).toBe(trigger);
+      expect(signalTrigger(id)).toBe(trigger);
+      expect(RIVE_CONTRACT.triggers[id]).toBe(trigger);
       expect(info.name.length).toBeGreaterThan(0);
       expect(info.meaning.length).toBeGreaterThan(0);
       expect(info.durationMs).toBeGreaterThanOrEqual(800);

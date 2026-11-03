@@ -1,7 +1,8 @@
 /** Versão do protocolo cliente/servidor. Incrementar a cada mudança incompatível de mensagem. */
 export const PROTOCOL_VERSION = 2;
 
-/** Ids estáveis dos sinais de truco (catálogo em docs/sinais.md). Nunca renomear, só adicionar. */
+/** Ids estáveis dos sinais de truco (catálogo em docs/sinais.md). Nunca renomear, só adicionar.
+ * `wink` é o olho esquerdo **da tela** (zap); `wink_r` o direito; `mouth_l`/`mouth_r` torcem a boca. */
 export const SIGNAL_IDS = [
   'wink',
   'eyebrow',
@@ -15,6 +16,9 @@ export const SIGNAL_IDS = [
   'chin_up',
   'look_away',
   'smile',
+  'wink_r',
+  'mouth_l',
+  'mouth_r',
 ] as const;
 
 export type SignalId = (typeof SIGNAL_IDS)[number];

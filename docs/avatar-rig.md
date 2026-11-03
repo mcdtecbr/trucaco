@@ -35,22 +35,25 @@ Os nomes são exatamente estes (minúsculas, sublinhado). O catálogo e as conta
 
 ### 2.2 Sinais (inputs **Trigger**)
 
-Um trigger por sinal, nome `trig_<id>`. Todos disparam uma animação de **cerca de 1 s** que **volta ao estado ocioso sozinha** (a state machine não deve ficar presa; ao terminar, retorna ao ocioso). Duração máxima de qualquer sinal: **1,2 s**.
+Um trigger por sinal, nome `trig_<id>`, exceto `wink`, que usa `trig_wink_l`. Todos disparam uma animação de **cerca de 1 s** que **volta ao estado ocioso sozinha** (a state machine não deve ficar presa; ao terminar, retorna ao ocioso). Duração máxima de qualquer sinal: **1,2 s**.
 
-| Trigger            | Duração | Animação                                                                                 |
-| ------------------ | ------- | ---------------------------------------------------------------------------------------- |
-| `trig_wink`        | 900 ms  | Olho esquerdo (do espectador) fecha por completo e reabre; cabeça inclina levemente      |
-| `trig_eyebrow`     | 900 ms  | As duas sobrancelhas sobem bem alto, seguram e descem                                    |
-| `trig_lip_bite`    | 1000 ms | Dentes superiores aparecem mordendo o lábio inferior; segura e solta                     |
-| `trig_cheek_puff`  | 1000 ms | As duas bochechas incham para os lados (bolinhas de pele que passam do contorno), pulsam |
-| `trig_tongue`      | 1000 ms | Língua rosa sai pela boca, balança de leve e recolhe; cabeça inclina um pouco            |
-| `trig_nose_twitch` | 900 ms  | Nariz treme: três movimentos curtos laterais com leve aumento                            |
-| `trig_shrug`       | 1000 ms | Ombros sobem até quase a altura do queixo, seguram e descem; cabeça afunda um pouco      |
-| `trig_nod`         | 1000 ms | Cabeça acena para baixo duas ou três vezes                                               |
-| `trig_head_shake`  | 1000 ms | Cabeça balança de um lado a outro duas ou três vezes                                     |
-| `trig_chin_up`     | 1000 ms | Cabeça inclina para trás, queixo sobe, segura e volta                                    |
-| `trig_look_away`   | 1000 ms | Olhos (pupilas) e cabeça viram para o lado direito do espectador, seguram e voltam       |
-| `trig_smile`       | 1000 ms | Sorriso contido aparece sobre a boca atual (qualquer variante de boca), segura e some    |
+| Trigger            | Duração | Animação                                                                                        |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------- |
+| `trig_wink_l`      | 900 ms  | Olho esquerdo (do espectador) fecha por completo e reabre; cabeça inclina levemente (id `wink`) |
+| `trig_wink_r`      | 900 ms  | Olho direito (do espectador) fecha por completo e reabre (id `wink_r`)                          |
+| `trig_eyebrow`     | 900 ms  | As duas sobrancelhas sobem bem alto, seguram e descem                                           |
+| `trig_lip_bite`    | 1000 ms | Dentes superiores aparecem mordendo o lábio inferior; segura e solta                            |
+| `trig_cheek_puff`  | 1000 ms | As duas bochechas incham para os lados (bolinhas de pele que passam do contorno), pulsam        |
+| `trig_tongue`      | 1000 ms | Língua rosa sai pela boca, balança de leve e recolhe; cabeça inclina um pouco                   |
+| `trig_nose_twitch` | 900 ms  | Nariz treme: três movimentos curtos laterais com leve aumento                                   |
+| `trig_shrug`       | 1000 ms | Ombros sobem até quase a altura do queixo, seguram e descem; cabeça afunda um pouco             |
+| `trig_nod`         | 1000 ms | Cabeça acena para baixo duas ou três vezes                                                      |
+| `trig_head_shake`  | 1000 ms | Cabeça balança de um lado a outro duas ou três vezes                                            |
+| `trig_chin_up`     | 1000 ms | Cabeça inclina para trás, queixo sobe, segura e volta                                           |
+| `trig_look_away`   | 1000 ms | Olhos (pupilas) e cabeça viram para o lado direito do espectador, seguram e voltam              |
+| `trig_smile`       | 1000 ms | Sorriso contido aparece sobre a boca atual (qualquer variante de boca), segura e some           |
+| `trig_mouth_l`     | 1000 ms | Boca inteira inclina e desloca para a esquerda do espectador, segura e volta (id `mouth_l`)     |
+| `trig_mouth_r`     | 1000 ms | Igual, para a direita do espectador (id `mouth_r`)                                              |
 
 Cada sinal precisa ser **legível a 64 px** e distinguível dos outros num relance. Disparar o mesmo trigger duas vezes seguidas (com a primeira já terminada) anima duas vezes. Disparar outro trigger durante um sinal pode interromper o anterior e começar o novo (o cliente já controla a fila).
 
@@ -80,9 +83,9 @@ Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam
 ## 4. Teste de aceitação
 
 1. Abrir o `.riv` no Rive e, no painel de inputs, varrer cada Number de 0 a n-1 com os outros em 0: cada variante muda só a sua parte.
-2. Disparar cada um dos 12 triggers: anima em até 1,2 s e retorna ao ocioso sem intervenção.
+2. Disparar cada um dos 15 triggers: anima em até 1,2 s e retorna ao ocioso sem intervenção.
 3. Combinações aleatórias de partes não geram buracos, recortes errados nem partes escapando do círculo.
-4. A 64 px, os 12 sinais são distinguíveis e as 8 partes têm variantes visualmente distintas.
+4. A 64 px, os 15 sinais são distinguíveis e as 8 partes têm variantes visualmente distintas.
 5. Arquivo exportado abaixo de 500 KB; 4 instâncias simultâneas fluidas.
 
 ## 5. Integração (para quem integra)
