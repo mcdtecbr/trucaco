@@ -11,7 +11,7 @@ const valid = { ...DEFAULT_AVATAR_PARTS };
 
 describe('catálogo de partes do avatar', () => {
   it('contagens combinadas', () => {
-    expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([4, 6, 8, 4, 4, 6, 5, 8]);
+    expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([4, 6, 8, 4, 4, 6, 3, 8]);
   });
 
   it('o padrão é válido', () => {

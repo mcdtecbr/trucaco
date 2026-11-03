@@ -17,7 +17,12 @@ export const AVATAR_PART_KEYS = [
 ] as const;
 export type AvatarPartKey = (typeof AVATAR_PART_KEYS)[number];
 
-/** Variantes por parte (índices `0..n-1`). Só cresce: reduzir invalidaria avatares já gravados. */
+/**
+ * Variantes por parte (índices `0..n-1`). Regra geral: só cresce, pois reduzir invalida avatares já
+ * gravados. Exceção única: `accessory` caiu de 5 para 3 (0 nenhum, 1 bigode, 2 brinco) para seguir o
+ * `assets/rive/avatar.riv`, que é a referência visual. Justificativa e migração dos perfis em
+ * `docs/adr/0003-catalogo-do-avatar-segue-o-riv.md`.
+ */
 export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   face_shape: 4,
   skin: 6,
@@ -25,7 +30,7 @@ export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   eyes: 4,
   mouth: 4,
   outfit: 6,
-  accessory: 5,
+  accessory: 3,
   bg_color: 8,
 };
 

@@ -9,7 +9,8 @@ export {
 export {
   PART_VARIANT_NAMES,
   SKIN_COLORS,
-  HAIR_COLORS,
+  HAIR_COLOR,
+  type SkinColor,
   OUTFIT_COLORS,
   BG_COLORS,
   safeIndex,
