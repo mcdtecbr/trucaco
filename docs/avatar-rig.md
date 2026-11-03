@@ -60,7 +60,7 @@ Cada sinal precisa ser **legível a 64 px** e distinguível dos outros num relan
 ### 2.3 Estados ociosos (sem input; não são sinais)
 
 - `idle_breathe`: contínuo e sutil (ombros e peito sobem e descem cerca de 1,5% em ciclo de ~3,6 s).
-- `idle_blink`: piscada rápida em intervalo **fixo de 4,5 s** no `.riv` exportado (o requisito original era aleatório de 3 a 7 s; o editor não tem timer aleatório simples).
+- `idle_blink`: piscada rápida com intervalo **variável**: três estados da layer `Blink_Random` usam a mesma timeline em velocidades 1,5x, 1x e 0,65x, ligados entre si por transições com Exit Time de 4400 ms e **Randomize Exit** ligado, então cada ciclo sorteia o próximo estado (intervalo esperado entre cerca de 3 e 7 s; não medido com precisão).
 - `idle_look`: olhar para a carta jogada (reserva de uso futuro; pode ficar como pose neutra por enquanto).
 
 Os estados ociosos ficam em camadas (layers) independentes da camada dos sinais, para não competirem. Eles são locais, não passam pelo servidor.

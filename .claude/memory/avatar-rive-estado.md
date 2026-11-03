@@ -13,7 +13,7 @@ metadata:
 - **O `.riv` é a referência visual**: catálogo (`parts.ts`) e fallback vetorial seguem o `.riv`; o fallback renderiza o mesmo SVG (`packages/avatar/src/art.ts`) com `react-native-svg` (dependência aprovada).
 - **Sinais**: 15 (`wink_r`, `mouth_l`, `mouth_r` acrescentados ao fim de `SIGNAL_IDS`; `wink` continua e dispara `trig_wink_l`). `_l`/`_r` = lado **da tela**. Só `wink` guarda o zap; os outros três são livres para a dupla.
 - **Sem ossos por ora** (teste feito e revertido: osso rígido por "Set Parent" funciona). Migração para ossos é **pendência futura**; custos em `docs/avatar-rive-estado.md`.
-- Piscar do idle é fixo em 4,5 s (o Rive não tem timer aleatório simples; o requisito de 3 a 7 s não foi atendido). Torção de boca = rotação do Solo da boca, não deformação de vértices.
+- Piscar do idle variável: layer `Blink_Random` com 3 estados (`idle_blink` a 1,5x, 1x e 0,65x), Exit Time 4400 ms e **Randomize Exit** ligado em cada um (inspetor do estado). Torção de boca = rotação do Solo da boca, não deformação de vértices.
 
 **Validação feita:** runtime web (`@rive-app/canvas` 2.21.6) carrega o `.riv`, lê os 15 triggers e 8 Numbers, 60 FPS com 4 instâncias; `Avatar.web` testado com o `.riv` real; FPS do fallback novo no web: 60 (CPU 1x), 59,7 ocioso e 52,5 com sinais (CPU 4x). `rivFile.test.ts` confere os nomes dos inputs dentro do `.riv`.
 
