@@ -79,6 +79,7 @@ Dependências permitidas: `rules` e `protocol` não dependem de nada interno. `a
 - `avatar.riv` com artboard único, camadas trocáveis por input numérico/booleano: `face_shape`, `skin`, `hair`, `eyes`, `mouth`, `outfit`, `accessory`, `bg_color`. Perfil salva `AvatarParts` como JSON.
 - State machine `Main`: layer `Idle` (respirar, piscar aleatório, olhar) e layer `Signals` com um trigger por sinal (`docs/sinais.md`). Sinal interrompe e volta ao idle.
 - Componente `<Avatar parts signalQueue />` em `packages/ui` com implementação `.native.tsx` (`rive-react-native`) e `.web.tsx` (`@rive-app/react-canvas`).
+  - **Divergência (Fase 4, 2026-11-02; ADR 0001 e 0002):** o `<Avatar>` fica em `packages/avatar`, não em `packages/ui`, porque `ui` não pode depender de `avatar` (§3). `ui` recebe o avatar como `ReactNode`. A fila de sinais fica no cliente da mesa (`tableController`), não no componente. O renderizador de produção da Fase 4 é o vetorial (`View` e `Animated`); Rive entra depois, atrás do ponto de extensão `renderer` (`.native.tsx` e `.web.tsx` ainda não existem: blocos 4G e 4H do plano, pendentes). Contrato do rig: `docs/avatar-rig.md`.
 - `AvatarParts` inclui `voice` (`masc_1..3`, `fem_1..3`), que define a voz dos gritos. A voz não faz parte do rig Rive; o avatar só recebe `trig_shout` (boca aberta) quando fala.
 - Arte inicial cartoon flat feita no editor Rive; evolução ou encomenda depois.
 

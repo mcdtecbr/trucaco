@@ -4,6 +4,31 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Fase 4: avatar e sinais (2026-11-02), concluída com ressalvas
+
+Ressalvas: o `.riv` não existe, então Rive web (4G) e nativo (4H) estão pendentes e o avatar de produção é o vetorial; iOS, Android e aparelho intermediário não foram testados. Relatório em `docs/specs/2026-11-02-fase-4-relatorio.md`; decisões em `docs/adr/0001-avatar-em-packages-avatar.md` e `docs/adr/0002-avatar-vetorial-como-producao-e-rive-como-extensao.md`.
+
+#### Adicionado
+
+- `AvatarParts` em `packages/protocol` (`avatar.ts`): 8 partes com contagens fixas (4, 6, 8, 4, 4, 6, 5, 8), `voice` reservado para a 5b, `parseAvatarParts` e `DEFAULT_AVATAR_PARTS` (63f861c).
+- Servidor valida `PUT /me/avatar` pelo catálogo: texto livre ou chave extra vira `400 INVALID_AVATAR` (63f861c).
+- `packages/avatar`: catálogo de sinais (`SIGNALS`, `SIGNAL_TRIGGERS`), nomes das variantes, contrato do rig (`RIVE_CONTRACT`) e `docs/avatar-rig.md` (ef53540).
+- `<Avatar>` vetorial (`View` e `Animated`) com os 12 sinais, respiração e piscada; `reduceMotion` troca a animação por um destaque de 1 s (ef53540).
+- Sinais na mesa: painel com 12 botões (segurar 400 ms), fila de 1 por assento, anúncio para leitor de tela, avatares nos quatro assentos e na sala de espera (d24a5bd).
+- Criador de avatar em `/avatar`, com link em Início e Configurações; o avatar salvo volta depois do reload (d24a5bd).
+- Script de medição de FPS com 4 avatares, fora da suíte (e3eea18).
+
+#### Alterado
+
+- `PUT /me/avatar` deixa de aceitar texto livre (até 140 caracteres) e passa a exigir o catálogo. `GET /me` devolve `null` para avatar gravado fora do catálogo. Sem migração: não há produção (63f861c).
+- Bots que sinalizam: o código está no servidor, mas nenhum caminho cria vaga de bot hoje (63f861c, corrigido em 948f3d5).
+
+#### Corrigido
+
+- Bot de ausência não sinaliza; só bot de vaga pode (948f3d5).
+- Avatares saem da árvore de acessibilidade, para o leitor de tela não repetir "Avatar" quatro vezes (948f3d5).
+- Teste do bot de ausência (onze/dez) espera por condição (`until`) o patch de `specialAccepted` no cliente antes de conferir, em vez de checar logo após o evento (08a7705).
+
 ### Regras de aposta e onze/dez (2026-11-02)
 
 #### Alterado
@@ -123,3 +148,5 @@ Assumidas por padrão nas fases acima. Cada uma precisa de confirmação do usu�
 - **Janela de revanche de 30 s, mínimo de 2 humanos conectados e unanimidade** (Fase 3): implementados no `packages/protocol` e no servidor e **confirmados pelo usuário** em 2026-11-02, junto com o rodízio do pé na revanche e entre jogos da série `bo3`.
 - **Limite de 150 ms aplicado também a `voteRematch`** (Fase 3): pendência de produto, a decidir.
 - **`ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente** (Fase 3).
+- **Avatar vetorial como produção até existir o `.riv`; Rive web (4G) depois** (Fase 4): decisão do usuário em 2026-11-02. Rive nativo (4H) segue sem decisão formal.
+- **Sinal de bot só para bot de vaga, que hoje não existe** (Fase 4): o bot de ausência não sinaliza (confirmado pelo usuário em 2026-11-02). Decidir se o servidor cria vagas de bot.

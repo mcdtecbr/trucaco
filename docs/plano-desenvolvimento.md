@@ -103,17 +103,47 @@ Critério verificado: CI do GitHub verde em `dd8ab6e` (jobs `verify`, `integrati
 
 `infra/Dockerfile.server` foi construído pela primeira vez com Docker Desktop 29.9.2. A primeira tentativa falhou no `corepack prepare pnpm@9.15.9` (o corepack do `node:22.12.0` não reconhece as chaves de assinatura atuais do npm). Corrigido com `npm install -g pnpm@9.15.9`. Depois da correção: imagem de cerca de 616 MB, `NODE_ENV=production` com o usuário `node`, `GET /health` 200 com `{"status":"ok","protocol":2}`, healthcheck do Docker `healthy`, e `POST /auth/guest` ok contra Postgres 16 e Redis reais depois de `db:deploy`. Sem migração, o erro é `P2021`, esperado: as migrações rodam no release, não no runtime. **Não testado:** Fly.io real e WebSocket de sala dentro do contêiner.
 
-## Fase 4: avatar Rive e sinais (3 semanas)
+## Fase 4: avatar e sinais (3 semanas): concluída em 2026-11-02, com ressalvas
 
-| Etapa                                                                                 | Agente                             | Pronto quando                                                      |
-| ------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
-| Rig `avatar.riv`: partes trocáveis, state machine `Main`, idle                        | `rai-avatar`                       | Arquivo abre no editor e no runtime web                            |
-| 12 gatilhos de sinais conforme `docs/sinais.md`                                       | `rai-avatar`                       | Cada trigger anima e volta ao idle                                 |
-| `packages/avatar`: catálogo de partes, catálogo de sinais, mapeamento de triggers     | `rai-avatar`                       | Testes de catálogo                                                 |
-| Componente `<Avatar>` `.native.tsx` e `.web.tsx`                                      | `rai-avatar`                       | Renderiza igual em web, iOS, Android                               |
-| Criador de avatar (tela) e `PUT /me/avatar`                                           | `fabio-frontend` + `caio-colyseus` | Avatar salvo reaparece após login                                  |
-| Painel de sinais na mesa (segurar para enviar) e animação sincronizada nos 4 avatares | `fabio-frontend`                   | Sinal de um jogador aparece nos outros 3 em < 500 ms em rede local |
-| Revisão de desempenho em mobile (FPS com 4 avatares)                                  | `duda-debugger`                    | ≥ 50 FPS em aparelho intermediário                                 |
+Blocos 4A a 4J. Plano de execução em `docs/specs/2026-11-02-fase-4-avatar-plano.md`; relatório em `docs/specs/2026-11-02-fase-4-relatorio.md`; decisões em `docs/adr/0001-avatar-em-packages-avatar.md` e `docs/adr/0002-avatar-vetorial-como-producao-e-rive-como-extensao.md`; contrato do rig em `docs/avatar-rig.md`.
+
+O avatar de produção é o **vetorial** (`View` e `Animated`). Rive ficou pendente: o `.riv` não existe e os blocos 4G (web) e 4H (nativo) esperam o arquivo e um dev build. Status por etapa:
+
+| Etapa                                                                                 | Agente                             | Pronto quando                                                      | Status (2026-11-02)                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rig `avatar.riv`: partes trocáveis, state machine `Main`, idle                        | `rai-avatar`                       | Arquivo abre no editor e no runtime web                            | **Pendente (4G/4H)**: sem `.riv`. Contrato pronto em `docs/avatar-rig.md`; a arte fica com o usuário ou ilustrador.                                                                                                                                                                             |
+| 12 gatilhos de sinais conforme `docs/sinais.md`                                       | `rai-avatar`                       | Cada trigger anima e volta ao idle                                 | **Parcial**: os 12 sinais animam no vetorial (`packages/avatar/src/poses.ts`, `runSignal.test.ts`), voltam ao ocioso em até 1,2 s. Os triggers Rive (`trig_<id>`) seguem pendentes.                                                                                                             |
+| `packages/avatar`: catálogo de partes, catálogo de sinais, mapeamento de triggers     | `rai-avatar`                       | Testes de catálogo                                                 | **Feito** (ef53540): `signals.ts`, `parts.ts`, `riveContract.ts`, testes em `catalog.test.ts`.                                                                                                                                                                                                  |
+| Componente `<Avatar>` `.native.tsx` e `.web.tsx`                                      | `rai-avatar`                       | Renderiza igual em web, iOS, Android                               | **Parcial**: um único `Avatar.tsx` (vetorial), sem divisão `.native`/`.web` (vem com o Rive, 4G/4H). Testado no Chromium; iOS e Android **não testados**. Fica em `packages/avatar`, não em `ui` (ADR 0001).                                                                                    |
+| Criador de avatar (tela) e `PUT /me/avatar`                                           | `fabio-frontend` + `caio-colyseus` | Avatar salvo reaparece após login                                  | **Feito** (63f861c, d24a5bd). Coberto por E2E com **reload** (`avatar.spec.ts`). Não há teste de logout seguido de login.                                                                                                                                                                       |
+| Painel de sinais na mesa (segurar para enviar) e animação sincronizada nos 4 avatares | `fabio-frontend`                   | Sinal de um jogador aparece nos outros 3 em < 500 ms em rede local | **Feito**, com ressalva: `test:int` mede menos de 500 ms com servidor real (`table.int.test.ts`); E2E confere o marcador `avatar-<assento>-signal-<id>` nos 4 navegadores. Latência em rede real não medida.                                                                                    |
+| Revisão de desempenho em mobile (FPS com 4 avatares)                                  | `duda-debugger`                    | ≥ 50 FPS em aparelho intermediário                                 | **Parcial**: medido só no Chromium, com o script `apps/mobile/e2e/perf` (fora da suíte). Sem CPU limitada, 59,6 a 60 FPS; com CPU 4x e 4 sinais simultâneos, 14,6 a 21,7 FPS. **Pendente: aparelho intermediário.** Causa provável: `Animated` sem driver nativo na web. Ver relatório da fase. |
+
+Blocos e commits:
+
+| Bloco   | Commits                   | Entrega                                                                                                               |
+| ------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 4A      | 63f861c                   | Contrato `AvatarParts` em `packages/protocol` (`parseAvatarParts`, `DEFAULT_AVATAR_PARTS`)                            |
+| 4B      | 63f861c                   | Servidor valida `PUT /me/avatar` pelo catálogo (`INVALID_AVATAR`); bot de vaga pode sinalizar (sem vagas de bot hoje) |
+| 4C      | ef53540                   | Catálogos, `SIGNALS`, contrato do rig (`riveContract.ts`) e `docs/avatar-rig.md`                                      |
+| 4D      | ef53540                   | `<Avatar>` vetorial com os 12 sinais e `reduceMotion` (destaque de 1 s)                                               |
+| 4E      | d24a5bd                   | Sinais na mesa: painel (segurar 400 ms), fila de 1 por assento, anúncio para leitor de tela, avatares nos assentos    |
+| 4F      | d24a5bd                   | Criador de avatar (`/avatar`, link em Início e Configurações)                                                         |
+| 4G      | pendente                  | Rive web (`@rive-app/react-canvas`): depende de `assets/rive/avatar.riv`                                              |
+| 4H      | pendente                  | Rive nativo (`rive-react-native`): depende de dev build e do `.riv`                                                   |
+| 4I      | e3eea18 (script), 08a7705 | Script de medição de FPS com 4 avatares, fora da suíte; teste do bot de ausência corrigido                            |
+| Revisão | 948f3d5                   | Correções da revisão: bot de ausência não sinaliza; avatares saem da árvore de acessibilidade                         |
+| 4J      | (este commit de docs)     | ADRs 0001 e 0002, spec §7, plano, CHANGELOG, `apps/mobile/README.md`, relatório e handoff                             |
+
+### Fase 4: pendências e ressalvas (para depois)
+
+- **Arte do `.riv`**: quem faz é o usuário ou um ilustrador, a partir de `docs/avatar-rig.md`. Sem o arquivo, 4G e 4H não começam. Nenhum agente produz nem valida o `.riv`.
+- **Decisão do usuário (2026-11-02)**: nesta fase, só o fallback vetorial; Rive web fica para depois (4G). Rive nativo (4H) não tem decisão formal; a recomendação do plano é na Fase 7, junto do EAS.
+- **Desempenho**: decidir se a respiração e o olhar ociosos saem no web, ou se o caminho é Rive web (4G). Medido: com `prefers-reduced-motion`, 57,9 FPS com CPU 4x ocioso. Medir em aparelho intermediário antes do beta.
+- **Bot que sinaliza**: o código existe, mas o servidor não cria vagas de bot. O bot de ausência não sinaliza, e nenhum caminho cria bot de vaga. Na prática, nenhum bot sinaliza. Decidir se e quando o servidor passa a criar vagas de bot.
+- **Voz**: `AvatarParts.voice` existe no contrato, mas não é usada na Fase 4. Vem com a Fase 5b.
+- **Acessibilidade**: textos de acessibilidade e anúncios dos sinais não foram ouvidos em leitor de tela, e os textos não tiveram revisão de UX.
+- **Revisão por Codex**: segue pendente (ver Fase 3). A Fase 4 foi revisada pela Rita-C (agente Claude, `opus`); o `vitor-seguranca` ficou de fora por decisão do usuário.
 
 ## Fase 5: chat da dupla e balões (1–2 semanas)
 

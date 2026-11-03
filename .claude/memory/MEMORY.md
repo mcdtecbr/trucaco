@@ -1,7 +1,7 @@
-- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0 a 3 concluídas (3 com ressalvas, 2026-11-02); próxima: Fase 4 (avatar Rive)
+- [Projeto Trucaco](projeto-trucaco.md) — truco online Paulista/Mineiro; stack Expo + Colyseus + Rive; Fases 0 a 4 concluídas (3 e 4 com ressalvas, 2026-11-02); próxima: Fase 5 (chat da dupla e balões); avatar de produção é vetorial, Rive pendente (sem `.riv`)
 - [Ambiente de dev](trucaco-ambiente-dev.md) — pnpm via corepack, Redis na 6380, sem gh (PR via API REST), Prettier nos md
 - [Git: modo atual](feedback_git_convencao.md) — commit e push DIRETO na develop, sem PR, até o usuário avisar; nunca mexer na master
-- [Handoff Fase 3](handoff-fase-3.md) — estado após a 3J, próximo passo (Fase 4), pendências de produto, o que não foi validado, armadilhas do Windows/Git Bash para retomar
+- [Handoff Fase 4](handoff-fase-4.md) — estado após a 4J, próximo passo (Fase 5), pendências de produto, o que não foi validado, armadilhas do Windows/Git Bash e do servidor para retomar
 - [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
 - [Resposta de aposta e onze/dez](decisao_resposta_aposta_onze_dez.md) — usuário: só um jogador responde truco/retruco; onze/dez: os dois decidem, um correr = dupla corre
 - [Ideia de arte: tela de carregamento](ideia_arte_tela_carregamento.md) — imagem conceito guardada para a Fase 7; sem marcas de terceiros, não está no repo

@@ -6,14 +6,15 @@ App Expo (SDK 58) com Expo Router: web, iOS e Android. O cliente não tem regra 
 
 Na raiz, `pnpm build` antes da primeira execução (os pacotes `@trucaco/*` são resolvidos pelo `dist/`).
 
-| Comando                                    | O que faz                                                        |
-| ------------------------------------------ | ---------------------------------------------------------------- |
-| `pnpm --filter @trucaco/mobile dev`        | `expo start --web` (Metro, porta 8081)                           |
-| `pnpm --filter @trucaco/mobile start`      | `expo start` (QR para Expo Go)                                   |
-| `pnpm --filter @trucaco/mobile export:web` | SPA estática em `apps/mobile/dist` (sem SSR)                     |
-| `pnpm --filter @trucaco/mobile test`       | Vitest com `react-native-web` no lugar de RN (sem servidor)      |
-| `pnpm --filter @trucaco/mobile test:int`   | Integração contra o servidor real (abaixo)                       |
-| `pnpm test:e2e` (raiz) ou `test:e2e` aqui  | E2E web com Playwright (Chromium, 4 contextos por teste, abaixo) |
+| Comando                                                                                    | O que faz                                                                         |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `pnpm --filter @trucaco/mobile dev`                                                        | `expo start --web` (Metro, porta 8081)                                            |
+| `pnpm --filter @trucaco/mobile start`                                                      | `expo start` (QR para Expo Go)                                                    |
+| `pnpm --filter @trucaco/mobile export:web`                                                 | SPA estática em `apps/mobile/dist` (sem SSR)                                      |
+| `pnpm --filter @trucaco/mobile test`                                                       | Vitest com `react-native-web` no lugar de RN (sem servidor)                       |
+| `pnpm --filter @trucaco/mobile test:int`                                                   | Integração contra o servidor real (abaixo)                                        |
+| `pnpm test:e2e` (raiz) ou `test:e2e` aqui                                                  | E2E web com Playwright (Chromium, 4 contextos por teste, abaixo)                  |
+| `pnpm --filter @trucaco/mobile exec playwright test -c e2e/perf/playwright.perf.config.ts` | Medição de FPS com 4 avatares (fora da suíte e do CI, ver "Desempenho do avatar") |
 
 ## Variáveis
 
@@ -26,20 +27,20 @@ Na raiz, `pnpm build` antes da primeira execução (os pacotes `@trucaco/*` são
 
 ## Estrutura
 
-| Pasta                | Conteúdo                                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `app/`               | Rotas Expo Router, finas: `_layout.tsx`, `index.tsx` (boot), `home.tsx`, `settings.tsx`, `table/[code].tsx` |
-| `src/screens/`       | Telas: `XScreen` (hooks e rede) e `XView` (só props, testável com `renderToStaticMarkup`)                   |
-| `src/net/`           | REST, tokens, sessão e cliente Colyseus (abaixo)                                                            |
-| `src/lobby/`         | Criar mesa, entrar por código, fila pública, apelido (validação de UX)                                      |
-| `src/room/`          | `roomService.ts`: uma sala por vez                                                                          |
-| `src/table/`         | Mesa: projeção pura do estado, controller, relógio, presença, `tableStore`                                  |
-| `src/store/`         | Zustand só para UI: `sessionStore`, `lobbyStore`, `roomStore` (sala de espera)                              |
-| `src/services/`      | `app.ts`: monta rede, sessão e salas sob demanda                                                            |
-| `src/platform/`      | Compartilhar o código da mesa (nativo: `Share`; web: copiar)                                                |
-| `src/i18n/errors.ts` | Código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`)                        |
-| `src/ui/`            | Primitivos de tela (`Button`, `TextField`, `Choice`, `Screen`, `Typography`)                                |
-| `e2e/`               | Playwright: setup, fixtures e `table.spec.ts`                                                               |
+| Pasta                | Conteúdo                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `app/`               | Rotas Expo Router, finas: `_layout.tsx`, `index.tsx` (boot), `home.tsx`, `settings.tsx`, `avatar.tsx`, `table/[code].tsx` |
+| `src/screens/`       | Telas: `XScreen` (hooks e rede) e `XView` (só props, testável com `renderToStaticMarkup`)                                 |
+| `src/net/`           | REST, tokens, sessão e cliente Colyseus (abaixo)                                                                          |
+| `src/lobby/`         | Criar mesa, entrar por código, fila pública, apelido (validação de UX)                                                    |
+| `src/room/`          | `roomService.ts`: uma sala por vez                                                                                        |
+| `src/table/`         | Mesa: projeção pura do estado, controller, relógio, presença, `tableStore`                                                |
+| `src/store/`         | Zustand só para UI: `sessionStore`, `lobbyStore`, `roomStore` (sala de espera)                                            |
+| `src/services/`      | `app.ts`: monta rede, sessão e salas sob demanda                                                                          |
+| `src/platform/`      | Compartilhar o código da mesa (nativo: `Share`; web: copiar)                                                              |
+| `src/i18n/errors.ts` | Código de erro para texto pt-BR (teste garante cobertura de todo `HTTP_ERROR_CODES`)                                      |
+| `src/ui/`            | Primitivos de tela (`Button`, `TextField`, `Choice`, `Screen`, `Typography`)                                              |
+| `e2e/`               | Playwright: setup, fixtures, `table.spec.ts`, `avatar.spec.ts` e `perf/` (medição, fora da suíte)                         |
 
 Cores, espaçamentos e raios vêm de `@trucaco/ui` (`tokens.ts`), que também tem as cartas e os componentes da mesa.
 
@@ -88,13 +89,16 @@ Rotas em `app/` (finas) e telas em `src/screens/`:
 
 ## E2E web (Playwright, `e2e/`)
 
-Cada teste abre **4 contextos de navegador** (Chromium, um convidado por jogador, storage isolado), cria uma mesa privada, entra pelo código de 8 caracteres e joga pela UI real contra o **servidor compilado** (`apps/server/dist/main.js`, `NODE_ENV=test`, `TRUCO_SEED=12345`). Esperas são sempre por estado: a sonda `table-state` (`EXPO_PUBLIC_E2E=1`) e `data-testid`/papéis, nunca por tempo. Cenários em `e2e/table.spec.ts` (5):
+Cada teste abre **4 contextos de navegador** (Chromium, um convidado por jogador, storage isolado), cria uma mesa privada, entra pelo código de 8 caracteres e joga pela UI real contra o **servidor compilado** (`apps/server/dist/main.js`, `NODE_ENV=test`, `TRUCO_SEED=12345`). Esperas são sempre por estado: a sonda `table-state` (`EXPO_PUBLIC_E2E=1`) e `data-testid`/papéis, nunca por tempo. Cenários em `e2e/table.spec.ts` (8) e `e2e/avatar.spec.ts` (3, na seção de avatar acima):
 
 1. Convidados criam a mesa, entram pelo código e a partida começa.
 2. Cartas jogadas pelos botões da UI, guiadas por `actingSeat` e `canAct`.
 3. Mensagem do chat da mesa aparece como texto e balão; a da dupla não chega ao adversário.
 4. Série decidida numa mão: todos jogam de novo e a partida 2 começa (`matchNumber` 2).
 5. Queda do WebSocket de um jogador: reconecta, volta à mesa e consegue jogar.
+6. Reload da página no meio da partida: volta ao mesmo assento, com a mesma mão, e a mesa segue.
+7. Reload na sala de espera: o dono volta à mesma mesa pelo código.
+8. Sair da mesa de propósito apaga o registro: o reload seguinte cai no início.
 
 `e2e/globalSetup.ts` faz tudo e desmonta no fim (o servidor é derrubado por PID, também em `process.exit`): (1) `expo export --platform web --output-dir dist-e2e` com `EXPO_PUBLIC_E2E=1` e `EXPO_PUBLIC_SERVER_URL=http://127.0.0.1:2587`; (2) servidor do jogo na porta `2587` com CORS para a origem do web; (3) servidor estático do `dist-e2e/` (SPA, fallback para `index.html`) na porta `8087`. As portas são fixas porque a URL do servidor entra no bundle; troque com `E2E_SERVER_PORT` e `E2E_WEB_PORT`.
 
@@ -127,6 +131,36 @@ pnpm test:e2e
 ```
 
 Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração rápida; reconstrua depois de mexer no app), `E2E_SERVER_PORT`, `E2E_WEB_PORT`, `TEST_DATABASE_URL`, `TEST_REDIS_URL`. Em falha, os screenshots dos 4 jogadores são anexados ao teste (relatório HTML: `pnpm exec playwright show-report`; no CI vai como artefato `playwright-report`). O trace do Playwright só cobre o contexto padrão, não os 4 criados pelo fixture. O E2E cobre a queda do WebSocket e o **reload da página** (mesa em jogo e sala de espera), ver "Retomar a mesa depois de recarregar" abaixo.
+
+## Avatar, sinais e criador (Fase 4)
+
+- **Avatar**: `<Avatar>` de `@trucaco/avatar`. Hoje é só o renderizador vetorial (`View` e `Animated`); o Rive entra depois, atrás do ponto de extensão `renderer` (ADR 0002). `src/screens/SeatAvatar.tsx` envolve o `<Avatar>` no assento e o tira da árvore de acessibilidade (o assento já tem nome no `AvatarPlaceholder` de `@trucaco/ui`, que recebe o avatar como `ReactNode`; ADR 0001).
+- **Partes do jogador**: `src/table/avatarParts.ts` converte `players[i].avatar` (string JSON) em `AvatarParts`. Vazio, JSON inválido ou partes fora do catálogo viram `DEFAULT_AVATAR_PARTS`. O resultado é cacheado por texto, para o `<Avatar>` memoizado não re-renderizar a cada patch.
+- **Onde aparece**: `TableView` (os 4 assentos) e `WaitingRoomView` (o placeholder só aparece em vaga).
+- **Sinal recebido**: `roomService` entrega `signal` ao `tableController.onSignal`. Se o assento está livre, anima já; se está animando, entra na fila de 1 posição por assento, e o excedente é descartado. O anúncio para o leitor de tela ("Fulano: piscar um olho") sai sempre. Fim da animação: `onSignalEnd`, com timer de segurança de `MAX_SIGNAL_DURATION_MS + 500` ms.
+- **Painel de sinais** (`src/screens/SignalPanel.tsx`): 12 botões, um por sinal do catálogo. O sinal é enviado ao **segurar 400 ms** (`SIGNAL_HOLD_MS`); toque rápido não envia. Ativação por leitor de tela (sem `onPressIn`) envia pelo `accessibilityActions`. O cooldown de 3 s (`SIGNAL_COOLDOWN_MS`) é só espelhado na UI; quem decide é o servidor (`RATE_LIMITED`).
+- **Movimento reduzido**: `src/platform/useReduceMotion.ts` lê `AccessibilityInfo` (na web, o `prefers-reduced-motion`). Com ele ligado, o sinal vira um destaque estático (borda branca) de 1 s, e o avatar ocioso para de animar.
+- **Criador de avatar** (`/avatar`, `src/screens/AvatarEditorScreen.tsx` e `AvatarEditorView.tsx`): escolhe uma variante por parte (8 partes, nomes em `PART_VARIANT_NAMES`), pré-visualiza com `<Avatar>` e salva com `PUT /me/avatar`. "Salvar" fica desligado sem mudança. Entradas: "Meu avatar" em Início (`open-avatar`) e "Editar avatar" em Configurações (`settings-avatar`).
+- **E2E**: `e2e/avatar.spec.ts` (3 cenários): segurar o botão envia o sinal e os 4 navegadores veem o marcador `avatar-<assento>-signal-<id>`; o editor salva e o avatar persiste ao recarregar; o editor abre pelas Configurações.
+- **Não validado**: aparência em aparelho, iOS, Android, leitor de tela, e o "segurar" com dedo real. Só Chromium.
+
+### Desempenho do avatar
+
+Script `e2e/perf/avatarPerf.perf.ts`, fora da suíte e do CI (o `testMatch` de `playwright.config.ts` só pega `*.spec.ts`). Mede FPS do observador (jogador 0) com 4 avatares animando ao mesmo tempo, com CPU a 1x e 4x de throttle: primeiro ocioso, depois com rajadas de 4 sinais a cada ~3,3 s. Imprime linhas `[perf]` com FPS médio, p50, p95, p99 e quadros acima de 33 ms, e a CPU do Chromium.
+
+```bash
+pnpm build                                  # uma vez (o script precisa dos pacotes e do servidor compilados)
+pnpm --filter @trucaco/mobile exec playwright test -c e2e/perf/playwright.perf.config.ts
+```
+
+Variáveis:
+
+- `PERF_SECONDS`: duração de cada medição em segundos (padrão 10).
+- `PERF_PASSIVE=1`: o observador não sinaliza nem abre o painel; só os outros 3 animam.
+- `PERF_REDUCED=1`: controle; o observador usa `prefers-reduced-motion`.
+- `E2E_SKIP_BUILD=1`: reaproveita o `dist-e2e/` (ver E2E abaixo), sem reconstruir o web.
+
+O resultado depende da máquina: é uma medição de um ambiente, não uma garantia. Resultados de 2026-11-02 e a análise estão em `docs/specs/2026-11-02-fase-4-relatorio.md`.
 
 ## Retomar a mesa depois de recarregar
 

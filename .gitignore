@@ -28,6 +28,7 @@ android/app/build/
 
 # Testes
 test-results/
+test-results-perf/
 playwright-report/
 maestro-output/
 
