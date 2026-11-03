@@ -1,5 +1,7 @@
 # Especificação do rig Rive do avatar (`assets/rive/avatar.riv`)
 
+> O `assets/rive/avatar.riv` já foi montado e exportado; o que ele tem e onde difere deste contrato está em `docs/avatar-rive-estado.md`.
+
 Documento para o ilustrador. É autocontido: com ele se produz o arquivo `.riv` sem ler o código. Enquanto o `.riv` não existe, o avatar vetorial de `packages/avatar` (Views e Animated) é o avatar do produto e segue exatamente este contrato. **Nomes são contrato**: mudar um nome ou a ordem de uma variante exige atualizar `packages/avatar/src/riveContract.ts`, `parts.ts`, `signals.ts`, `docs/sinais.md` e este documento juntos. Ids de sinal e índices de variante nunca são renomeados nem reordenados; só se acrescenta ao fim.
 
 ## 1. Entrega
