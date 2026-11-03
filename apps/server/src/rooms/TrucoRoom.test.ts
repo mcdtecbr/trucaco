@@ -2613,6 +2613,23 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     return game;
   }
 
+  it('ready seguido de ação não dá RATE_LIMITED; ready em rajada reenvia codes no máximo 1x por janela', async () => {
+    const game = await started();
+    const p = at(game, 1);
+    await sleep(600); // fora da janela do ready do `started`
+    const before = inboxOf(p).codes.length;
+    p.room.send('ready');
+    p.room.send('voteCancel'); // ação que passa por allowAction, colada ao ready
+    await until(() => (game.server.state.cancelVotes.length as number) === 1, 'voto contado');
+    expect(p.errors).toEqual([]);
+    for (let i = 0; i < 10; i++) p.room.send('ready');
+    await until(() => inboxOf(p).codes.length > before, 'codes reenviado');
+    await sleep(QUIET_MS);
+    expect(inboxOf(p).codes.length - before).toBe(1);
+    expect(p.errors).toEqual([]);
+    assertNoLeaks(game);
+  });
+
   it('chat da dupla na ESPERA chega ao parceiro e ao eco; adversários nunca', async () => {
     resetCodeStore();
     const game = await createGame(NAME, OPTS, 3, P);

@@ -222,6 +222,8 @@ export interface LoggedEvent {
 }
 
 const NICKNAME_MAX = 24;
+/** Intervalo mínimo entre `ready` atendidos do mesmo assento (não afeta `allowAction`). */
+const READY_MIN_INTERVAL_MS = 500;
 const CONTROL = /[\p{C}]/u;
 
 /**
@@ -297,6 +299,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly warnState = new Map<Seat, { at: number; suppressed: number }>();
   private startTimer: Timer | null = null;
   private readonly lastActionAt = new Map<Seat, number>();
+  /** Último `ready` atendido por assento: limite próprio, separado de `lastActionAt`. */
+  private readonly lastReadyAt = new Map<Seat, number>();
   private readonly invalidAt = new Map<Seat, number[]>();
   /**
    * Último sinal/sfx/chat aceito por assento. Mapas por ASSENTO que sobrevivem a queda, reconexão e
@@ -626,6 +630,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       // assento, para sair e voltar na espera não zerar o rate limit.
       this.invalidAt.delete(seat);
       this.lastActionAt.delete(seat);
+      this.lastReadyAt.delete(seat);
       this.warnState.delete(seat);
       this.timeouts.delete(seat);
       this.lastSeq.delete(seat);
@@ -1086,7 +1091,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         // A partida começa quando o 4º jogador entra: `ready` não a inicia. Serve de "já registrei os
         // handlers": reenvia o combinado da dupla a este assento (o baseline enviado no `onJoin` pode
         // chegar antes de o cliente ligar o handler de `codes`).
-        if (this.allowAction(seat)) this.sendCodesTo(client, seat);
+        // Limite próprio (1 por READY_MIN_INTERVAL_MS por assento): NÃO consome nem é barrado pela janela
+        // de ação, para o `ready` da entrada não dar `RATE_LIMITED` na primeira jogada. Excesso é ignorado.
+        if (this.allowReady(seat)) this.sendCodesTo(client, seat);
         return;
       default:
         break;
@@ -1262,6 +1269,15 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     };
     this.broadcast('sfx', payload);
     log.info('truco: sfx', { room: this.roomId, seat, sfxId: msg.sfxId });
+  }
+
+  /** Limite do `ready` (reenvio de `codes`), independente de `allowAction`. */
+  private allowReady(seat: Seat): boolean {
+    const now = Date.now();
+    const last = this.lastReadyAt.get(seat);
+    if (last !== undefined && now - last < READY_MIN_INTERVAL_MS) return false;
+    this.lastReadyAt.set(seat, now);
+    return true;
   }
 
   /** Rate limit por assento (em memória da sala). */

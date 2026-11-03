@@ -177,6 +177,7 @@ Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e
 | Chat por assento (partner e table)                                    | 2 s (`CHAT_COOLDOWN_MS`)                               | `error RATE_LIMITED`; texto recusado também consome o cooldown                  |
 | Combinado (`setCode`) por assento                                     | 1 s (`CODES_COOLDOWN_MS`)                              | `error RATE_LIMITED`; texto recusado (`CHAT_BLOCKED`) também consome o cooldown |
 | Intervalo entre ações do mesmo assento                                | 150 ms (`ACTION_MIN_INTERVAL_MS`)                      | `error RATE_LIMITED`                                                            |
+| `ready` (reenvio de `codes`) por assento                              | 500 ms (`READY_MIN_INTERVAL_MS`, só no servidor)       | excesso ignorado em silêncio; não consome nem sofre o limite de 150 ms          |
 | Mensagens por segundo por conexão                                     | 30                                                     | acima disso o core derruba a conexão (`CloseCode.WITH_ERROR`)                   |
 | Tamanho máximo de mensagem                                            | 1024 bytes (`MAX_MESSAGE_BYTES`, limite do transporte) | conexão cai acima disso                                                         |
 | Payload inválido (`INVALID_PAYLOAD`, `INVALID_SIGNAL`, `INVALID_SFX`) | 5 em 10 s                                              | expulsão com código 1008 e assento vai para o bot, sem janela                   |
