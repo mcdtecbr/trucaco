@@ -79,6 +79,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   INVALID_SIGNAL: GENERIC,
   INVALID_SFX: GENERIC,
   CHAT_BLOCKED: 'Mensagem não enviada.',
+  CODE_NOT_SAVED: 'O combinado não foi salvo; vale só nesta mesa.',
   REMATCH_NOT_AVAILABLE: 'A revanche não está disponível.',
   ROOM_NOT_FOUND: 'A mesa não existe mais.',
   TOKEN_EXPIRED: 'Sua sessão expirou. Entre de novo.',
@@ -107,6 +108,7 @@ export function errorMessage(code: string | undefined): string {
 /** Erro de `setCode` (combinado da dupla): textos próprios, porque o código sozinho não diz o contexto. */
 export function codesErrorMessage(code: string | undefined): string {
   if (code === 'RATE_LIMITED') return 'Aguarde um segundo antes de salvar outro sinal.';
+  if (code === 'CODE_NOT_SAVED') return 'O combinado não foi salvo; vale só nesta mesa.';
   if (code === 'CHAT_BLOCKED') {
     return `Texto não aceito. Use até ${PARTNER_CODE_MAX_LENGTH} caracteres, sem símbolos especiais.`;
   }

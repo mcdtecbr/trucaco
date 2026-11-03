@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PRESENCE_NOTE_MS, createTableController, replacedSeats } from './tableController';
 import { projectTable } from './projectTable';
 import { createTableStore } from './tableStore';
+import { codesErrorMessage } from '../i18n/errors';
 import { player, snapshot } from './snapshotFixtures';
 
 function setup(muted: readonly string[] = []) {
@@ -149,6 +150,17 @@ describe('5C: sendCode', () => {
     ctl.onServerError({ code: 'CHAT_BLOCKED' });
     expect(store.getState().codesError).toBe('CHAT_BLOCKED');
     expect(store.getState().chatError).toBeNull();
+  });
+
+  it('CODE_NOT_SAVED vai para codesError mesmo depois de outro envio', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waiting());
+    ctl.sendCode('wink', 'zap');
+    ctl.sendChat('partner', 'oi');
+    ctl.onServerError({ code: 'CODE_NOT_SAVED' });
+    expect(store.getState().codesError).toBe('CODE_NOT_SAVED');
+    expect(store.getState().chatError).toBeNull();
+    expect(codesErrorMessage('CODE_NOT_SAVED')).toMatch(/não foi salvo/);
   });
 
   it('abrir o painel e clearCodesError limpam o erro', () => {

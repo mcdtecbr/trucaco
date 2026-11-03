@@ -21,7 +21,7 @@ import {
   type UserRecord,
   type UserRepository,
 } from '../db/types';
-import { normalizeId, validateNickname } from '../db/validation';
+import { assertPartnerCodes, normalizeId, validateNickname } from '../db/validation';
 import { TokenStoreUnavailableError } from '../auth/tokenStore';
 
 export const BODY_LIMIT = '8kb';
@@ -352,12 +352,11 @@ export function mountRest(app: Application, opts: RestOptions): void {
         fail(res, 400, 'INVALID_BODY');
         return;
       }
+      let clean: PartnerCodesMap;
       try {
-        await users.savePartnerCodes(
-          locals(res).user.id,
-          partnerId,
-          body['codes'] as PartnerCodesMap,
-        );
+        // A mesma limpeza do chat; o repositório a aplica de novo (idempotente) ao gravar.
+        clean = assertPartnerCodes(body['codes'] as PartnerCodesMap);
+        await users.savePartnerCodes(locals(res).user.id, partnerId, clean);
       } catch (err) {
         if (err instanceof NotPartnersError) {
           fail(res, 403, 'NOT_PARTNERS');
@@ -369,7 +368,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
         }
         throw err;
       }
-      res.json({ codes: body['codes'] });
+      res.json({ codes: clean });
     });
   });
 }

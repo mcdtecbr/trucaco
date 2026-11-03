@@ -677,7 +677,11 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const ambiguous = AMBIGUOUS_ERRORS.includes(code);
       // Voto recusado: a janela pode estar errada para mim; permite tentar de novo se o estado reabrir.
       if (code === 'REMATCH_NOT_AVAILABLE' || lastSend === 'rematch') rematchSentFor = 0;
-      if (lastSend === 'codes' && (code === 'CHAT_BLOCKED' || ambiguous)) {
+      // Chega depois da gravação, sem relação com o último envio: sempre é do combinado.
+      if (
+        code === 'CODE_NOT_SAVED' ||
+        (lastSend === 'codes' && (code === 'CHAT_BLOCKED' || ambiguous))
+      ) {
         store.getState().patch({ codesError: code });
         return;
       }

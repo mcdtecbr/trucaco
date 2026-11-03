@@ -33,7 +33,7 @@ export type {
 } from './room';
 export { BET_CRY_BY_VALUE, BET_CRY_IDS, betCry } from './events';
 export type { BetCryId, HandEndReason, PublicGameEvent, SpecialKind } from './events';
-export { parseClientMessage } from './messages';
+export { cleanPartnerCode, parseClientMessage } from './messages';
 export type {
   ChatScope,
   ClientMessage,

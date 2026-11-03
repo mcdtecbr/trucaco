@@ -66,12 +66,21 @@ const codeStore = {
   played: new Set<string>(),
   saved: [] as { key: string; codes: PartnerCodesMap }[],
   failLoad: false,
+  failSave: false,
+  /* Quando definido, `savePartnerCodes` espera esta promessa. */
+  gate: null as Promise<void> | null,
+  inFlight: 0,
+  maxInFlight: 0,
 };
 const resetCodeStore = (): void => {
   codeStore.codes.clear();
   codeStore.played.clear();
   codeStore.saved.length = 0;
   codeStore.failLoad = false;
+  codeStore.failSave = false;
+  codeStore.gate = null;
+  codeStore.inFlight = 0;
+  codeStore.maxInFlight = 0;
 };
 const codesUsers: NonNullable<TrucoRoomConfig['users']> = {
   getPartnerCodes: (a, b) => {
@@ -79,12 +88,19 @@ const codesUsers: NonNullable<TrucoRoomConfig['users']> = {
     return Promise.resolve(codeStore.codes.get(pairKey(a, b)) ?? null);
   },
   havePlayedTogether: (a, b) => Promise.resolve(codeStore.played.has(pairKey(a, b))),
-  savePartnerCodes: (a, b, codes) => {
+  savePartnerCodes: async (a, b, codes) => {
     const key = pairKey(a, b);
-    if (!codeStore.played.has(key)) return Promise.reject(new NotPartnersError());
+    if (codeStore.failSave) throw new Error('banco fora');
+    if (!codeStore.played.has(key)) throw new NotPartnersError();
+    codeStore.inFlight++;
+    codeStore.maxInFlight = Math.max(codeStore.maxInFlight, codeStore.inFlight);
+    try {
+      if (codeStore.gate !== null) await codeStore.gate;
+    } finally {
+      codeStore.inFlight--;
+    }
     codeStore.codes.set(key, codes);
     codeStore.saved.push({ key, codes });
-    return Promise.resolve();
   },
 };
 /** Como o banco: partida `finished` vincula os pares da mesma dupla. */
@@ -697,6 +713,28 @@ describe('TrucoRoom: saída antes do início e estado por assento', () => {
     expect(server.clients.length).toBe(2);
     b.send('play', { card: 1 });
     await until(() => code === 1008, 'B expulso no 5º');
+  });
+
+  it('assento liberado na espera depois de expulsão: o próximo ocupante fala normalmente', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    const k = await t.connectTo(server as unknown as Room, { userId: 'k', nickname: 'K' });
+    const heard: string[] = [];
+    k.onMessage('chat', (m: { text: string }) => heard.push(m.text));
+    const a = await t.connectTo(server as unknown as Room, { userId: 'a', nickname: 'A' });
+    let code = -1;
+    a.onLeave((c) => {
+      code = c;
+    });
+    for (let i = 0; i < 5; i++) a.send('play', { card: 1 });
+    await until(() => code === 1008, 'A expulso');
+    await until(() => server.clients.length === 1, 'assento de A liberado');
+    const b = await t.connectTo(server as unknown as Room, { userId: 'b', nickname: 'B' });
+    b.send('chat', { scope: 'table', text: 'oi do novo ocupante' });
+    await until(() => heard.includes('oi do novo ocupante'), 'chat do novo ocupante entregue');
+    // o ban por userId continua valendo
+    await expect(
+      t.connectTo(server as unknown as Room, { userId: 'a', nickname: 'A' }),
+    ).rejects.toThrow();
   });
 
   it('o userId nunca entra no estado compartilhado', async () => {
@@ -2978,6 +3016,102 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     at(game, 0).room.send('setCode', { signalId: 'smile', meaning: 'novo' });
     await until(() => codeStore.saved.length === 1, 'gravado');
     expect(codeStore.saved[0]?.codes).toEqual({ wink: 'ok', smile: 'novo' });
+  });
+
+  it('legado sujo (bidi, ZWJ, controle, vazio) é descartado no carregamento e nunca chega ao parceiro', async () => {
+    resetCodeStore();
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    codeStore.played.add(key);
+    codeStore.codes.set(key, {
+      nod: 'ab\u202Ecd',
+      smile: 'a\u200Db',
+      cry: 'a\u0007b',
+      wave: '   ',
+      wink: 'ok',
+    });
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'ok', 'carregado');
+    expect(lastCodes(at(game, 2))).toEqual({ wink: 'ok' });
+    expect(lastCodes(at(game, 0))).toEqual({ wink: 'ok' });
+  });
+
+  it('gravação da sala só altera as chaves editadas: um PUT feito durante a partida sobrevive', async () => {
+    resetCodeStore();
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    codeStore.played.add(key);
+    codeStore.codes.set(key, { nod: 'antigo' });
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => lastCodes(at(game, 2))?.['nod'] === 'antigo', 'carregado');
+    // PUT por REST durante a partida: troca o mapa inteiro no banco.
+    codeStore.codes.set(key, { nod: 'via-rest', cry: 'tambem-rest' });
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'da-mesa' });
+    await until(() => codeStore.saved.length === 1, 'gravado');
+    expect(codeStore.saved[0]?.codes).toEqual({
+      nod: 'via-rest',
+      cry: 'tambem-rest',
+      wink: 'da-mesa',
+    });
+  });
+
+  it('gravação falhou: o assento que editou recebe CODE_NOT_SAVED (sem detalhe do banco)', async () => {
+    resetCodeStore();
+    codeStore.played.add(pairKey(`${P}-0`, `${P}-2`));
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    codeStore.failSave = true;
+    const [p0, p1, p2] = game.players as [Player, Player, Player];
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'x' });
+    await until(() => p0.errors.includes('CODE_NOT_SAVED'), 'aviso ao autor');
+    await sleep(QUIET_MS);
+    expect(p2.errors).toEqual([]);
+    expect(p1.errors).toEqual([]);
+    expect(logLines.join('\n')).not.toContain('banco fora');
+  });
+
+  it('leitura do banco falhou: a edição avisa CODE_NOT_SAVED em vez de confirmar em silêncio', async () => {
+    resetCodeStore();
+    codeStore.played.add(pairKey(`${P}-0`, `${P}-2`));
+    codeStore.failLoad = true;
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    const p0 = at(game, 0);
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'x' });
+    await until(() => p0.errors.includes('CODE_NOT_SAVED'), 'aviso ao autor');
+    expect(codeStore.saved).toEqual([]);
+  });
+
+  it('edições seguidas são juntadas: no máximo 1 gravação em voo e a última vence', async () => {
+    resetCodeStore();
+    codeStore.played.add(pairKey(`${P}-0`, `${P}-2`));
+    const game = await createGame(NAME, OPTS, 4, P);
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    let release: () => void = () => undefined;
+    codeStore.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const p0 = at(game, 0);
+    const p2 = at(game, 2);
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'um' });
+    await until(() => codeStore.inFlight === 1, 'primeira em voo');
+    await sleep(350);
+    p2.room.send('setCode', { signalId: 'nod', meaning: 'dois' });
+    await until(() => lastCodes(p0)?.['nod'] === 'dois', 'segunda entregue');
+    await sleep(350);
+    p0.room.send('setCode', { signalId: 'wink', meaning: 'tres' });
+    await until(() => lastCodes(p2)?.['wink'] === 'tres', 'terceira entregue');
+    expect(codeStore.maxInFlight).toBe(1);
+    codeStore.gate = null;
+    release();
+    await until(() => codeStore.saved.at(-1)?.codes['wink'] === 'tres', 'último estado gravado');
+    expect(codeStore.saved.at(-1)?.codes).toEqual({ wink: 'tres', nod: 'dois' });
+    // 1 gravação em voo + 1 rodada com o último mapa (a 2ª e a 3ª edição foram juntadas)
+    expect(codeStore.saved).toHaveLength(2);
+    expect(codeStore.maxInFlight).toBe(1);
   });
 
   it('partida cancelada não vincula nem grava: a 2ª mesa começa com o combinado vazio', async () => {

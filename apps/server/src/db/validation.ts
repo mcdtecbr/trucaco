@@ -1,4 +1,9 @@
-import { PARTNER_CODE_MAX_LENGTH, SIGNAL_IDS, parseAvatarParts } from '@trucaco/protocol';
+import {
+  PARTNER_CODE_MAX_LENGTH,
+  SIGNAL_IDS,
+  cleanPartnerCode,
+  parseAvatarParts,
+} from '@trucaco/protocol';
 import type { AvatarParts } from '@trucaco/protocol';
 import { InvalidInputError, type FinishedMatchInput, type PartnerCodesMap } from './types';
 
@@ -69,17 +74,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `signalId` só do catálogo, no máximo um significado por sinal, cada um com até 60 caracteres. */
-export function assertPartnerCodes(codes: PartnerCodesMap): void {
+/**
+ * `signalId` só do catálogo; cada significado passa pela MESMA limpeza do chat (`cleanPartnerCode`,
+ * teto 60): recusado lança, vazio apaga a chave. Devolve o mapa limpo a gravar.
+ */
+export function assertPartnerCodes(codes: PartnerCodesMap): PartnerCodesMap {
   if (!isPlainObject(codes)) throw new InvalidInputError('Códigos inválidos.');
   const entries = Object.entries(codes);
   if (entries.length > SIGNAL_IDS.length) throw new InvalidInputError('Códigos demais.');
+  const clean: Record<string, string> = {};
   for (const [signalId, meaning] of entries) {
     if (!SIGNAL_ID_SET.has(signalId)) throw new InvalidInputError('Sinal desconhecido.');
-    if (typeof meaning !== 'string' || length(meaning) > PARTNER_CODE_MAX) {
+    const cleaned = typeof meaning === 'string' ? cleanPartnerCode(meaning) : null;
+    if (cleaned === null) {
       throw new InvalidInputError(`Código inválido (máximo ${PARTNER_CODE_MAX} caracteres).`);
     }
+    if (cleaned !== '') clean[signalId] = cleaned;
   }
+  return clean;
 }
 
 /**

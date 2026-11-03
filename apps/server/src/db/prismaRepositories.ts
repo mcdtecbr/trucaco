@@ -203,13 +203,13 @@ export class PrismaUserRepository implements UserRepository {
 
   async savePartnerCodes(userId: string, partnerId: string, codes: PartnerCodesMap): Promise<void> {
     const [userAId, userBId] = orderPair(userId, partnerId);
-    assertPartnerCodes(codes);
+    const clean = assertPartnerCodes(codes);
     if (!(await this.havePlayedTogether(userAId, userBId))) throw new NotPartnersError();
     await guarded(() =>
       this.db.partnerCodes.upsert({
         where: { userAId_userBId: { userAId, userBId } },
-        create: { userAId, userBId, codes },
-        update: { codes },
+        create: { userAId, userBId, codes: clean },
+        update: { codes: clean },
       }),
     );
   }

@@ -171,9 +171,13 @@ describe('erros do servidor (i18n)', () => {
     for (const code of ERROR_CODES) {
       const { ctl, store } = setup();
       ctl.onServerError({ code });
-      // CHAT_BLOCKED vai para o erro do chat, não para o banner da mesa.
+      // CHAT_BLOCKED vai para o erro do chat e CODE_NOT_SAVED para o do combinado, não para o banner da mesa.
       const shown =
-        code === 'CHAT_BLOCKED' ? store.getState().chatError : store.getState().errorCode;
+        code === 'CHAT_BLOCKED'
+          ? store.getState().chatError
+          : code === 'CODE_NOT_SAVED'
+            ? store.getState().codesError
+            : store.getState().errorCode;
       expect(shown).toBe(code);
       expect(hasMessage(code)).toBe(true);
       expect(errorMessage(code).length).toBeGreaterThan(5);

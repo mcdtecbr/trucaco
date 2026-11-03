@@ -25,13 +25,13 @@ import {
   CHAT_COOLDOWN_MS,
   CODES_COOLDOWN_MS,
   DEFAULT_REMATCH_WINDOW_MS,
-  PARTNER_CODE_MAX_LENGTH,
   REMATCH_MIN_HUMANS,
   RECONNECT_SECONDS,
   SFX_COOLDOWN_MS,
   SIGNAL_COOLDOWN_MS,
   SIGNAL_IDS,
   TURN_TIMEOUT_MS,
+  cleanPartnerCode,
   parseClientMessage,
   validateRoomOptions,
 } from '@trucaco/protocol';
@@ -205,8 +205,12 @@ interface PairCodes {
   loadFailed: boolean;
   /** O par já jogou junto uma partida finalizada: edições são gravadas na hora. */
   linked: boolean;
-  /** Gravações em série: a última edição sempre vence. */
-  chain: Promise<void>;
+  /** Há edição ainda não gravada. */
+  dirty: boolean;
+  /** Gravação em voo (no máximo uma por par); edições seguintes só marcam `dirty`. */
+  flushing: Promise<void> | null;
+  /** Último assento que editou: recebe o aviso `CODE_NOT_SAVED` se a gravação falhar. */
+  lastEditor: Seat | null;
 }
 
 /** Dados de identidade do jogador (vêm do `onAuth`: JWT + banco; nunca do payload do cliente). */
@@ -639,6 +643,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.lastSeq.delete(seat);
       this.seatPresence.delete(seat);
       this.reconnectCount.delete(seat);
+      // Quem sentar depois não herda a expulsão (o ban por `userId` continua em `bannedUsers`).
+      this.expelledSeats.delete(seat);
       setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty' });
       this.syncPairs();
       if (this.startTimer !== null) {
@@ -1651,7 +1657,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         loaded: false,
         loadFailed: false,
         linked: false,
-        chain: Promise.resolve(),
+        dirty: false,
+        flushing: null,
+        lastEditor: null,
       };
       this.pairs.set(team, state);
       void this.loadPair(team, state);
@@ -1681,16 +1689,18 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (this.closing || this.pairs.get(team) !== state) return;
     for (const [id, meaning] of Object.entries(stored ?? {})) {
       if (!(SIGNAL_IDS as readonly string[]).includes(id) || typeof meaning !== 'string') continue;
-      // Legado acima do limite: descartado (uma gravação do mapa inteiro falharia no assert).
-      if ([...meaning].length > PARTNER_CODE_MAX_LENGTH) continue;
+      // Legado recusado pela limpeza do chat (bidi, ZWJ, controle, acima do limite): descartado.
+      const cleaned = cleanPartnerCode(meaning);
+      if (cleaned === null || cleaned === '') continue;
       if (state.touched.has(id as SignalId)) continue;
-      state.codes[id as SignalId] = meaning;
+      state.codes[id as SignalId] = cleaned;
     }
     state.linked = linked;
     state.loadFailed = failed;
     state.loaded = true;
     this.sendCodes(team, -1);
-    if (linked && !failed && state.touched.size > 0) this.persistPair(state);
+    if (failed && state.touched.size > 0) this.notifyNotSaved(state);
+    else if (linked && state.touched.size > 0) this.persistPair(state);
   }
 
   /** Destino SÓ pelo time do servidor: sockets vivos dos 2 assentos; bot e assento caído não recebem. */
@@ -1766,28 +1776,67 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       length: [...msg.meaning].length,
     });
     this.sendCodes(team, seat);
-    if (state.linked && !state.loadFailed) this.persistPair(state);
+    state.lastEditor = seat;
+    if (this.config.users === undefined) return;
+    if (state.loadFailed) this.notifyNotSaved(state);
+    else if (state.linked) this.persistPair(state);
   }
 
-  /** Grava o mapa atual (upsert) em segundo plano; falha só loga (sem ids nem texto). */
+  /** Avisa o último assento que editou: o combinado vale só nesta mesa (sem detalhe do banco). */
+  private notifyNotSaved(state: PairCodes): void {
+    const seat = state.lastEditor;
+    if (seat === null || this.botSeats.has(seat) || this.droppedSeats.has(seat)) return;
+    for (const c of this.clients) {
+      if (this.seatBySession.get(c.sessionId) === seat) this.reject(c, 'CODE_NOT_SAVED');
+    }
+  }
+
+  /**
+   * Grava em segundo plano (falha só loga, sem ids nem texto). No máximo UMA gravação em voo por par:
+   * edições durante a gravação só marcam `dirty` e a rodada seguinte grava o estado mais recente.
+   */
   private persistPair(state: PairCodes): void {
+    if (this.config.users === undefined || state.loadFailed) return;
+    state.dirty = true;
+    if (state.flushing !== null) return;
+    state.flushing = this.flushPair(state);
+    this.track(state.flushing.then(() => true));
+  }
+
+  private async flushPair(state: PairCodes): Promise<void> {
     const users = this.config.users;
-    if (users === undefined || state.loadFailed) return;
-    state.chain = state.chain
-      .then(() =>
-        users.savePartnerCodes(
-          state.a,
-          state.b,
-          Object.fromEntries(Object.entries(state.codes).filter(([, v]) => typeof v === 'string')),
-        ),
-      )
-      .catch((err: unknown) => {
-        log.warn('truco: combinado não gravado', {
-          room: this.roomId,
-          name: err instanceof Error ? err.name : 'unknown',
-        });
-      });
-    this.track(state.chain.then(() => true));
+    if (users === undefined) return;
+    try {
+      while (state.dirty) {
+        state.dirty = false;
+        try {
+          // Só as chaves editadas nesta mesa: lê o mapa atual do banco e aplica por cima, para não
+          // desfazer um PUT feito por REST durante a partida.
+          const merged: Record<string, string> = {};
+          // Legado sujo no banco (recusado pela limpeza) é descartado: senão a gravação inteira falharia.
+          for (const [id, v] of Object.entries(
+            (await users.getPartnerCodes(state.a, state.b)) ?? {},
+          )) {
+            const cleaned = cleanPartnerCode(v);
+            if (cleaned !== null && cleaned !== '') merged[id] = cleaned;
+          }
+          for (const id of state.touched) {
+            const value = state.codes[id];
+            if (value === undefined) delete merged[id];
+            else merged[id] = value;
+          }
+          await users.savePartnerCodes(state.a, state.b, merged);
+        } catch (err) {
+          log.warn('truco: combinado não gravado', {
+            room: this.roomId,
+            name: err instanceof Error ? err.name : 'unknown',
+          });
+          this.notifyNotSaved(state);
+        }
+      }
+    } finally {
+      state.flushing = null;
+    }
   }
 
   /** Depois da 1ª partida finalizada gravada: grava o combinado dos pares ainda não vinculados. */
@@ -1802,7 +1851,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       state.linked = true;
       if (Object.keys(state.codes).length === 0) continue;
       this.persistPair(state);
-      await state.chain;
+      await state.flushing;
     }
   }
 

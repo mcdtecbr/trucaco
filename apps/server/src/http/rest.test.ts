@@ -403,6 +403,32 @@ describe('GET/PUT /me', () => {
     expect((await call('PUT', path, { token: a.accessToken, body: { codes: 'x' } })).status).toBe(
       400,
     );
+    // mesma limpeza do chat: bidi, ZWJ, controle, quebra de linha e acima do teto são recusados (400)
+    const id0 = SIGNAL_IDS[0] as string;
+    for (const bad of [
+      String.fromCharCode(97, 0x202e, 98),
+      String.fromCharCode(97, 0x200d, 98),
+      'a\u0007b',
+      'x'.repeat(61),
+    ]) {
+      const res = await call('PUT', path, {
+        token: a.accessToken,
+        body: { codes: { [id0]: bad } },
+      });
+      expect(res.status).toBe(400);
+      expect(await code(res)).toBe('INVALID_CODES');
+    }
+    // vazio apaga a chave; o texto aceito volta aparado
+    const id1 = SIGNAL_IDS[1] as string;
+    const ok = await call('PUT', path, {
+      token: a.accessToken,
+      body: { codes: { [id0]: '   ', [id1]: '  oi  ' } },
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ codes: { [id1]: 'oi' } });
+    expect(await (await call('GET', path, { token: a.accessToken })).json()).toEqual({
+      codes: { [id1]: 'oi' },
+    });
   });
 });
 

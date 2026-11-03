@@ -169,6 +169,16 @@ function cleanChatText(raw: string, max: number = CHAT_MAX_LENGTH): string | nul
 }
 
 /**
+ * Limpeza do significado de um sinal combinado (mensagem `setCode`, REST e leitura do banco).
+ * Vazio (só espaços) devolve `''` (apaga o combinado); o resto passa pela mesma limpeza do chat com
+ * teto `PARTNER_CODE_MAX_LENGTH`; recusado devolve `null`.
+ */
+export function cleanPartnerCode(raw: string): string | null {
+  if (raw.length <= PARTNER_CODE_MAX_LENGTH * 2 && raw.trim() === '') return '';
+  return cleanChatText(raw, PARTNER_CODE_MAX_LENGTH);
+}
+
+/**
  * Porta de entrada anti-trapaça: valida estrutura, tipos, tamanhos e catálogos de uma mensagem
  * do cliente. Função pura, nunca lança (Proxy/getter hostil vira `INVALID_PAYLOAD`). Decisão: campos
  * extras são REJEITADOS (`INVALID_PAYLOAD`), em especial `seat`, que o servidor nunca aceita do
@@ -238,11 +248,7 @@ function parseUnsafe(input: unknown): ParseResult {
       if (typeof raw.signalId !== 'string' || typeof raw.meaning !== 'string') return BAD;
       if (!(SIGNAL_IDS as readonly string[]).includes(raw.signalId)) return BAD;
       const signalId = raw.signalId as SignalId;
-      // Vazio (só espaços) apaga o combinado; o resto passa pela mesma limpeza do chat, teto 60.
-      if (raw.meaning.length <= PARTNER_CODE_MAX_LENGTH * 2 && raw.meaning.trim() === '') {
-        return good({ type, signalId, meaning: '' });
-      }
-      const meaning = cleanChatText(raw.meaning, PARTNER_CODE_MAX_LENGTH);
+      const meaning = cleanPartnerCode(raw.meaning);
       if (meaning === null) return { ok: false, code: 'CHAT_BLOCKED' };
       return good({ type, signalId, meaning });
     }

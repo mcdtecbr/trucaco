@@ -33,6 +33,9 @@ export const ERROR_CODES = [
   'UNAUTHORIZED',
   // Revanche indisponível: série sem vencedor, janela fechada ou humanos conectados insuficientes.
   'REMATCH_NOT_AVAILABLE',
+  // O combinado de sinais da dupla não foi gravado (falha ou gravação desligada nesta mesa): vale só
+  // nesta mesa e some na próxima. Sem detalhe do banco.
+  'CODE_NOT_SAVED',
   // Reservado ao cliente: o servidor nunca o emite; o cliente o sintetiza (401 na reconexão).
   'TOKEN_EXPIRED',
 ] as const;

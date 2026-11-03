@@ -205,9 +205,9 @@ export class MemoryUserRepository implements UserRepository {
 
   async savePartnerCodes(userId: string, partnerId: string, codes: PartnerCodesMap): Promise<void> {
     const [a, b] = orderPair(userId, partnerId);
-    assertPartnerCodes(codes);
+    const clean = assertPartnerCodes(codes);
     if (!(await this.havePlayedTogether(a, b))) throw new NotPartnersError();
-    this.store.partnerCodes.set(`${a}|${b}`, { ...codes });
+    this.store.partnerCodes.set(`${a}|${b}`, clean);
   }
 }
 
