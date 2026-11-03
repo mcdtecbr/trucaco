@@ -33,6 +33,24 @@ describe('mutedStore', () => {
     expect([...(await storage.load())].sort()).toEqual(['bia', 'caio']);
   });
 
+  it('reativar um jogador depois do hydrate tira o apelido também do armazenamento', async () => {
+    const storage = createMemoryMutedStorage(['bia', 'caio']);
+    const store = createMutedStore(storage);
+    await store.getState().hydrate();
+    store.getState().toggle('Bia');
+    await Promise.resolve();
+    expect(await storage.load()).toEqual(['caio']);
+    expect(store.getState().has('bia')).toBe(false);
+  });
+
+  it('hydrate com armazenamento acima do teto mantém no máximo MAX_MUTED nomes', async () => {
+    const saved = Array.from({ length: MAX_MUTED + 5 }, (_, i) => `j${i}`);
+    const store = createMutedStore(createMemoryMutedStorage(saved));
+    await store.getState().hydrate();
+    expect(store.getState().names).toHaveLength(MAX_MUTED);
+    expect(store.getState().toggle('novo')).toBe(false);
+  });
+
   it('a lista tem teto', () => {
     const store = createMutedStore();
     for (let i = 0; i < MAX_MUTED; i += 1) {

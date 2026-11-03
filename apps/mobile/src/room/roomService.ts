@@ -206,9 +206,8 @@ export function createRoomService(options: {
   }
 
   /**
-   * O servidor conta o `ready` na cadência de ações do assento (150 ms). Mandá-lo logo na entrada, ou com
-   * a mesa cheia ou a partida em andamento, roubaria a primeira jogada de quem acabou de sentar
-   * (`RATE_LIMITED`). Por isso só sai depois de um instante, com o estado já conhecido, a sala ainda
+   * O servidor já não conta o `ready` na cadência de ações (tem limite próprio de 500 ms). O atraso e a
+   * checagem continuam por economia: só sai depois de um instante, com o estado já conhecido, a sala ainda
    * esperando e vaga. Nos outros casos o combinado vem do baseline do `onJoin` ou da retomada.
    */
   function shouldSendReady(r: RoomLike): boolean {

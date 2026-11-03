@@ -2835,4 +2835,145 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     }
     assertNoLeaks(game);
   });
+
+  /** Nova mesa com ids explícitos (assento = ordem de entrada), para trocar os adversários. */
+  async function tableOf(ids: string[]): Promise<Game> {
+    const server = await t.createRoom<TrucoRoom>(NAME, OPTS);
+    const game: Game = { server, players: [], leaks: [], patches: 0, log: new TruthLog() };
+    recordSeries(server, game.log);
+    for (const [seat, id] of ids.entries()) {
+      const room = await t.connectTo<Room>(server as unknown as Room, {
+        userId: id,
+        nickname: `Jogador ${seat}`,
+      });
+      const p: Player = {
+        seat,
+        room,
+        events: [],
+        errors: [],
+        turnTimers: [],
+        presences: [],
+        gone: false,
+      };
+      wirePlayer(game, p);
+      game.players.push(p);
+    }
+    return game;
+  }
+
+  it('par novo: gravado depois da 1ª partida finalizada e recarregado (by -1) numa 2ª mesa; adversários de qualquer mesa nunca recebem', async () => {
+    const game = await started();
+    SECRETS.push('segredo-da-dupla-77');
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'segredo-da-dupla-77' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'segredo-da-dupla-77', 'entregue');
+    expect(codeStore.codes.size).toBe(0);
+    await drive(game, () => (game.server.series?.winner ?? null) !== null, 'fim da série');
+    const key = pairKey(`${P}-0`, `${P}-2`);
+    await until(() => codeStore.saved.length >= 1, 'gravado');
+    expect(await codesUsers.getPartnerCodes(`${P}-0`, `${P}-2`)).toEqual({
+      wink: 'segredo-da-dupla-77',
+    });
+    expect(codeStore.saved.every((s) => s.key === key)).toBe(true);
+    await t.cleanup();
+
+    // 2ª mesa: a dupla volta com adversários diferentes; no mesmo par cada um vê o combinado
+    const g2 = await tableOf([`${P}-0`, 'rival-1', `${P}-2`, 'rival-3']);
+    await until(() => g2.server.series !== null, 'série 2');
+    readyAll(g2);
+    await until(() => lastCodes(at(g2, 2))?.['wink'] === 'segredo-da-dupla-77', 'recarregado');
+    await until(() => lastCodes(at(g2, 0))?.['wink'] === 'segredo-da-dupla-77', 'recarregado 0');
+    for (const s of [0, 2]) expect(inboxOf(at(g2, s)).codes.at(-1)?.by).toBe(-1);
+    await sleep(QUIET_MS);
+    for (const s of [1, 3]) {
+      expect(texts(at(g2, s))).not.toContain('segredo-da-dupla-77');
+      expect(inboxOf(at(g2, s)).codes.every((c) => Object.keys(c.codes).length === 0)).toBe(true);
+    }
+    expect(g2.leaks).toEqual([]);
+    SECRETS.length = 0;
+  });
+
+  it('par vinculado: cada setCode é gravado e uma 2ª mesa recarrega o último estado', async () => {
+    resetCodeStore();
+    codeStore.played.add(pairKey(`${P}-0`, `${P}-2`));
+    const game = await tableOf([`${P}-0`, `${P}-1`, `${P}-2`, `${P}-3`]);
+    await until(() => game.server.series !== null, 'série');
+    readyAll(game);
+    await until(() => game.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'um' });
+    await until(() => codeStore.saved.length === 1, 'gravado 1');
+    await sleep(350);
+    at(game, 2).room.send('setCode', { signalId: 'nod', meaning: 'dois' });
+    await until(() => codeStore.saved.length === 2, 'gravado 2');
+    expect(codeStore.saved[1]?.codes).toEqual({ wink: 'um', nod: 'dois' });
+    await t.cleanup();
+    const g2 = await tableOf([`${P}-2`, `${P}-1`, `${P}-0`, `${P}-3`]); // lugares trocados
+    await until(() => g2.server.series !== null, 'série 2');
+    readyAll(g2);
+    await until(() => lastCodes(at(g2, 0))?.['nod'] === 'dois', 'recarregado');
+    await until(() => lastCodes(at(g2, 2))?.['nod'] === 'dois', 'recarregado no parceiro');
+    expect(lastCodes(at(g2, 2))).toEqual({ wink: 'um', nod: 'dois' });
+  });
+
+  it('revanche na mesma sala mantém o combinado e a edição seguinte vai ao banco', async () => {
+    const game = await started();
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'tenho zap' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'tenho zap', 'entregue');
+    await drive(game, () => (game.server.series?.winner ?? null) !== null, 'fim da série');
+    await until(() => codeStore.saved.length >= 1, 'gravado');
+    for (const p of game.players) p.room.send('voteRematch');
+    await until(() => game.server.state.matchNumber === 2, 'partida 2');
+    await sleep(350);
+    at(game, 2).room.send('setCode', { signalId: 'nod', meaning: 'depois' });
+    await until(() => lastCodes(at(game, 0))?.['nod'] === 'depois', 'edição após a revanche');
+    expect(lastCodes(at(game, 0))).toEqual({ wink: 'tenho zap', nod: 'depois' });
+    await until(() => codeStore.saved.at(-1)?.codes['nod'] === 'depois', 'gravado após revanche');
+    expect(codeStore.saved.at(-1)?.codes).toEqual({ wink: 'tenho zap', nod: 'depois' });
+    await sleep(QUIET_MS);
+    for (const s of [1, 3]) expect(texts(at(game, s))).not.toContain('depois');
+  });
+
+  it('partida cancelada não vincula nem grava: a 2ª mesa começa com o combinado vazio', async () => {
+    const game = await started();
+    at(game, 0).room.send('setCode', { signalId: 'wink', meaning: 'nao-gravar' });
+    await until(() => lastCodes(at(game, 2))?.['wink'] === 'nao-gravar', 'entregue');
+    for (const p of game.players) p.room.send('voteCancel');
+    await until(() => (game.server.state as { phase: string }).phase === 'finished', 'cancelada');
+    await sleep(QUIET_MS);
+    expect(codeStore.saved).toEqual([]);
+    expect(codeStore.played.size).toBe(0);
+    await t.cleanup();
+    const g2 = await tableOf([`${P}-0`, `${P}-1`, `${P}-2`, `${P}-3`]);
+    await until(() => g2.server.series !== null, 'série 2');
+    readyAll(g2);
+    await until(() => g2.players.every((p) => inboxOf(p).codes.length >= 1), 'baseline');
+    await sleep(QUIET_MS);
+    for (const p of g2.players) expect(texts(p)).not.toContain('nao-gravar');
+  });
+
+  it('mesmo userId em dois assentos é recusado: a sala não vira par consigo mesma e o setCode não quebra', async () => {
+    resetCodeStore();
+    const server = await t.createRoom<TrucoRoom>(NAME, OPTS);
+    const first = await t.connectTo<Room>(server as unknown as Room, {
+      userId: `${P}-0`,
+      nickname: 'A',
+    });
+    await expect(
+      t.connectTo<Room>(server as unknown as Room, { userId: `${P}-0`, nickname: 'B' }),
+    ).rejects.toThrow();
+    const other = await t.connectTo<Room>(server as unknown as Room, {
+      userId: `${P}-1`,
+      nickname: 'C',
+    });
+    await t.connectTo<Room>(server as unknown as Room, { userId: `${P}-2`, nickname: 'D' });
+    const mine: { by: number }[] = [];
+    const theirs: { by: number }[] = [];
+    first.onMessage('codes', (m: { by: number }) => mine.push(m));
+    other.onMessage('codes', (m: { by: number }) => theirs.push(m));
+    first.send('setCode', { signalId: 'wink', meaning: 'x' });
+    await until(() => mine.some((m) => m.by === 0), 'eco ao autor (parceiro cp-2 sentado)');
+    await sleep(QUIET_MS);
+    // o assento do userId repetido não existe; o adversário só vê o baseline do próprio time
+    expect(theirs.every((m) => m.by === -1)).toBe(true);
+    expect(codeStore.saved).toEqual([]);
+  });
 });
