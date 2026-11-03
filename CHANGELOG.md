@@ -4,6 +4,33 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Fase 5: chat da dupla e combinado de sinais (2026-11-03), concluída com ressalvas
+
+Ressalvas: iOS, Android, leitor de tela, Safari e Firefox não foram testados; a silenciagem nativa (`expo-secure-store`) não foi validada em aparelho; o combinado de convidado some ao sair da conta e não tem expurgo; o estado da sala continua em memória por processo. Pendências (P3 da revisão, rota de retomada da fila pública): `docs/specs/2026-11-03-fase-5-relatorio.md`. Balões de chat na mesa (4 s) já existiam desde a Fase 3 (3H3).
+
+#### Adicionado
+
+- `packages/protocol`: mensagens `setCode { signalId, meaning }` (cliente) e `codes { codes, by, at }` (servidor, só aos 2 assentos da dupla); `PARTNER_CODE_MAX_LENGTH` (60), `CODES_COOLDOWN_MS` (1 s), `cleanPartnerCode`; `CODE_NOT_SAVED` em `ERROR_CODES` (edd6f93).
+- Servidor: `setCode` por assento com cooldown; carga de `partner_codes` quando o par humano se forma; reenvio do combinado na retomada e no `ready`; gravação do par que já jogou junto a cada edição; gravação do par novo ao fim da 1ª partida `finished` (edd6f93).
+- Chat da dupla na sala de espera (a sala de espera é a "preparação"; não há fase nova nem timer) (edd6f93, c0db943).
+- Cliente: painel "Combinar sinais" na espera e na mesa, com os 12 sinais, campo de até 60 caracteres e o significado tradicional só como texto de apoio; o combinado aparece sob o sinal no painel de sinais; aviso de convidado sobre o combinado (c0db943). Hoje o aviso aparece para todos os jogadores: a flag `guest` vem fixa em `true` em `TableRoomScreen.tsx`.
+- Cliente: aviso na mesa quando o parceiro sinaliza e há combinado para o sinal, por 5 s (c0db943).
+- Silenciar um jogador só neste aparelho (preferência local, `trucaco.muted.v1`, até 50 apelidos; bots não entram na lista) (c0db943, 278afb6).
+- Testes: sala com combinado e chat da dupla (`TrucoRoom.test.ts`), `codes.int.test.ts` contra o servidor real, `codes.spec.ts` (E2E) e `mutedStore.test.ts` (edd6f93, c0db943, 296741d).
+
+#### Alterado
+
+- `PARTNER_CODE_MAX` do banco e da REST passou de 140 para 60 caracteres, com a mesma limpeza do chat (edd6f93, debe97b). Sem migração: não há dado em produção.
+- `ready` deixou de ser ignorado: não inicia a partida, mas reenvia `codes` ao assento (edd6f93).
+- Chat da dupla passou a valer na sala de espera; `signal` e `sfx` continuam só em `playing` (edd6f93).
+
+#### Corrigido
+
+- `ready` não consome mais o limite de 150 ms das ações; tem limite próprio de 500 ms (738b363).
+- O combinado não é apagado quando a leitura do banco falha; a sala não grava nesse par e avisa com `CODE_NOT_SAVED` (278afb6, debe97b).
+- Salvar o combinado não envia duas vezes o mesmo texto; bots não aparecem na lista de silenciados (278afb6).
+- A limpeza do combinado também vale na REST, a gravação em voo é coalescida (no máximo uma por par) e o aviso `CODE_NOT_SAVED` aparece no cliente (debe97b).
+
 ### Fase 4: avatar e sinais (2026-11-02), concluída com ressalvas
 
 Ressalvas: o `.riv` não existe, então Rive web (4G) e nativo (4H) estão pendentes e o avatar de produção é o vetorial; iOS, Android e aparelho intermediário não foram testados. Relatório em `docs/specs/2026-11-02-fase-4-relatorio.md`; decisões em `docs/adr/0001-avatar-em-packages-avatar.md` e `docs/adr/0002-avatar-vetorial-como-producao-e-rive-como-extensao.md`.

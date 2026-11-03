@@ -65,10 +65,10 @@ Sem UI; as telas consomem estes módulos.
 - `tableController.ts`: envia uma ação só se ela estiver em `legalActions` do próprio assento, barra o duplo clique e detecta a revanche pela mudança de `matchNumber`. Carta coberta própria vem em `privates[seat].ownCovered`.
 - `clockOffset.ts` (offset do relógio para o prazo do turno), `presence.ts` (presença por assento), `tableStore.ts` (estado de UI da mesa: balões, notícias, histórico).
 - Visões de `/table/[code]`, escolhidas por `roomViewFor(phase)`:
-  - `waiting`: `WaitingRoomView`, com o código grande para compartilhar e os 4 assentos; o chat da mesa já funciona aqui.
+  - `waiting`: `WaitingRoomView`, com o código grande para compartilhar e os 4 assentos; o chat das abas Mesa e Dupla e o painel "Combinar sinais" funcionam aqui (é a "preparação" da dupla, ver "Combinado da dupla").
   - `playing`: `TableView`, com leque de cartas, mesa, placar em camadas, histórico das mãos, botões de aposta por `legalActions`, mão de ferro às cegas (`playBlind`), carta coberta (modo "Cobrir"), voto de cancelar e "Sair da mesa" (com diálogo de confirmação).
   - `finished`: `FinishedView`, com o resultado e o botão "Jogar de novo".
-- Chat (`ChatPanel.tsx`): abas "Mesa" e "Dupla". Texto sempre como `<Text>`, validado com `parseClientMessage` de `@trucaco/protocol` (a validação é só UX; o servidor decide de novo). Balão sobre o avatar por 4 s.
+- Chat (`ChatPanel.tsx`): abas "Mesa" e "Dupla". Texto sempre como `<Text>`, validado com `parseClientMessage` de `@trucaco/protocol` (a validação é só UX; o servidor decide de novo). Balão sobre o avatar por 4 s. Botões "Silenciar" por jogador (só neste aparelho, ver "Combinado da dupla e silenciar").
 - Aposta pendente: só o `pending.responderSeat` tem botões ("Sua vez"); o parceiro vê "Seu parceiro responde" e a dupla de quem pediu, "Aguardando resposta de <nome>". Onze/dez: os dois da dupla decidem (`actingSeat` = -1), veem as cartas um do outro e mostram "Você e seu parceiro decidem"; quem já aceitou (`specialAccepted`) vê "Aguardando o parceiro" (`docs/protocolo-servidor.md`).
 - **Revanche**: o botão "Jogar de novo" aparece quando a série termina com vencedor e a janela de `rematchDeadlineAt` está aberta. Mostra "Aguardando a mesa (N votaram)" depois do voto, e "O tempo para jogar de novo acabou." quando a janela fecha. A mudança de `matchNumber` reinicia o placar e a mesa na partida nova.
 - Deep link `trucaco://table/CODE`: sem mesa ativa, leva a `/home` com o código preenchido; entrar na mesa é sempre ação do usuário.
@@ -161,6 +161,19 @@ Variáveis:
 - `E2E_SKIP_BUILD=1`: reaproveita o `dist-e2e/` (ver E2E abaixo), sem reconstruir o web.
 
 O resultado depende da máquina: é uma medição de um ambiente, não uma garantia. Resultados de 2026-11-02 e a análise estão em `docs/specs/2026-11-02-fase-4-relatorio.md`.
+
+## Combinado da dupla e silenciar (Fase 5)
+
+- **Painel "Combinar sinais"** (`src/screens/CodesPanel.tsx`, props puras em `codesPanelProps.ts`): abre na sala de espera (`WaitingRoomView`, botão `open-codes`) e na mesa (menu da `TableView`). Os 12 sinais do catálogo, cada um com um campo de até `PARTNER_CODE_MAX_LENGTH` (60) caracteres. O significado tradicional de `SIGNALS` aparece só como sugestão (placeholder), nunca como valor salvo. Campo vazio apaga o combinado.
+- **Fluxo**: `tableController.sendCode` valida com `parseClientMessage` antes de enviar e não envia se o texto não mudou; `onCodes` recebe `codes` (só da própria dupla; `by` de outra dupla é descartado) e guarda o mapa em `tableStore.codes`. O eco do próprio salvamento limpa `codesError`.
+- **Painel de sinais**: o combinado aparece sob o nome do sinal (`signal-meaning-<id>`). Quando o parceiro sinaliza e há combinado para esse sinal, a mesa mostra um aviso por 5 s (`partnerSignalNote`) e o anúncio para o leitor de tela inclui o significado.
+- **Erros** (textos em `src/i18n/errors.ts`, função própria para `setCode`): `CODE_NOT_SAVED` ("O combinado não foi salvo; vale só nesta mesa."), `CHAT_BLOCKED` e `RATE_LIMITED` no campo do combinado.
+- **Reenvio**: `roomService` liga o handler `codes` antes de enviar `ready` (1 s depois de ligar os handlers, `READY_DELAY_MS`). O servidor responde ao `ready` com o combinado; o `ready` não inicia a partida.
+- **Como convidado**: `CodesPanel` mostra "Como convidado, seu combinado some ao sair da conta." **Hoje esse aviso aparece para todos**: `TableRoomScreen.tsx` passa `guest: true` fixo. Corrigir para ler o provedor da sessão (fase de contas, Fase 6) é pendência.
+- **Ocupante trocado na espera**: o chat e o balão do assento que mudou de mão são apagados (`tableController`); se o assento era do parceiro, o chat da dupla do par antigo também. O servidor manda `codes` vazio ao parceiro que ficou e carrega o combinado do novo par.
+- **Silenciar um jogador** (`ChatPanel.tsx`, `src/store/mutedStore.ts`): um botão "Silenciar <nome>" por OUTRO jogador sentado humano (bot não entra). Esconde o chat e os balões daquele assento nesta mesa. É **preferência local**: não vai ao servidor nem à conta, e o outro jogador não sabe. Chave: apelido normalizado (minúsculas), até 50 nomes (`MAX_MUTED`). Guardada com a chave `trucaco.muted.v1`: `localStorage` no web, `expo-secure-store` no nativo (`src/platform/mutedStorage*.ts`), memória nos testes.
+- **Fora do escopo desta fase**: filtro de palavrões, bloqueio e denúncia (Fase 6; `canReceiveChat` no servidor é o ponto de extensão).
+- **Não validado**: silenciar no nativo (`expo-secure-store`), toque real no painel, leitor de tela lendo o combinado, layout em tela estreita. Só Chromium no E2E (`e2e/codes.spec.ts`).
 
 ## Retomar a mesa depois de recarregar
 

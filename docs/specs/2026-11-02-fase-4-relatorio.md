@@ -104,4 +104,4 @@ Os valores batem com a faixa relatada acima. O 4x ocioso ficou um pouco acima da
 - **Vagas de bot**: o servidor não cria; logo nenhum bot sinaliza. Ver "Decisões do usuário".
 - **Desempenho**: meta de 50 FPS em aparelho não medida; web com CPU limitada abaixo da meta (ver "Desempenho").
 - **Voz**: `AvatarParts.voice` reservado, não usado (Fase 5b).
-- **Pendências antigas**: seguem em `docs/plano-desenvolvimento.md` (Fases 2 e 3) e no handoff `.claude/memory/handoff-fase-4.md`.
+- **Pendências antigas**: seguem em `docs/plano-desenvolvimento.md` (Fases 2 e 3) e no handoff `.claude/memory/handoff-fase-5.md` (o antigo `handoff-fase-4.md` foi renomeado em 2026-11-03).

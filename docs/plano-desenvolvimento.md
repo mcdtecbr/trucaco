@@ -145,7 +145,23 @@ Blocos e commits:
 - **Acessibilidade**: textos de acessibilidade e anúncios dos sinais não foram ouvidos em leitor de tela, e os textos não tiveram revisão de UX.
 - **Revisão por Codex**: segue pendente (ver Fase 3). A Fase 4 foi revisada pela Rita-C (agente Claude, `opus`); o `vitor-seguranca` ficou de fora por decisão do usuário.
 
-## Fase 5: chat da dupla e balões (1–2 semanas)
+## Fase 5: chat da dupla e balões (1–2 semanas): concluída em 2026-11-03, com ressalvas
+
+Blocos 5A a 5G. Plano em `docs/specs/2026-11-02-fase-5-chat-dupla-plano.md`; relatório em `docs/specs/2026-11-03-fase-5-relatorio.md`. Decisões do usuário: a sala de espera é a "preparação" (sem fase nova nem timer); combinado de até 60 caracteres; par novo grava ao fim da 1ª partida terminada; silenciar só local, sem filtro de palavrões; convidado perde o combinado ao sair da conta, com aviso. Protocolo e servidor: `docs/protocolo-servidor.md` ("Combinado da dupla"). Cliente: `apps/mobile/README.md` ("Combinado da dupla e silenciar").
+
+Status por etapa (2026-11-03):
+
+| Etapa                               | Status                                                                                                                                                                                                                                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Contrato (5A) e servidor (5B)       | Feito em `edd6f93`: `setCode`, `codes`, carga e gravação em `partner_codes`, reenvio no `ready`. Correções: `738b363` (limite de `ready`), `278afb6` e `debe97b` (leitura que falha não apaga o combinado; `CODE_NOT_SAVED`; limpeza também na REST).                                |
+| Estado do cliente (5C) e telas (5D) | Feito em `c0db943`: painel "Combinar sinais" na espera e na mesa, combinado sob o sinal, aviso do sinal do parceiro, silenciar local. Correção em `278afb6`.                                                                                                                         |
+| Testes (5E)                         | `296741d` (sala, gravação e recarga, `mutedStore`); `codes.int.test.ts` e `codes.spec.ts` (E2E Chromium).                                                                                                                                                                            |
+| Auditoria de chat (5F)              | Feito por `vitor-seguranca` em 2 rodadas: 0 achado alto ou médio; 6 baixos corrigidos. Auditoria por leitura de código, sem script de prova.                                                                                                                                         |
+| Docs (5G)                           | `docs/protocolo-servidor.md`, `docs/banco-de-dados.md` e `apps/server/README.md` (edd6f93); `docs/sinais.md`, `apps/mobile/README.md`, este plano e o CHANGELOG nesta fase.                                                                                                          |
+| Revisão                             | Rita-C (`rita-revisora-claude`, opus; Codex indisponível, erro 1332): 2 P2 e 5 P3. Corrigidos 2 P2 e 3 P3. **Pendente: P3-5** (significado tradicional em cinza no painel de sinais da mesa e aviso "combinado salvo para esta dupla"). A contagem de P3 não fecha; ver o relatório. |
+| Balões de 4 s e frases rápidas      | Já existiam desde a Fase 3 (3H3); `QUICK_PHRASES` atende o critério.                                                                                                                                                                                                                 |
+
+**Pendências e ressalvas**: retomar mesa da fila pública depois de 60 s não tem rota (hoje só `POST /tables/join` serve mesa privada; ver `apps/mobile/README.md`, "Retomar a mesa"); convidado perde o combinado ao sair da conta, sem expurgo (vínculo é da Fase 6); aviso de convidado aparece para todos (`guest` fixo em `true`); validação em iOS, Android, leitor de tela, Safari e Firefox pendente; estado da sala em memória por processo.
 
 | Etapa                                                                              | Agente                        | Pronto quando                                    |
 | ---------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------ |

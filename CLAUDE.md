@@ -10,7 +10,7 @@ Importada automaticamente no início de toda sessão (estado das fases, ambiente
 @.claude/memory/projeto-trucaco.md
 @.claude/memory/feedback_git_convencao.md
 @.claude/memory/trucaco-ambiente-dev.md
-@.claude/memory/handoff-fase-4.md
+@.claude/memory/handoff-fase-5.md
 
 Documentos de referência, leia antes de qualquer tarefa não trivial:
 

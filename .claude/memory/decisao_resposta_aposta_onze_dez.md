@@ -13,4 +13,4 @@ Decisões do usuário em 2026-11-02 (mudam o motor `packages/rules`, o servidor 
 
 **Why:** hoje o servidor dá ação legal aos dois da dupla e vale o primeiro clique; o usuário quer decisão individual na aposta e decisão conjunta (unânime para jogar, qualquer um corre) no onze/dez.
 
-**How to apply:** fluxo tales-regras (motor e testes) → caio-colyseus (estado público: quem responde, quem já aceitou no onze/dez; `actingSeat` passa a ser o respondedor) → fabio-frontend (botões só para quem decide). Ver [[decisao-rodizio-pe-revanche]] e [[handoff-fase-4]].
+**How to apply:** fluxo tales-regras (motor e testes) → caio-colyseus (estado público: quem responde, quem já aceitou no onze/dez; `actingSeat` passa a ser o respondedor) → fabio-frontend (botões só para quem decide). Ver [[decisao-rodizio-pe-revanche]] e [[handoff-fase-5]].
