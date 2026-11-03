@@ -14,6 +14,8 @@ export type PoseChannel =
   | 'browY'
   | 'browScale'
   | 'winkScaleY'
+  | 'winkRScaleY'
+  | 'mouthRot'
   | 'pupilX'
   | 'noseX'
   | 'noseScale'
@@ -35,6 +37,8 @@ export const NEUTRAL: Readonly<Record<PoseChannel, number>> = {
   browY: 0,
   browScale: 1,
   winkScaleY: 1,
+  winkRScaleY: 1,
+  mouthRot: 0,
   pupilX: 0,
   noseX: 0,
   noseScale: 1,
@@ -51,6 +55,17 @@ export const POSES: Readonly<Record<SignalId, Pose>> = {
     winkScaleY: [1, 0.08, 0.08, 0.08, 0.08, 1],
     headRot: [0, -4, -4, -4, -4, 0],
     smileOpacity: [0, 0.6, 0.6, 0.6, 0.6, 0],
+  },
+  wink_r: {
+    winkRScaleY: [1, 0.08, 0.08, 0.08, 0.08, 1],
+    headRot: [0, 4, 4, 4, 4, 0],
+    smileOpacity: [0, 0.6, 0.6, 0.6, 0.6, 0],
+  },
+  mouth_l: {
+    mouthRot: [0, 10, 10, 10, 10, 10, 0],
+  },
+  mouth_r: {
+    mouthRot: [0, -10, -10, -10, -10, -10, 0],
   },
   eyebrow: {
     browY: [0, -6, -6, -6, -6, -6, 0],

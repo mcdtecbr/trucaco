@@ -2,7 +2,7 @@ import { SIGNAL_IDS, type SignalId } from '@trucaco/protocol';
 
 /** Nome do input trigger da state machine Rive para cada sinal (docs/sinais.md). */
 export const SIGNAL_TRIGGERS = Object.fromEntries(
-  SIGNAL_IDS.map((id) => [id, `trig_${id}`]),
+  SIGNAL_IDS.map((id) => [id, id === 'wink' ? 'trig_wink_l' : `trig_${id}`]),
 ) as Record<SignalId, string>;
 
 export function signalTrigger(id: SignalId): string {
@@ -39,6 +39,9 @@ const ROWS: readonly Row[] = [
   ['chin_up', 'Levantar o queixo', 1000, 'Pode aumentar'],
   ['look_away', 'Olhar para o lado', 1000, 'Joga a carta mais fraca'],
   ['smile', 'Sorriso contido', 1000, 'Blefe / livre'],
+  ['wink_r', 'Piscar o olho direito', 900, 'Livre: a dupla combina'],
+  ['mouth_l', 'Torcer a boca para a esquerda', 1000, 'Livre: a dupla combina'],
+  ['mouth_r', 'Torcer a boca para a direita', 1000, 'Livre: a dupla combina'],
 ];
 
 /** Catálogo de sinais (fonte: docs/sinais.md). Um item por `SignalId`, na ordem de `SIGNAL_IDS`. */

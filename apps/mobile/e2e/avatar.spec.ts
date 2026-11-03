@@ -26,7 +26,7 @@ test.describe('sinais na mesa', () => {
     expect(seat).toBeGreaterThanOrEqual(0);
     const marker = (p: Player, id: string) => p.page.getByTestId(`avatar-${seat}-signal-${id}`);
 
-    // Painel fechado por padrão; abre com "Sinais" e lista os 12 sinais com nome.
+    // Painel fechado por padrão; abre com "Sinais" e lista os 15 sinais com nome.
     await expect(sender.page.getByTestId('signal-grid')).toHaveCount(0);
     await sender.page.getByTestId('signal-toggle').click();
     await expect(sender.page.getByTestId('signal-grid')).toBeVisible();

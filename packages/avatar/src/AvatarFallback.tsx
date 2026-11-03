@@ -97,6 +97,7 @@ export function AvatarFallback(props: AvatarFallbackProps) {
   const breatheY = props.breathe.interpolate({ inputRange: [0, 1], outputRange: [0, -1.4 * u] });
   const shoulderY = Animated.add(ch('shoulderY', u), breatheY);
   const eyeLScale = Animated.multiply(blinkScale, ch('winkScaleY'));
+  const eyeRScale = Animated.multiply(blinkScale, ch('winkRScaleY'));
   const pupilX = ch('pupilX', u);
   const smileOp = ch('smileOpacity');
   const eyeCx = [37, 63] as const;
@@ -493,7 +494,7 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         <Animated.View style={browStyle(eyeCx[0], -4)} />
         <Animated.View style={browStyle(eyeCx[1], 4)} />
         {eyeNode(eyeCx[0], eyeLScale, 'l')}
-        {eyeNode(eyeCx[1], blinkScale, 'r')}
+        {eyeNode(eyeCx[1], eyeRScale, 'r')}
         <Animated.View
           style={[
             box(u, 50, 52, 7, 6),
@@ -509,7 +510,22 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         />
         {puff(50 - fw / 2 + 2)}
         {puff(50 + fw / 2 - 2)}
-        {mouthBase}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              // gira em torno do centro da boca (y = 62), não do centro do rosto
+              transform: [
+                { translateY: 12 * u },
+                { rotate: rot('mouthRot') as string },
+                { translateY: -12 * u },
+              ],
+            },
+          ]}
+        >
+          {mouthBase}
+        </Animated.View>
         {/* sorriso por cima da boca base (com fundo da cor da pele) */}
         <Animated.View style={[box(u, 50, 62, 28, 16), { opacity: smileOp as number }]}>
           <View style={[StyleSheet.absoluteFill, { backgroundColor: skin }]} />

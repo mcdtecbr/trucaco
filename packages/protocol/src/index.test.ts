@@ -20,8 +20,8 @@ import {
 } from './index';
 
 describe('protocol', () => {
-  it('catálogo tem 12 sinais com ids únicos', () => {
-    expect(SIGNAL_IDS).toHaveLength(12);
+  it('catálogo tem 15 sinais com ids únicos', () => {
+    expect(SIGNAL_IDS).toHaveLength(15);
     expect(new Set(SIGNAL_IDS).size).toBe(SIGNAL_IDS.length);
   });
 
