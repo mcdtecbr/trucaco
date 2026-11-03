@@ -2,7 +2,7 @@
  * Código de erro -> texto pt-BR curto. O servidor nunca manda texto: quem traduz é o cliente. Os textos
  * são genéricos de propósito (nada de detalhe interno, stack, URL ou eco da entrada).
  */
-import { ERROR_CODES, HTTP_ERROR_CODES } from '@trucaco/protocol';
+import { ERROR_CODES, HTTP_ERROR_CODES, PARTNER_CODE_MAX_LENGTH } from '@trucaco/protocol';
 import { isApiError } from '../net/api';
 import { GameClientError } from '../net/colyseus';
 import { SessionRequiredError } from '../net/session';
@@ -102,6 +102,15 @@ export function hasMessage(code: string): boolean {
 export function errorMessage(code: string | undefined): string {
   if (code === undefined) return GENERIC;
   return Object.hasOwn(MESSAGES, code) ? (MESSAGES[code] as string) : GENERIC;
+}
+
+/** Erro de `setCode` (combinado da dupla): textos próprios, porque o código sozinho não diz o contexto. */
+export function codesErrorMessage(code: string | undefined): string {
+  if (code === 'RATE_LIMITED') return 'Aguarde um segundo antes de salvar outro sinal.';
+  if (code === 'CHAT_BLOCKED') {
+    return `Texto não aceito. Use até ${PARTNER_CODE_MAX_LENGTH} caracteres, sem símbolos especiais.`;
+  }
+  return 'Não foi possível salvar o combinado. Tente de novo.';
 }
 
 /** Código a partir de qualquer erro lançado pela camada de rede. Nunca expõe `message`/`cause`. */

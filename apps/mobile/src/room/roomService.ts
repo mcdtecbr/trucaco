@@ -16,6 +16,8 @@ import type { RoomStore } from '../store/roomStore';
 export const CLOSE_CONSENTED = 4000;
 /** Espera máxima pelo primeiro estado depois de entrar. */
 export const FIRST_STATE_TIMEOUT_MS = 3000;
+/** Quanto esperar, depois de ligar os handlers, para pedir o reenvio do combinado (`ready`). */
+export const READY_DELAY_MS = 1000;
 
 /** O que usamos de `Room` (o SDK real satisfaz; testes usam um falso). */
 export interface RoomLike {
@@ -63,6 +65,7 @@ export type TableSink = Pick<
   | 'onEvent'
   | 'onDesync'
   | 'onChat'
+  | 'onCodes'
   | 'onSignal'
   | 'onPresence'
   | 'onTurnTimer'
@@ -88,9 +91,12 @@ export function createRoomService(options: {
   /** A mesa acabou de vez (encerrada sem revanche aberta): não há o que retomar. */
   isTableOver?: () => boolean;
   firstStateTimeoutMs?: number;
+  /** Espera antes de mandar `ready` (padrão: `READY_DELAY_MS`). */
+  readyDelayMs?: number;
 }): RoomService {
   const { store, table, persist } = options;
   const timeoutMs = options.firstStateTimeoutMs ?? FIRST_STATE_TIMEOUT_MS;
+  const readyDelayMs = options.readyDelayMs ?? READY_DELAY_MS;
   let room: RoomLike | null = null;
   /** Sobe a cada `enter`/`leave`: callbacks de uma sala antiga são ignorados. */
   let generation = 0;
@@ -150,6 +156,9 @@ export function createRoomService(options: {
     r.onMessage('chat', (p) => {
       if (live()) table?.onChat(p);
     });
+    r.onMessage('codes', (p) => {
+      if (live()) table?.onCodes(p);
+    });
     r.onMessage('signal', (p) => {
       if (live()) table?.onSignal(p);
     });
@@ -188,6 +197,25 @@ export function createRoomService(options: {
       void recover(r, gen);
     });
     for (const type of IGNORED_MESSAGES) r.onMessage(type, () => undefined);
+    // Todos os handlers (inclusive `codes`) já estão ligados: o `ready` faz o servidor reenviar o combinado
+    // da dupla ao meu assento (o baseline do `onJoin` pode ter chegado antes do handler). Não sai na hora
+    // (ver `shouldSendReady`).
+    setTimeout(() => {
+      if (live() && shouldSendReady(r)) r.send('ready', {});
+    }, readyDelayMs);
+  }
+
+  /**
+   * O servidor conta o `ready` na cadência de ações do assento (150 ms). Mandá-lo logo na entrada, ou com
+   * a mesa cheia ou a partida em andamento, roubaria a primeira jogada de quem acabou de sentar
+   * (`RATE_LIMITED`). Por isso só sai depois de um instante, com o estado já conhecido, a sala ainda
+   * esperando e vaga. Nos outros casos o combinado vem do baseline do `onJoin` ou da retomada.
+   */
+  function shouldSendReady(r: RoomLike): boolean {
+    const json = (r.state as { toJSON?: () => unknown } | null | undefined)?.toJSON?.();
+    const p = projectWaiting(json);
+    if (p.tablePhase !== 'waiting' || p.mySeat < 0) return false;
+    return p.seats.filter((s) => s.status !== 'empty').length < 4;
   }
 
   /** O SDK esgotou as tentativas automáticas: uma tentativa manual com refresh do JWT. */

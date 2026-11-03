@@ -50,6 +50,8 @@ export const REPLAY_MIN_AGE_MS = 2000;
 const MAX_HAND_LOG = 40;
 const MAX_CHAT = 100;
 const MAX_CHAT_TEXT = 280;
+/** O banco pode trazer combinados antigos de até 140 caracteres (antes do teto de 60): só leitura. */
+const MAX_CODE_DISPLAY = 140;
 
 /** Erros que uma AÇÃO de jogo pode causar. Só eles destravam `busy` (lista explícita, testada contra o protocol). */
 export const ACTION_ERRORS: readonly string[] = [
@@ -102,6 +104,11 @@ export interface TableControllerOptions {
   timers?: TableTimers;
   /** Estimador de offset do relógio (injetável para os testes contarem amostras). */
   clockOffset?: ClockOffset;
+  /**
+   * Preferência local de silenciar (por apelido). Chat e balão de quem está silenciado não entram no
+   * store. Nunca vai ao servidor.
+   */
+  isMuted?: (nickname: string) => boolean;
 }
 
 export interface TableController {
@@ -111,6 +118,15 @@ export interface TableController {
   /** Salto de `seq`: o histórico derivado não vale mais. O estado é reprojetado por quem chama. */
   onDesync(info: { expected: number; got: number }): void;
   onChat(payload: unknown): void;
+  /** Mapa completo do combinado da dupla (`codes`). Só chega aos 2 da dupla. */
+  onCodes(payload: unknown): void;
+  /**
+   * Envia o significado de um sinal (vazio apaga). Valida com o protocol antes: o que o servidor
+   * recusaria nem sai (erro em `codesError`). `false` = recusado ou sem sala.
+   */
+  sendCode(signalId: string, meaning: string): boolean;
+  setCodesOpen(open: boolean): void;
+  clearCodesError(): void;
   onPresence(payload: unknown): void;
   onTurnTimer(payload: unknown): void;
   onServerError(payload: unknown): void;
@@ -200,6 +216,22 @@ export function lingeringFor(
   };
 }
 
+type MutablePatchKeys = Pick<TableStoreState, 'chat' | 'bubbles' | 'chatUnread'>;
+
+/**
+ * Assentos cujo ocupante mudou ENTRE dois estados da sala de espera (alguém saiu ou outro sentou no
+ * lugar). O meu assento não conta. Fora da espera nada muda: na partida, o bot de ausência herda o lugar.
+ */
+export function replacedSeats(prev: TableViewModel | null, next: TableViewModel): number[] {
+  if (prev === null || prev.phase !== 'waiting' || next.phase !== 'waiting') return [];
+  const out: number[] = [];
+  for (const before of prev.seats) {
+    if (before.seat === next.mySeat || before.nickname === '') continue;
+    if (next.seats[before.seat]?.nickname !== before.nickname) out.push(before.seat);
+  }
+  return out;
+}
+
 export function createTableController(opts: TableControllerOptions): TableController {
   const { store } = opts;
   const now = opts.now ?? Date.now;
@@ -216,7 +248,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
   let lingerTimer: unknown = null;
   let handNumber = 0;
   let replayUntil = 0;
-  let lastSend: 'action' | 'chat' | 'rematch' | 'other' = 'other';
+  let lastSend: 'action' | 'chat' | 'codes' | 'rematch' | 'other' = 'other';
+  let signalNoteTimer: unknown = null;
   /** Partida (`matchNumber`) para a qual já enviei `voteRematch`: barra o duplo clique antes do estado refletir. */
   let rematchSentFor = 0;
   /** "Nova partida começou." já foi dita pelo evento `gameStarted` (que chega antes do patch de estado). */
@@ -331,10 +364,33 @@ export function createTableController(opts: TableControllerOptions): TableContro
         store.getState().patch({ lingering: null });
       }, LINGER_MS);
     }
+    // Na espera, quem sentou ali mudou: o chat e o balão do ocupante anterior não podem ser atribuídos
+    // ao novo (`nicknameOf(seat)` reatribuiria), e o chat da dupla do par antigo não vale para o novo.
+    const replaced = newMatch ? [] : replacedSeats(cur.vm, vm);
+    let cleaned: Partial<MutablePatchKeys> = {};
+    if (replaced.length > 0) {
+      const partnerChanged = replaced.some((x) => x % 2 === vm.myTeam && x !== vm.mySeat);
+      const chat = cur.chat.filter(
+        (c) => !replaced.includes(c.seat) && !(partnerChanged && c.scope === 'partner'),
+      );
+      const bubbles = { ...cur.bubbles };
+      for (const x of replaced) {
+        delete bubbles[x];
+        const h = bubbleTimers.get(x);
+        if (h !== undefined) timers.clearTimeout(h);
+        bubbleTimers.delete(x);
+      }
+      cleaned = {
+        chat,
+        bubbles,
+        ...(partnerChanged ? { chatUnread: { ...cur.chatUnread, partner: 0 } } : {}),
+      };
+    }
     // Um único `set` por patch do servidor.
     cur.patch({
       vm,
       selected,
+      ...cleaned,
       ...(enteredFinished ? { errorCode: null } : {}),
       ...(newMatch
         ? {
@@ -503,6 +559,9 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const cur = store.getState();
       // Segunda barreira: o servidor só entrega o chat da dupla à dupla; aqui também se confere.
       if (scope === 'partner' && (cur.vm === null || seat % 2 !== cur.vm.myTeam)) return;
+      // Silenciado neste aparelho: nem lista, nem balão, nem contador de novas.
+      const author = cur.vm?.seats[seat]?.nickname ?? '';
+      if (author !== '' && seat !== cur.vm?.mySeat && opts.isMuted?.(author) === true) return;
       const entry: ChatEntry = {
         id: ++chatId,
         scope,
@@ -530,6 +589,57 @@ export function createTableController(opts: TableControllerOptions): TableContro
           ? cur.chatUnread
           : { ...cur.chatUnread, [scope]: cur.chatUnread[scope] + 1 },
       });
+    },
+
+    onCodes(payload) {
+      if (typeof payload !== 'object' || payload === null) return;
+      const m = payload as Record<string, unknown>;
+      const raw = m['codes'];
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+      const cur = store.getState();
+      const by = m['by'];
+      const bySeat = typeof by === 'number' && Number.isInteger(by) ? by : -1;
+      // O servidor só manda `codes` à própria dupla; um editor de outra dupla seria mensagem forjada.
+      if (bySeat >= 0 && cur.vm !== null && bySeat % 2 !== cur.vm.myTeam) return;
+      const next: Partial<Record<SignalId, string>> = {};
+      for (const id of SIGNAL_IDS) {
+        const v = (raw as Record<string, unknown>)[id];
+        if (typeof v !== 'string') continue;
+        const t = Array.from(v.trim()).slice(0, MAX_CODE_DISPLAY).join('');
+        if (t !== '') next[id] = t;
+      }
+      cur.patch({ codes: next });
+      if (bySeat >= 0 && bySeat !== cur.vm?.mySeat) {
+        say(`${seatName(bySeat)} atualizou o combinado de sinais.`);
+      }
+    },
+
+    sendCode(signalId, meaning) {
+      const s = store.getState();
+      const parsed = parseClientMessage({ type: 'setCode', signalId, meaning });
+      if (!parsed.ok) {
+        s.patch({ codesError: parsed.code });
+        return false;
+      }
+      const msg = parsed.message;
+      if (msg.type !== 'setCode') return false;
+      // Sem mudança: nada a enviar (e não gasta o intervalo de 1 s do servidor).
+      if ((s.codes[msg.signalId] ?? '') === msg.meaning) {
+        s.patch({ codesError: null });
+        return true;
+      }
+      if (!opts.send(msg)) return false;
+      lastSend = 'codes';
+      s.patch({ codesError: null });
+      return true;
+    },
+
+    setCodesOpen(open) {
+      store.getState().patch({ codesOpen: open, codesError: null });
+    },
+
+    clearCodesError() {
+      if (store.getState().codesError !== null) store.getState().patch({ codesError: null });
     },
 
     onPresence(payload) {
@@ -562,6 +672,10 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const ambiguous = AMBIGUOUS_ERRORS.includes(code);
       // Voto recusado: a janela pode estar errada para mim; permite tentar de novo se o estado reabrir.
       if (code === 'REMATCH_NOT_AVAILABLE' || lastSend === 'rematch') rematchSentFor = 0;
+      if (lastSend === 'codes' && (code === 'CHAT_BLOCKED' || ambiguous)) {
+        store.getState().patch({ codesError: code });
+        return;
+      }
       if (code === 'CHAT_BLOCKED' || (ambiguous && lastSend === 'chat')) {
         store.getState().patch({ chatError: code });
         return;
@@ -580,7 +694,26 @@ export function createTableController(opts: TableControllerOptions): TableContro
         return;
       }
       const id = signalId as SignalId;
-      say(`${seatName(seat)}: ${signalInfo(id).name}`);
+      const cur = store.getState();
+      const name = signalInfo(id).name;
+      // O combinado só existe para a minha dupla: sinal do PARCEIRO ganha o significado combinado.
+      const partnerSignal =
+        cur.vm !== null &&
+        cur.vm.mySeat >= 0 &&
+        seat !== cur.vm.mySeat &&
+        seat % 2 === cur.vm.myTeam;
+      const meaning = partnerSignal ? cur.codes[id] : undefined;
+      if (meaning !== undefined) {
+        say(`${seatName(seat)}: ${name} (combinado: ${meaning})`);
+        clear(signalNoteTimer);
+        cur.patch({ partnerSignalNote: `${seatName(seat)}: ${name} = ${meaning}` });
+        signalNoteTimer = timers.setTimeout(() => {
+          signalNoteTimer = null;
+          store.getState().patch({ partnerSignalNote: null });
+        }, PRESENCE_NOTE_MS);
+      } else {
+        say(`${seatName(seat)}: ${name}`);
+      }
       if (store.getState().signals[seat] === undefined) {
         startSignal(seat, id);
         return;
@@ -702,7 +835,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       clear(noticeTimer);
       clear(presenceTimer);
       clear(lingerTimer);
-      busyTimer = noticeTimer = presenceTimer = lingerTimer = null;
+      clear(signalNoteTimer);
+      busyTimer = noticeTimer = presenceTimer = lingerTimer = signalNoteTimer = null;
       for (const h of bubbleTimers.values()) timers.clearTimeout(h);
       bubbleTimers.clear();
       clearSignals();

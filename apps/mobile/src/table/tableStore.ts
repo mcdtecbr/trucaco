@@ -75,6 +75,14 @@ export interface TableStoreState {
   readonly presenceNote: string | null;
   /** Confirmação de "Sair da mesa" aberta. */
   readonly leaveConfirm: boolean;
+  /** Combinado da dupla (último `codes` do servidor; só a MINHA dupla o recebe). Vazio = nada combinado. */
+  readonly codes: Readonly<Partial<Record<SignalId, string>>>;
+  /** Painel "Combinar sinais" aberto (UI local). */
+  readonly codesOpen: boolean;
+  /** Código do último erro de `setCode` (traduzido na tela). */
+  readonly codesError: string | null;
+  /** Aviso curto quando o PARCEIRO sinaliza algo combinado ("Ana: Piscar um olho = tenho o zap"). */
+  readonly partnerSignalNote: string | null;
   patch(p: Partial<Omit<TableStoreState, 'patch' | 'reset'>>): void;
   reset(): void;
 }
@@ -101,6 +109,10 @@ const INITIAL = {
   notice: null as TableNotice,
   presenceNote: null as string | null,
   leaveConfirm: false,
+  codes: {} as Readonly<Partial<Record<SignalId, string>>>,
+  codesOpen: false,
+  codesError: null as string | null,
+  partnerSignalNote: null as string | null,
 };
 
 export function createTableStore() {

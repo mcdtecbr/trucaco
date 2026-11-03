@@ -20,11 +20,16 @@ export interface SignalPanelProps {
   connected: boolean;
   /** Envia o sinal; `false` = recusado (sem sala). */
   onSend(id: SignalId): boolean;
+  /**
+   * Significado combinado com o parceiro, por sinal. Só a minha dupla o tem (o servidor não o manda a
+   * mais ninguém); vazio ou omitido = nada combinado, e o painel fica como antes.
+   */
+  codes?: Readonly<Partial<Record<SignalId, string>>>;
 }
 
 const HOLD_HINT = 'Segure por meio segundo para enviar. Todos na mesa veem o sinal.';
 
-export function SignalPanel({ connected, onSend }: SignalPanelProps) {
+export function SignalPanel({ connected, onSend, codes }: SignalPanelProps) {
   const [open, setOpen] = useState(false);
   const [cooling, setCooling] = useState(false);
   const coolTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,46 +76,56 @@ export function SignalPanel({ connected, onSend }: SignalPanelProps) {
         <View style={styles.grid} testID="signal-grid">
           <Text style={styles.hint}>Segure um sinal para enviar. Todos na mesa veem.</Text>
           <View style={styles.items}>
-            {SIGNALS.map((s) => (
-              <Pressable
-                key={s.id}
-                accessibilityRole="button"
-                accessibilityLabel={s.name}
-                accessibilityHint={HOLD_HINT}
-                accessibilityActions={[{ name: 'activate', label: `Enviar ${s.name}` }]}
-                onAccessibilityAction={(e) => {
-                  if (e.nativeEvent.actionName === 'activate') send(s.id);
-                }}
-                aria-disabled={blocked}
-                disabled={blocked}
-                delayLongPress={SIGNAL_HOLD_MS}
-                onPressIn={() => {
-                  touched.current = true;
-                }}
-                onPressOut={() => {
-                  // `onPress` pode vir logo depois do `onPressOut` no mesmo gesto: limpa só depois.
-                  setTimeout(() => {
+            {SIGNALS.map((s) => {
+              const meaning = codes?.[s.id];
+              return (
+                <Pressable
+                  key={s.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    meaning !== undefined ? `${s.name}, combinado: ${meaning}` : s.name
+                  }
+                  accessibilityHint={HOLD_HINT}
+                  accessibilityActions={[{ name: 'activate', label: `Enviar ${s.name}` }]}
+                  onAccessibilityAction={(e) => {
+                    if (e.nativeEvent.actionName === 'activate') send(s.id);
+                  }}
+                  aria-disabled={blocked}
+                  disabled={blocked}
+                  delayLongPress={SIGNAL_HOLD_MS}
+                  onPressIn={() => {
+                    touched.current = true;
+                  }}
+                  onPressOut={() => {
+                    // `onPress` pode vir logo depois do `onPressOut` no mesmo gesto: limpa só depois.
+                    setTimeout(() => {
+                      touched.current = false;
+                    }, 0);
+                  }}
+                  onLongPress={() => {
                     touched.current = false;
-                  }, 0);
-                }}
-                onLongPress={() => {
-                  touched.current = false;
-                  send(s.id);
-                }}
-                onPress={() => {
-                  // Toque rápido não envia. Clique sem `onPressIn` = ativação do leitor de tela.
-                  if (!touched.current) send(s.id);
-                }}
-                style={({ pressed }) => [
-                  styles.item,
-                  pressed && styles.itemHeld,
-                  blocked && styles.off,
-                ]}
-                testID={`signal-${s.id}`}
-              >
-                <Text style={styles.itemText}>{s.name}</Text>
-              </Pressable>
-            ))}
+                    send(s.id);
+                  }}
+                  onPress={() => {
+                    // Toque rápido não envia. Clique sem `onPressIn` = ativação do leitor de tela.
+                    if (!touched.current) send(s.id);
+                  }}
+                  style={({ pressed }) => [
+                    styles.item,
+                    pressed && styles.itemHeld,
+                    blocked && styles.off,
+                  ]}
+                  testID={`signal-${s.id}`}
+                >
+                  <Text style={styles.itemText}>{s.name}</Text>
+                  {meaning !== undefined ? (
+                    <Text style={styles.itemMeaning} testID={`signal-meaning-${s.id}`}>
+                      {meaning}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
           </View>
         </View>
       ) : null}
@@ -158,5 +173,6 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     textAlign: 'center',
   },
+  itemMeaning: { color: colors.textMuted, fontSize: fontSize.caption, textAlign: 'center' },
   off: { opacity: 0.5 },
 });

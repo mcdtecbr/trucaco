@@ -19,6 +19,9 @@ import { priv, snapshot } from '../table/snapshotFixtures';
 import { finishedResult, rematchView } from '../table/tableRoute';
 import { FinishedView } from './FinishedView';
 import { ChatPanel } from './ChatPanel';
+import { buildCodesPanelProps } from './codesPanelProps';
+import { GUEST_CODES_NOTE, NO_PARTNER_NOTE } from './CodesPanel';
+import { player } from '../table/snapshotFixtures';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
 
@@ -84,6 +87,18 @@ function Screen({ h }: { h: Harness }) {
       chatUnreadTotal={s.chatUnread.table + s.chatUnread.partner}
       bubbles={s.bubbles}
       signals={s.signals}
+      codes={s.codes}
+      partnerSignalNote={s.partnerSignalNote}
+      codesPanel={buildCodesPanelProps({
+        codesOpen: s.codesOpen,
+        codes: s.codes,
+        codesError: s.codesError,
+        seats: vm.seats,
+        mySeat: vm.mySeat,
+        connected: true,
+        guest: true,
+        table,
+      })}
       reduceMotion={false}
       chatPanel={
         s.chatOpen
@@ -119,6 +134,7 @@ function Screen({ h }: { h: Harness }) {
         toggleCover: () => undefined,
         voteCancel: () => void table.voteCancel(),
         openChat: () => table.setChatOpen(true),
+        openCodes: () => table.setCodesOpen(true),
         signalEnd: table.onSignalEnd,
         sendSignal: (id) => table.sendSignal(id),
         askLeave: () => undefined,
@@ -525,5 +541,245 @@ describe('4E: sinais na mesa', () => {
     click(must('signal-toggle'));
     click(must('signal-wink'));
     expect(h.sent).toHaveLength(1);
+  });
+});
+
+describe('5D: combinar sinais', () => {
+  it('abre pela mesa com os 12 sinais, sugestão como placeholder e contador 0/60', () => {
+    mount(snapshot());
+    expect(byTestId('codes-panel')).toBeNull();
+    click(must('open-codes'));
+    expect(byTestId('codes-panel')).not.toBeNull();
+    for (const s of SIGNALS) {
+      const input = must(`code-input-${s.id}`) as HTMLInputElement;
+      expect(input.value).toBe('');
+      expect(input.placeholder).toBe(`Ex.: ${s.meaning}`);
+      expect(must(`code-count-${s.id}`).textContent).toBe('0/60');
+    }
+    expect(must('codes-partner').textContent).toBe('Parceiro: Caio');
+    expect(must('codes-guest').textContent).toBe(GUEST_CODES_NOTE);
+    expect(must('codes-privacy').textContent).toContain('adversários veem o sinal');
+    click(must('codes-close'));
+    expect(byTestId('codes-panel')).toBeNull();
+  });
+
+  it('digitar atualiza o contador; Salvar só habilita com mudança e envia setCode', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    const save = () => must('code-save-wink') as HTMLButtonElement;
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+    type(must('code-input-wink'), 'tenho o zap');
+    expect(must('code-count-wink').textContent).toBe('11/60');
+    expect(save().getAttribute('aria-disabled')).not.toBe('true');
+    click(save());
+    expect(h.sent).toEqual([{ type: 'setCode', signalId: 'wink', meaning: 'tenho o zap' }]);
+    // O servidor ecoa o mapa: o campo segue o servidor e o botão volta a desabilitar.
+    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: 0, at: 1 }));
+    expect((must('code-input-wink') as HTMLInputElement).value).toBe('tenho o zap');
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('apagar: campo esvaziado vira "Apagar" e envia meaning vazio', () => {
+    mount(snapshot());
+    act(() => h.table.onCodes({ codes: { nod: 'sim' }, by: -1, at: 1 }));
+    click(must('open-codes'));
+    type(must('code-input-nod'), '');
+    expect(must('code-save-nod').textContent).toBe('Apagar');
+    click(must('code-save-nod'));
+    expect(h.sent).toEqual([{ type: 'setCode', signalId: 'nod', meaning: '' }]);
+  });
+
+  it('a edição do parceiro aparece ao vivo no campo (sem rascunho local)', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    act(() => h.table.onCodes({ codes: { smile: 'blefe' }, by: 2, at: 1 }));
+    expect((must('code-input-smile') as HTMLInputElement).value).toBe('blefe');
+  });
+
+  it('texto recusado mostra o erro em pt-BR e nada é enviado', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    type(must('code-input-wink'), 'a‍b');
+    click(must('code-save-wink'));
+    expect(h.sent).toEqual([]);
+    expect(must('codes-error').textContent).toContain('Texto não aceito');
+  });
+
+  it('erro RATE_LIMITED do servidor aparece no painel', () => {
+    mount(snapshot());
+    click(must('open-codes'));
+    type(must('code-input-wink'), 'zap');
+    click(must('code-save-wink'));
+    act(() => h.table.onServerError({ code: 'RATE_LIMITED' }));
+    expect(must('codes-error').textContent).toContain('Aguarde um segundo');
+  });
+
+  it('sem parceiro humano: aviso, campos desabilitados e nada é enviado', () => {
+    mount(
+      snapshot({
+        players: [0, 1, 2, 3].map((i) =>
+          i === 2 ? player(2, { nickname: '', status: 'empty' }) : player(i),
+        ),
+      }),
+    );
+    click(must('open-codes'));
+    expect(must('codes-no-partner').textContent).toBe(NO_PARTNER_NOTE);
+    expect((must('code-input-wink') as HTMLInputElement).readOnly).toBe(true);
+    click(must('code-save-wink'));
+    expect(h.sent).toEqual([]);
+  });
+
+  it('o combinado aparece sob cada sinal no painel de sinais e no rótulo de acessibilidade', () => {
+    mount(snapshot());
+    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: -1, at: 1 }));
+    click(must('signal-toggle'));
+    expect(must('signal-meaning-wink').textContent).toBe('tenho o zap');
+    expect(must('signal-wink').getAttribute('aria-label')).toBe(
+      'Piscar um olho, combinado: tenho o zap',
+    );
+    expect(byTestId('signal-meaning-nod')).toBeNull();
+    expect(must('signal-nod').getAttribute('aria-label')).toBe('Acenar com a cabeça');
+  });
+
+  it('sinal do parceiro mostra o combinado na mesa; o do adversário não; some em 5 s', () => {
+    mount(snapshot());
+    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: -1, at: 1 }));
+    act(() => h.table.onSignal({ seat: 1, signalId: 'wink', at: 2 }));
+    expect(byTestId('partner-signal-note')).toBeNull();
+    act(() => h.table.onSignal({ seat: 2, signalId: 'wink', at: 3 }));
+    expect(must('partner-signal-note').textContent).toBe('Caio: Piscar um olho = tenho o zap');
+    act(() => h.clock.advance(5000));
+    expect(byTestId('partner-signal-note')).toBeNull();
+  });
+
+  it('o significado é sempre texto puro (nunca HTML)', () => {
+    mount(snapshot());
+    act(() => h.table.onCodes({ codes: { wink: '<img src=x onerror=alert(1)>' }, by: -1, at: 1 }));
+    click(must('signal-toggle'));
+    expect(host.querySelector('img[src="x"]')).toBeNull();
+    expect(must('signal-meaning-wink').textContent).toBe('<img src=x onerror=alert(1)>');
+    click(must('open-codes'));
+    expect((must('code-input-wink') as HTMLInputElement).value).toBe(
+      '<img src=x onerror=alert(1)>',
+    );
+  });
+
+  it('adversário (assento 1) sem codes: painel vazio e nenhum significado no painel de sinais', () => {
+    mount(snapshot({ privates: priv(1) }));
+    click(must('signal-toggle'));
+    expect(host.querySelector('[data-testid^="signal-meaning-"]')).toBeNull();
+    click(must('open-codes'));
+    expect((must('code-input-wink') as HTMLInputElement).value).toBe('');
+  });
+});
+
+describe('5D: silenciar e chat da dupla na espera', () => {
+  function chatPanel(over: Partial<Parameters<typeof ChatPanel>[0]> = {}) {
+    const noop = (): void => undefined;
+    const calls: number[] = [];
+    const r = createRoot(host);
+    root = r;
+    act(() =>
+      r.render(
+        <ChatPanel
+          tab="table"
+          chat={[
+            { id: 1, scope: 'table', seat: 1, text: 'spam da Bia', at: 1 },
+            { id: 2, scope: 'table', seat: 3, text: 'oi do Davi', at: 2 },
+          ]}
+          unread={{ table: 0, partner: 0 }}
+          draft=""
+          errorText={null}
+          connected
+          nicknameOf={(s) => ['Ana', 'Bia', 'Caio', 'Davi'][s] ?? ''}
+          mySeat={0}
+          mutes={[
+            { seat: 1, name: 'Bia', muted: true },
+            { seat: 2, name: 'Caio', muted: false },
+          ]}
+          on={{
+            toggleMute: (seat) => calls.push(seat),
+            setTab: noop,
+            setDraft: noop,
+            send: noop,
+            phrase: noop,
+            close: noop,
+          }}
+          {...over}
+        />,
+      ),
+    );
+    return calls;
+  }
+
+  it('o chat de quem está silenciado some da lista; os botões alternam silenciar e reativar', () => {
+    const calls = chatPanel();
+    expect(host.textContent).not.toContain('spam da Bia');
+    expect(host.textContent).toContain('oi do Davi');
+    expect(must('chat-mute-1').textContent).toBe('Reativar Bia');
+    expect(must('chat-mute-2').textContent).toBe('Silenciar Caio');
+    expect(must('chat-mute-2').getAttribute('aria-label')).toContain('Só neste aparelho');
+    click(must('chat-mute-2'));
+    expect(calls).toEqual([2]);
+  });
+
+  it('com scopes mesa e dupla (sala de espera), a aba Dupla existe', () => {
+    chatPanel({ scopes: ['table', 'partner'] });
+    expect(byTestId('chat-tab-partner')).not.toBeNull();
+  });
+});
+
+describe('5D: sala de espera', () => {
+  it('Combinar sinais abre o painel; sem assento o botão não aparece', () => {
+    const store = createTableStore();
+    const table = createTableController({ store, send: () => true });
+    function Waiting({ mySeat }: { mySeat: number }) {
+      const s = useStore(store);
+      const seats = [0, 1, 2, 3].map((i) => ({
+        seat: i,
+        nickname: ['Ana', 'Bia', 'Caio', 'Davi'][i] ?? '',
+        status: 'connected',
+        isBot: false,
+      }));
+      return (
+        <WaitingRoomView
+          roomCode="ABCDEFGH"
+          seats={[]}
+          mySeat={mySeat}
+          connection="connected"
+          errorCode={null}
+          shareLabel="Compartilhar"
+          shareDoneText="ok"
+          shareFailedText="falhou"
+          shareFeedback="idle"
+          codesPanel={buildCodesPanelProps({
+            codesOpen: s.codesOpen,
+            codes: s.codes,
+            codesError: s.codesError,
+            seats,
+            mySeat,
+            connected: true,
+            guest: true,
+            table,
+          })}
+          on={{
+            share: () => undefined,
+            leave: () => undefined,
+            openCodes: () => table.setCodesOpen(true),
+          }}
+        />
+      );
+    }
+    const r = createRoot(host);
+    root = r;
+    act(() => r.render(<Waiting mySeat={0} />));
+    click(must('open-codes'));
+    expect(byTestId('codes-panel')).not.toBeNull();
+    expect(must('codes-partner').textContent).toBe('Parceiro: Caio');
+    act(() => table.onCodes({ codes: { wink: 'zap' }, by: -1, at: 1 }));
+    expect((must('code-input-wink') as HTMLInputElement).value).toBe('zap');
+    act(() => r.render(<Waiting mySeat={-1} />));
+    expect(byTestId('open-codes')).toBeNull();
+    expect(byTestId('codes-panel')).toBeNull();
   });
 });

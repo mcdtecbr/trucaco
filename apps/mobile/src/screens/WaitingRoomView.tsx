@@ -7,6 +7,8 @@ import { SeatAvatar } from './SeatAvatar';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
+import { CodesPanel } from './CodesPanel';
+import type { CodesPanelProps } from './CodesPanel';
 import { Screen } from '../ui/Screen';
 import { Body, Card, ErrorText, Heading, Notice, Title } from '../ui/Typography';
 
@@ -25,12 +27,14 @@ export interface WaitingRoomViewProps {
   shareDoneText: string;
   shareFailedText: string;
   shareFeedback: 'idle' | 'done' | 'failed';
-  /** Painel de chat da mesa (só escopo `table`) ou null. Omitido = sem chat. */
+  /** Painel de chat (abas Mesa e Dupla) ou null. Omitido = sem chat. */
   chatPanel?: ChatPanelProps | null;
   chatUnreadTotal?: number;
+  /** Painel "Combinar sinais" aberto (props prontas) ou null/omitido. */
+  codesPanel?: CodesPanelProps | null;
   /** Preferência do sistema de menos movimento (animações ociosas do avatar). */
   reduceMotion?: boolean;
-  on: { share(): void; leave(): void; openChat?(): void };
+  on: { share(): void; leave(): void; openChat?(): void; openCodes?(): void };
 }
 
 /** Texto do status de um assento (vem do estado do servidor; nunca HTML). */
@@ -121,6 +125,15 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
             testID="open-chat"
           />
         ) : null}
+        {p.on.openCodes !== undefined && p.mySeat >= 0 ? (
+          <Button
+            label="Combinar sinais"
+            variant="secondary"
+            hint="Combine com o seu parceiro o significado de cada sinal. Os adversários não veem."
+            onPress={p.on.openCodes}
+            testID="open-codes"
+          />
+        ) : null}
         <Button
           label="Sair da mesa"
           variant="secondary"
@@ -129,6 +142,9 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
         />
       </Screen>
       {p.chatPanel !== undefined && p.chatPanel !== null ? <ChatPanel {...p.chatPanel} /> : null}
+      {p.codesPanel !== undefined && p.codesPanel !== null ? (
+        <CodesPanel {...p.codesPanel} />
+      ) : null}
     </View>
   );
 }

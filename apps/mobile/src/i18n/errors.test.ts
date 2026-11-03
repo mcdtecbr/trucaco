@@ -65,3 +65,13 @@ describe('i18n de erros', () => {
     expect(withRetry('QUEUE_COOLDOWN', 0)).toBe(errorMessage('QUEUE_COOLDOWN'));
   });
 });
+
+describe('codesErrorMessage', () => {
+  it('textos próprios para limite de frequência e texto recusado; o resto é genérico', async () => {
+    const { codesErrorMessage } = await import('./errors');
+    expect(codesErrorMessage('RATE_LIMITED')).toContain('Aguarde');
+    expect(codesErrorMessage('CHAT_BLOCKED')).toContain('60');
+    expect(codesErrorMessage('INVALID_PAYLOAD')).toContain('Não foi possível');
+    expect(codesErrorMessage(undefined)).toContain('Não foi possível');
+  });
+});

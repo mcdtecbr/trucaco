@@ -33,6 +33,8 @@ import type { ActiveSignal, ChatBubbleEntry, LingeringTrick } from '../table/tab
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
+import { CodesPanel } from './CodesPanel';
+import type { CodesPanelProps } from './CodesPanel';
 import { SeatAvatar } from './SeatAvatar';
 import { SignalPanel } from './SignalPanel';
 
@@ -59,6 +61,12 @@ export interface TableViewProps {
   /** Painel de chat aberto (props prontas) ou null. */
   chatPanel: ChatPanelProps | null;
   chatUnreadTotal: number;
+  /** Combinado da dupla (só a minha dupla o tem): aparece sob cada sinal no painel de sinais. */
+  codes?: Readonly<Partial<Record<SignalId, string>>>;
+  /** Painel "Combinar sinais" aberto (props prontas) ou null/omitido. */
+  codesPanel?: CodesPanelProps | null;
+  /** Aviso curto quando o parceiro sinaliza algo combinado. */
+  partnerSignalNote?: string | null;
   /** Balão de chat por assento (4 s). */
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
   /** Sinal animando por assento. */
@@ -76,6 +84,8 @@ export interface TableViewProps {
     toggleCover(): void;
     voteCancel(): void;
     openChat(): void;
+    /** Abre o painel "Combinar sinais". Omitido = sem o botão. */
+    openCodes?(): void;
     /** Estável (método do controlador): alimenta o `SeatAvatar` memoizado. */
     signalEnd(seat: number, key: number): void;
     sendSignal(id: SignalId): boolean;
@@ -463,6 +473,17 @@ export function TableView(p: TableViewProps) {
             {p.chatUnreadTotal > 0 ? `Chat (${p.chatUnreadTotal})` : 'Chat'}
           </Text>
         </Pressable>
+        {p.on.openCodes !== undefined && vm.mySeat >= 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Combinar sinais com o parceiro"
+            onPress={p.on.openCodes}
+            style={styles.menu}
+            testID="open-codes"
+          >
+            <Text style={styles.menuText}>Combinar sinais</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={cancelLabel}
@@ -486,7 +507,11 @@ export function TableView(p: TableViewProps) {
       </View>
       {vm.mySeat >= 0 ? (
         <View style={styles.signalRow}>
-          <SignalPanel connected={p.connected && !modalOpen} onSend={p.on.sendSignal} />
+          <SignalPanel
+            connected={p.connected && !modalOpen}
+            onSend={p.on.sendSignal}
+            {...(p.codes !== undefined ? { codes: p.codes } : {})}
+          />
         </View>
       ) : null}
     </View>
@@ -558,7 +583,20 @@ export function TableView(p: TableViewProps) {
           {p.presenceNote}
         </Text>
       ) : null}
+      {p.partnerSignalNote !== undefined && p.partnerSignalNote !== null ? (
+        <Text
+          style={styles.signalNote}
+          testID="partner-signal-note"
+          accessibilityLiveRegion="polite"
+          pointerEvents="none"
+        >
+          {p.partnerSignalNote}
+        </Text>
+      ) : null}
       {p.chatPanel !== null ? <ChatPanel {...p.chatPanel} /> : null}
+      {p.codesPanel !== undefined && p.codesPanel !== null ? (
+        <CodesPanel {...p.codesPanel} />
+      ) : null}
       {confirm}
     </View>
   );
@@ -657,6 +695,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.small,
     textAlign: 'center',
     padding: spacing.xs,
+  },
+  signalNote: {
+    position: 'absolute',
+    top: spacing.xl,
+    left: spacing.md,
+    right: spacing.md,
+    backgroundColor: colors.surfaceAlt,
+    color: colors.text,
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.bold,
+    textAlign: 'center',
+    padding: spacing.sm,
+    borderRadius: radius.md,
   },
   wideRow: { flex: 1, flexDirection: 'row' },
   wideMain: { flex: 1 },

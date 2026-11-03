@@ -60,6 +60,9 @@ class FakeRoom implements RoomLike {
   }
 }
 
+const READY_TEST_MS = 15;
+const afterReadyDelay = (): Promise<void> => new Promise((r) => setTimeout(r, READY_TEST_MS * 3));
+
 function setup() {
   const store = createRoomStore();
   const rooms: FakeRoom[] = [];
@@ -83,6 +86,7 @@ function setup() {
     onEvent: vi.fn(),
     onDesync: vi.fn(),
     onChat: vi.fn(),
+    onCodes: vi.fn(),
     onSignal: vi.fn(),
     onPresence: vi.fn(),
     onTurnTimer: vi.fn(),
@@ -95,6 +99,7 @@ function setup() {
     store,
     table,
     firstStateTimeoutMs: 20,
+    readyDelayMs: READY_TEST_MS,
   });
   return { store, rooms, client, service, table };
 }
@@ -316,6 +321,78 @@ describe('roomService alimentando a mesa', () => {
     t.rooms[0]!.emit('drop');
     expect(t.service.send({ type: 'bet' })).toBe(false);
     expect(t.rooms[0]!.sent).toHaveLength(1);
+  });
+});
+
+describe('5C: combinado da dupla', () => {
+  it('a mensagem codes chega ao controlador', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const p = { codes: { wink: 'tenho zap' }, by: -1, at: 1 };
+    t.rooms[0]!.emit('msg:codes', p);
+    expect(t.table.onCodes).toHaveBeenCalledWith(p);
+  });
+
+  it('o handler de codes é ligado ANTES de enviar ready (e ready sai uma vez por sala)', async () => {
+    const t = setup();
+    const order: string[] = [];
+    t.client.joinWithReservation.mockImplementationOnce(async () => {
+      const r = new FakeRoom();
+      const onMessage = r.onMessage.bind(r);
+      r.onMessage = (type, cb) => {
+        order.push(`on:${type}`);
+        onMessage(type, cb);
+      };
+      const send = r.send.bind(r);
+      r.send = (type, payload) => {
+        order.push(`send:${type}`);
+        send(type, payload);
+      };
+      t.rooms.push(r);
+      return r;
+    });
+    await t.service.enter(reservation);
+    await afterReadyDelay();
+    expect(order.indexOf('on:codes')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('on:codes')).toBeLessThan(order.indexOf('send:ready'));
+    expect(order.filter((x) => x === 'send:ready')).toHaveLength(1);
+  });
+
+  it('não envia ready com a partida em andamento ou com os 4 sentados (roubaria a 1ª jogada)', async () => {
+    for (const json of [stateJson(4, 'waiting'), stateJson(4, 'playing')]) {
+      const t = setup();
+      t.client.joinWithReservation.mockImplementationOnce(async () => {
+        const r = new FakeRoom();
+        r.json = json;
+        t.rooms.push(r);
+        return r;
+      });
+      await t.service.enter(reservation);
+      await afterReadyDelay();
+      expect(t.rooms[0]!.sent).toEqual([]);
+    }
+  });
+
+  it('ready sai com a mesa esperando e vaga; sala largada antes do prazo não envia', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    expect(t.rooms[0]!.sent).toEqual([]); // não sai na hora da entrada
+    await afterReadyDelay();
+    expect(t.rooms[0]!.sent).toEqual([{ type: 'ready', payload: {} }]);
+    const t2 = setup();
+    await t2.service.enter(reservation);
+    await t2.service.leave();
+    await afterReadyDelay();
+    expect(t2.rooms[0]!.sent).toEqual([]);
+  });
+
+  it('sala antiga (já largada) não alimenta a mesa', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    const old = t.rooms[0]!;
+    await t.service.leave();
+    old.emit('msg:codes', { codes: {}, by: -1, at: 1 });
+    expect(t.table.onCodes).not.toHaveBeenCalled();
   });
 });
 

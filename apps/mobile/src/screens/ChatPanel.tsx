@@ -21,9 +21,15 @@ export interface ChatPanelProps {
   connected: boolean;
   nicknameOf(seat: number): string;
   mySeat: number;
-  /** Abas disponíveis (padrão: Mesa e Dupla). Na sala de espera só há a Mesa. */
+  /** Abas disponíveis (padrão: Mesa e Dupla). */
   scopes?: readonly ChatScope[];
+  /**
+   * Outros jogadores sentados e se estão silenciados NESTE aparelho (preferência local, não vai ao
+   * servidor). Silenciado: o chat dele some da lista. Omitido = sem botões de silenciar.
+   */
+  mutes?: readonly MuteEntry[];
   on: {
+    toggleMute?(seat: number): void;
     setTab(scope: ChatScope): void;
     setDraft(text: string): void;
     send(): void;
@@ -32,13 +38,20 @@ export interface ChatPanelProps {
   };
 }
 
+export interface MuteEntry {
+  readonly seat: number;
+  readonly name: string;
+  readonly muted: boolean;
+}
+
 const TABS: readonly { scope: ChatScope; label: string }[] = [
   { scope: 'table', label: 'Mesa' },
   { scope: 'partner', label: 'Dupla' },
 ];
 
 export function ChatPanel(p: ChatPanelProps) {
-  const lines = p.chat.filter((c) => c.scope === p.tab);
+  const mutedSeats = (p.mutes ?? []).filter((m) => m.muted).map((m) => m.seat);
+  const lines = p.chat.filter((c) => c.scope === p.tab && !mutedSeats.includes(c.seat));
   const tabs = TABS.filter((t) => p.scopes === undefined || p.scopes.includes(t.scope));
   return (
     <View style={styles.panel} testID="chat-panel" accessibilityViewIsModal>
@@ -66,6 +79,29 @@ export function ChatPanel(p: ChatPanelProps) {
       </View>
       {p.tab === 'partner' ? (
         <Text style={styles.hint}>Só a sua dupla vê esta conversa.</Text>
+      ) : null}
+      {p.mutes !== undefined && p.mutes.length > 0 && p.on.toggleMute !== undefined ? (
+        <ScrollView horizontal contentContainerStyle={styles.phrases} testID="chat-mutes">
+          {p.mutes.map((m) => (
+            <Pressable
+              key={m.seat}
+              accessibilityRole="button"
+              accessibilityLabel={
+                m.muted
+                  ? `Reativar ${m.name}. Só neste aparelho.`
+                  : `Silenciar ${m.name}. Só neste aparelho.`
+              }
+              accessibilityState={{ selected: m.muted }}
+              onPress={() => p.on.toggleMute?.(m.seat)}
+              style={[styles.phrase, m.muted && styles.mutedOn]}
+              testID={`chat-mute-${m.seat}`}
+            >
+              <Text style={styles.phraseText}>
+                {m.muted ? `Reativar ${m.name}` : `Silenciar ${m.name}`}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       ) : null}
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent} testID="chat-list">
         {lines.length === 0 ? (
@@ -171,5 +207,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   phraseText: { color: colors.text, fontSize: fontSize.small },
+  mutedOn: { borderWidth: 1, borderColor: colors.danger },
   error: { color: colors.danger, fontSize: fontSize.small },
 });

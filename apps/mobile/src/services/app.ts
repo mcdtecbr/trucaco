@@ -16,6 +16,7 @@ import type { RoomClientLike, RoomLike, RoomService } from '../room/roomService'
 import { createResumeRecorder, createTableResume } from '../room/tableResume';
 import type { TableResumeController } from '../room/tableResume';
 import { lobbyStore } from '../store/lobbyStore';
+import { mutedStore } from '../store/mutedStore';
 import { roomStore } from '../store/roomStore';
 import { bindSession, sessionStore } from '../store/sessionStore';
 import { createTableController } from '../table/tableController';
@@ -54,7 +55,9 @@ export function getApp(): App {
   const table = createTableController({
     store: tableStore,
     send: (msg) => rooms?.send(msg) ?? false,
+    isMuted: (nickname) => mutedStore.getState().has(nickname),
   });
+  void mutedStore.getState().hydrate();
   rooms = createRoomService({
     getClient: () => roomClient,
     store: roomStore,

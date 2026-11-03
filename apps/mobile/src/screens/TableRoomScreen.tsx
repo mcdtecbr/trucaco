@@ -17,7 +17,10 @@ import {
   rematchView,
   roomViewFor,
 } from '../table/tableRoute';
-import { buildChatPanelProps } from './chatPanelProps';
+import { useMutedNames, mutedStore } from '../store/mutedStore';
+import { buildChatPanelProps, mutesFor, visibleBubbles } from './chatPanelProps';
+import { buildCodesPanelProps } from './codesPanelProps';
+import type { CodesPanelProps } from './CodesPanel';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
@@ -54,6 +57,7 @@ function useChatPanel(
   connected: boolean,
   scopes?: readonly ChatScope[],
 ): ChatPanelProps | null {
+  const mutedNames = useMutedNames();
   const chatOpen = useTableStore((s) => s.chatOpen);
   const chatTab = useTableStore((s) => s.chatTab);
   const chat = useTableStore((s) => s.chat);
@@ -71,11 +75,41 @@ function useChatPanel(
     nicknameOf,
     mySeat,
     ...(scopes !== undefined ? { scopes } : {}),
+    mutes: mutesFor(
+      [0, 1, 2, 3].map((seat) => ({ seat, nickname: nicknameOf(seat) })),
+      mySeat,
+      mutedNames,
+    ),
+    toggleMute: (seat) => void mutedStore.getState().toggle(nicknameOf(seat)),
     table: getApp().table,
   });
 }
 
-const WAITING_SCOPES: readonly ChatScope[] = ['table'];
+/**
+ * Props do painel "Combinar sinais" (espera e mesa). Hoje só existe login de convidado, então o aviso
+ * de que o combinado some ao sair da conta vale para todos até a Fase 6 (contas Google/Apple).
+ */
+function useCodesPanel(
+  seats: readonly { seat: number; nickname: string; status: string; isBot: boolean }[],
+  mySeat: number,
+  connected: boolean,
+): CodesPanelProps | null {
+  const codesOpen = useTableStore((s) => s.codesOpen);
+  const codes = useTableStore((s) => s.codes);
+  const codesError = useTableStore((s) => s.codesError);
+  return buildCodesPanelProps({
+    codesOpen,
+    codes,
+    codesError,
+    seats,
+    mySeat,
+    connected,
+    guest: true,
+    table: getApp().table,
+  });
+}
+
+const WAITING_SCOPES: readonly ChatScope[] = ['table', 'partner'];
 
 function JoinedTable() {
   const router = useRouter();
@@ -91,7 +125,8 @@ function JoinedTable() {
     connection === 'connected',
     WAITING_SCOPES,
   );
-  const chatUnreadTotal = useTableStore((s) => s.chatUnread.table);
+  const codesPanel = useCodesPanel(seats, mySeat, connection === 'connected');
+  const chatUnreadTotal = useTableStore((s) => s.chatUnread.table + s.chatUnread.partner);
   const reduceMotion = useReduceMotion();
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle');
 
@@ -132,15 +167,13 @@ function JoinedTable() {
         shareFeedback={feedback}
         chatPanel={chatPanel}
         chatUnreadTotal={chatUnreadTotal}
+        codesPanel={codesPanel}
         reduceMotion={reduceMotion}
         on={{
           share,
           leave,
-          openChat: () => {
-            // Na espera só existe a Mesa: não deixa o store em 'partner'.
-            getApp().table.setChatTab('table');
-            getApp().table.setChatOpen(true);
-          },
+          openChat: () => getApp().table.setChatOpen(true),
+          openCodes: () => getApp().table.setCodesOpen(true),
         }}
       />
     );
@@ -190,13 +223,21 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   const lingering = useTableStore((s) => s.lingering);
   const coverMode = useTableStore((s) => s.coverMode);
   const chatUnread = useTableStore((s) => s.chatUnread);
-  const bubbles = useTableStore((s) => s.bubbles);
+  const rawBubbles = useTableStore((s) => s.bubbles);
+  const codes = useTableStore((s) => s.codes);
+  const partnerSignalNote = useTableStore((s) => s.partnerSignalNote);
   const signals = useTableStore((s) => s.signals);
   const reduceMotion = useReduceMotion();
   const chatPanel = useChatPanel(
     (seat) => vm?.seats[seat]?.nickname ?? '',
     vm?.mySeat ?? -1,
     connection === 'connected',
+  );
+  const codesPanel = useCodesPanel(vm?.seats ?? [], vm?.mySeat ?? -1, connection === 'connected');
+  const mutedNames = useMutedNames();
+  const bubbles = visibleBubbles(
+    rawBubbles,
+    mutesFor(vm?.seats ?? [], vm?.mySeat ?? -1, mutedNames),
   );
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
   const deadlineAt = useTableStore((s) => effectiveDeadline(s));
@@ -221,6 +262,9 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       probe={isE2EMode()}
       chatUnreadTotal={chatUnread.table + chatUnread.partner}
       chatPanel={chatPanel}
+      codes={codes}
+      codesPanel={codesPanel}
+      partnerSignalNote={partnerSignalNote}
       bubbles={bubbles}
       signals={signals}
       reduceMotion={reduceMotion}
@@ -238,6 +282,7 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
         toggleCover: () => table.setCoverMode(!coverMode),
         voteCancel: () => void table.voteCancel(),
         openChat: () => table.setChatOpen(true),
+        openCodes: () => table.setCodesOpen(true),
         signalEnd: table.onSignalEnd,
         sendSignal: (id: SignalId) => table.sendSignal(id),
         askLeave: () => table.setLeaveConfirm(true),
