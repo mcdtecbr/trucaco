@@ -38,7 +38,7 @@ Toda resposta de erro tem o formato `{ "error": { "code": "..." } }`. Corpo JSON
 | `PUT /me/partners/:partnerId/codes` | Bearer | `200 { codes }`                                                              | `400 INVALID_PARTNER`, `INVALID_BODY` ou `INVALID_CODES` (texto recusado pela limpeza do chat); `403 NOT_PARTNERS` |
 | `GET /health`                       | não    | `200 { status, protocol }`                                                   | —                                                                                                                  |
 
-### Rotas da Fase 6 (contrato 6A; 6B implementado: `/matches`, bloqueio, denúncia e `DELETE /me`; o resto nos blocos 6D a 6F)
+### Rotas da Fase 6 (contrato 6A; implementados: `/matches`, bloqueio, denúncia, `DELETE /me` (6B) e `/me/achievements`, `/me/missions`, `/users/:id` e `stats` em `GET /me` (6E); login social e vínculo no 6F)
 
 Tipos, validadores (`parse*Request`; `null` vira `400 INVALID_BODY`, salvo o código indicado) e caminhos (`HTTP_ROUTES`) estão em `packages/protocol/src/http.ts`; o catálogo de conquistas e missões em `gamification.ts`. Até cada bloco entrar, a rota correspondente segue `501` ou inexistente e os códigos novos ainda não são emitidos (`httpContract.test.ts`, lista `PENDING_PHASE6`). `PROTOCOL_VERSION` foi a 6.
 

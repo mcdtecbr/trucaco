@@ -7,7 +7,7 @@ import { MAX_MESSAGE_BYTES, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { AuthService } from './auth/authService';
 import { DEFAULT_LIMITS, type RestLimits } from './auth/config';
 import type { AuthContext } from '@colyseus/core';
-import type { MatchRepository, UserRepository } from './db/types';
+import type { MatchRepository, ProgressionRepository, UserRepository } from './db/types';
 import { installBaseMiddleware, mountFallbacks, mountRest } from './http/rest';
 import { mountLobbyRoutes } from './http/lobbyRoutes';
 import {
@@ -43,6 +43,8 @@ export interface ServerDeps {
   readonly allowDevAuth?: boolean;
   /** Onde gravar partidas terminadas/canceladas (2H). Ausente: nada é gravado. */
   readonly matches?: MatchRepository;
+  /** Progressão (conquistas, missões, estatísticas): aplicada pela sala após gravar a partida e lida pelas rotas de perfil. */
+  readonly progression?: ProgressionRepository;
   /** Ajustes do lobby (prazos da fila, limites). Só o servidor define. */
   readonly lobby?: Partial<Omit<LobbyConfig, 'guard'>> & { guard?: Partial<LobbyConfig['guard']> };
   /**
@@ -179,6 +181,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
           auth: deps.auth,
           users: deps.users,
           ...(deps.matches !== undefined ? { matches: deps.matches } : {}),
+          ...(deps.progression !== undefined ? { progression: deps.progression } : {}),
           limits: { ...DEFAULT_LIMITS, ...deps.limits },
           corsOrigins: deps.corsOrigins ?? [],
           trustProxy: deps.trustProxy === true,
@@ -201,6 +204,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
   defineTrucoRoom(colyseus, {
     ...room,
     ...(deps.matches !== undefined ? { matches: deps.matches } : {}),
+    ...(deps.progression !== undefined ? { progression: deps.progression } : {}),
     ...(deps.users !== undefined ? { users: deps.users } : {}),
   });
   // O roteador do core só é registrado em `listen`; o nosso listener entra à frente dele depois disso.

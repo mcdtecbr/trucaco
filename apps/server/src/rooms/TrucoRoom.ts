@@ -78,8 +78,15 @@ import {
 import type { TableState } from '../game/schema';
 import { log } from '../logger';
 import { AuthError, bearerFromHeader } from '../auth/authService';
-import { InvalidInputError } from '../db/types';
-import type { JsonValue, MatchRepository, UserRepository } from '../db/types';
+import { InvalidInputError, PersistenceError } from '../db/types';
+import type {
+  FinishedMatchInput,
+  JsonValue,
+  MatchRepository,
+  ProgressionRepository,
+  UserRepository,
+} from '../db/types';
+import { applyMatchProgression } from '../progression/service';
 import { GRANT_KEY, getLobby } from '../lobby/lobby';
 import { onBlockChange, onUserDeleted } from '../social/blockBus';
 import type { Grant } from '../lobby/lobby';
@@ -180,6 +187,11 @@ export interface TrucoRoomConfig {
   readonly chatCooldownMs?: number;
   /** Onde gravar a partida ao terminar (2H). Ausente: nada é gravado. Nunca vem do cliente. */
   readonly matches?: MatchRepository;
+  /**
+   * Progressão (Fase 6): conquistas, missões e estatísticas aplicadas depois de gravar a partida. Ausente: não
+   * há progressão. Nunca vem do cliente.
+   */
+  readonly progression?: ProgressionRepository;
   /**
    * Combinado de sinais da dupla (Fase 5): lê e grava `partner_codes`. Ausente: o combinado vive só na
    * sala (nada é lido nem gravado). Nunca vem do cliente.
@@ -369,6 +381,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   /** userId -> fim da reserva de assento ainda não consumida (um humano não segura mais de um assento). */
   private readonly pendingReservations = new Map<string, number>();
   private recorder: MatchRecorder | null = null;
+  /** Sinais usados por assento HUMANO na partida em curso (alimenta `sinaleiro` e a missão de sinais). */
+  private readonly signalsBySeat = new Map<Seat, number>();
   private endReason: EndReason | null = null;
   /** Assentos que votaram por revanche na janela atual. */
   private readonly rematchVotes = new Set<Seat>();
@@ -1064,6 +1078,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       );
     }
     this.series = series;
+    this.signalsBySeat.clear();
     this.recorder = new MatchRecorder({
       options,
       roomCode: this.state.roomCode,
@@ -1343,6 +1358,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         return;
       }
       this.broadcastSignal(seat, msg.signalId, at);
+      this.signalsBySeat.set(seat, (this.signalsBySeat.get(seat) ?? 0) + 1);
       return;
     }
     if (!this.cooldownPassed(this.lastSfxAt, seat, this.config.sfxCooldownMs ?? SFX_COOLDOWN_MS)) {
@@ -1688,11 +1704,41 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (input === null || repo === undefined) return;
     // Par novo: o combinado só é gravado depois que a 1ª partida finalizada do par foi gravada
     // (`savePartnerCodes` exige o vínculo). Série cancelada não grava.
+    // Sinais por assento desta partida (copiados já: a revanche zera o contador).
+    const signals = new Map(this.signalsBySeat);
     const saving = recorder.save(repo, input, this.roomId).then(async (ok) => {
       if (ok && finished) await this.persistNewPairs();
+      if (ok) await this.persistProgression(recorder.matchId, input, signals);
       return ok;
     });
     this.track(saving);
+  }
+
+  /** Conquistas, missões e estatísticas. Falha daqui só vira log: a partida já está gravada. */
+  private async persistProgression(
+    matchId: string | null,
+    input: FinishedMatchInput,
+    signals: ReadonlyMap<number, number>,
+  ): Promise<void> {
+    const progression = this.config.progression;
+    if (progression === undefined || matchId === null) return;
+    try {
+      const result = await applyMatchProgression(progression, matchId, input, signals);
+      if (result?.applied === true) {
+        log.info('truco: progressão aplicada', {
+          room: this.roomId,
+          unlocked: result.unlocked.length,
+          missionsCompleted: result.missionsCompleted.length,
+        });
+      }
+    } catch (err) {
+      // Só nome e código: o erro bruto do Prisma pode carregar dados.
+      log.error('truco: falha ao aplicar progressão', {
+        room: this.roomId,
+        name: err instanceof Error ? err.name : 'unknown',
+        code: err instanceof PersistenceError ? err.code : null,
+      });
+    }
   }
 
   private track(p: Promise<boolean>): void {

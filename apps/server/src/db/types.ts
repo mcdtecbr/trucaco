@@ -363,7 +363,7 @@ export interface ProgressionRepository {
    * Aplica a progressão de UMA partida a todos os usuários, numa transação, e é IDEMPOTENTE por `matchId`:
    * a primeira chamada grava e devolve `applied: true` com os desbloqueios novos; qualquer outra (inclusive
    * simultânea) devolve `applied: false` sem escrever. O nível de cada conquista é derivado do progresso
-   * final (`achievementLevelFor`) e nunca diminui. Missão: progresso limitado à meta, conclusão marcada uma vez.
+   * final (`achievementLevelFor`) e nunca diminui (`progressSet` também só sobe: `GREATEST`). Missão: progresso limitado à meta, conclusão marcada uma vez.
    * `InvalidInputError` se `matchId` não existir, usuário inexistente, id fora do catálogo, `periodKey`
    * inválido, delta negativo/fracionário ou `won > played`. Tudo ou nada.
    */
@@ -377,6 +377,12 @@ export interface ProgressionRepository {
   listMissions(userId: string, periodKeys: readonly string[]): Promise<readonly MissionRecord[]>;
   /** Uma linha por variante já jogada. */
   getStats(userId: string): Promise<readonly StatsRecord[]>;
+  /**
+   * Partidas `finished` que os dois venceram juntos (mesma dupla, dupla vencedora) e que JÁ foram aplicadas
+   * (`progression_applied`), sem bot em nenhum assento. Alimenta `dupla_afinada`. A partida em avaliação ainda
+   * NÃO está marcada: quem chama soma 1.
+   */
+  countWinsTogether(userA: string, userB: string): Promise<number>;
   /** `null` se o usuário não existe (mesmo resultado para apagado). */
   getPublicProfile(userId: string): Promise<PublicProfileRecord | null>;
   /**

@@ -6,9 +6,10 @@ import {
   createMemoryRepositories,
   createPrisma,
   PrismaMatchRepository,
+  PrismaProgressionRepository,
   PrismaUserRepository,
 } from './db';
-import type { MatchRepository, PrismaHandle, UserRepository } from './db';
+import type { MatchRepository, PrismaHandle, ProgressionRepository, UserRepository } from './db';
 import { log } from './logger';
 import { roomConfigFromEnv } from './rooms/roomSeed';
 import { createServer } from './server';
@@ -119,16 +120,19 @@ async function main(): Promise<void> {
   let prismaHandle: PrismaHandle | null = null;
   let users: UserRepository;
   let matches: MatchRepository;
+  let progression: ProgressionRepository;
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl !== undefined && databaseUrl !== '') {
     prismaHandle = createPrisma(databaseUrl);
     users = new PrismaUserRepository(prismaHandle.prisma);
     matches = new PrismaMatchRepository(prismaHandle.prisma);
+    progression = new PrismaProgressionRepository(prismaHandle.prisma);
   } else if (config.devLike) {
     log.warn('DATABASE_URL ausente: usuários e partidas em memória (só dev/test)');
     const memory = createMemoryRepositories();
     users = memory.users;
     matches = memory.matches;
+    progression = memory.progression;
   } else {
     throw new Error('DATABASE_URL é obrigatório fora de development/test.');
   }
@@ -146,6 +150,7 @@ async function main(): Promise<void> {
       auth,
       users,
       matches,
+      progression,
       lobby: lobbyConfig(),
       corsOrigins: config.corsOrigins,
       limits: config.limits,

@@ -38,6 +38,7 @@ Notas:
 - **3 missões diárias** sorteadas de um catálogo, renovadas à meia-noite (America/Sao_Paulo). **1 missão semanal**, renovada na segunda-feira.
 - Exemplos do catálogo: jogar 3 partidas; vencer 1 partida; pedir truco 3 vezes; aceitar 2 aumentos; usar 5 sinais; vencer uma mão valendo 6 ou mais; jogar uma partida com o mesmo parceiro da véspera.
 - Missão com requisito de parceiro ou de variante só é sorteada se o jogador já cumpriu o pré-requisito (ex.: já tem dupla frequente).
+- Contagem das apostas (implementação do 6D): "pedir truco" conta cada `betCalled` do jogador **e** cada `betRaised` (aumentar é pedir a aposta maior); "aceitar aumento" conta cada `betAccepted` **e** cada `betRaised` (no motor, aumentar aceita o pedido anterior). Logo um aumento vale 1 em cada missão.
 - Partida em que o jogador foi substituído por bot por ausência não conta para as missões dele.
 - Sem acúmulo: missão não concluída no dia expira.
 
