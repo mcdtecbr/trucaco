@@ -44,6 +44,7 @@ export class MemoryProgressionRepository implements ProgressionRepository {
   async applyMatchProgress(
     rawMatchId: string,
     rawDeltas: readonly UserProgressDelta[],
+    options: { readonly scored?: boolean } = {},
   ): Promise<ApplyProgressResult> {
     const matchId = normalizeId(rawMatchId);
     const deltas = assertProgressDeltas(rawDeltas);
@@ -56,6 +57,7 @@ export class MemoryProgressionRepository implements ProgressionRepository {
     }
     for (const d of deltas) this.requireUser(d.userId);
     this.store.progressionApplied.add(matchId);
+    if (options.scored === false) this.store.progressionUnscored.add(matchId);
     const now = new Date();
     const unlocked: AchievementUnlock[] = [];
     const missionsCompleted: MissionCompletion[] = [];
@@ -169,13 +171,61 @@ export class MemoryProgressionRepository implements ProgressionRepository {
     if (a === b) return 0;
     return this.store.matches.filter(
       (m) =>
-        this.store.progressionApplied.has(m.id) &&
+        this.isScored(m.id) &&
         m.input.status === 'finished' &&
         m.input.players.every((p) => p.botFrom === null) &&
         m.input.winnerTeam !== null &&
         m.input.players.some((p) => p.userId === a && p.team === m.input.winnerTeam) &&
         m.input.players.some((p) => p.userId === b && p.team === m.input.winnerTeam),
     ).length;
+  }
+
+  async countMatchesTogether(
+    rawA: string,
+    rawB: string,
+    since: Date,
+    until: Date,
+  ): Promise<number> {
+    const a = normalizeId(rawA);
+    const b = normalizeId(rawB);
+    if (a === b) return 0;
+    return this.store.matches.filter((m) => {
+      const end = m.input.endedAt.getTime();
+      return (
+        this.isScored(m.id) &&
+        end >= since.getTime() &&
+        end < until.getTime() &&
+        m.input.players.some((p) => p.userId === a) &&
+        m.input.players.some((p) => p.userId === b)
+      );
+    }).length;
+  }
+
+  async countScoredPrivateMatches(rawUser: string, since: Date, until: Date): Promise<number> {
+    const id = normalizeId(rawUser);
+    return this.store.matches.filter((m) => {
+      const end = m.input.endedAt.getTime();
+      return (
+        this.isScored(m.id) &&
+        m.input.visibility === 'private' &&
+        end >= since.getTime() &&
+        end < until.getTime() &&
+        m.input.players.some((p) => p.userId === id)
+      );
+    }).length;
+  }
+
+  private isScored(matchId: string): boolean {
+    return (
+      this.store.progressionApplied.has(matchId) && !this.store.progressionUnscored.has(matchId)
+    );
+  }
+
+  async countGuests(userIds: readonly string[]): Promise<number> {
+    const ids = new Set(userIds.map(normalizeId));
+    let n = 0;
+    for (const id of ids) if (this.store.users.get(id)?.provider === 'guest') n++;
+    return n;
   }
 
   async getPublicProfile(rawId: string): Promise<PublicProfileRecord | null> {

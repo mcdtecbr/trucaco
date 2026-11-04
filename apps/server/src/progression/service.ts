@@ -6,24 +6,76 @@
 import { InvalidInputError } from '../db/types';
 import type { FinishedMatchInput, ProgressionRepository, UserProgressDelta } from '../db/types';
 import type { ApplyProgressResult } from '../db/types';
-import { evaluateMatch, isEligibleForProgression } from './achievements';
-import type { PartnerWins } from './achievements';
+import {
+  DEFAULT_PROGRESSION_POLICY,
+  PAIR_LIMIT_WINDOW_MS,
+  evaluateMatch,
+  isEligibleForProgression,
+  isValidMatch,
+} from './achievements';
+import type { PartnerWins, ProgressionPolicy } from './achievements';
 import { advanceMissions, dailyMissionsFor, weeklyMissionsFor } from './missions';
 import { periodKeys } from './period';
 
 const partnerSeat = (seat: number): number => (seat + 2) % 4;
+
+/**
+ * Checagens que dependem do banco (anti-farm por conluio, auditoria 6I): mesa privada só de convidados e
+ * teto de partidas pontuadas por par de jogadores nas 24 h anteriores.
+ */
+async function passesCollusionChecks(
+  progression: ProgressionRepository,
+  match: FinishedMatchInput,
+  policy: ProgressionPolicy,
+): Promise<boolean> {
+  const ids = match.players.flatMap((p) => (p.userId === null ? [] : [p.userId]));
+  if (policy.blockAllGuestPrivate && match.visibility === 'private') {
+    if ((await progression.countGuests(ids)) === ids.length) return false;
+  }
+  const until = match.endedAt;
+  const since = new Date(until.getTime() - PAIR_LIMIT_WINDOW_MS);
+  if (match.visibility === 'private') {
+    for (const id of ids) {
+      if (
+        (await progression.countScoredPrivateMatches(id, since, until)) >=
+        policy.userPrivateDailyLimit
+      ) {
+        return false;
+      }
+    }
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const n = await progression.countMatchesTogether(
+        ids[i] as string,
+        ids[j] as string,
+        since,
+        until,
+      );
+      if (n >= policy.pairDailyLimit) return false;
+    }
+  }
+  return true;
+}
 
 export async function applyMatchProgression(
   progression: ProgressionRepository,
   matchId: string,
   match: FinishedMatchInput,
   signalsBySeat: ReadonlyMap<number, number>,
+  policy: ProgressionPolicy = DEFAULT_PROGRESSION_POLICY,
 ): Promise<ApplyProgressResult | null> {
-  if (!isEligibleForProgression(match)) return null;
+  // Partida inválida (cancelada, bot, conta repetida): nada é gravado.
+  if (!isValidMatch(match)) return null;
+  // Anti-farm: só gateia conquistas e missões. A estatística (`user_stats`) conta toda partida válida.
+  const scoring =
+    isEligibleForProgression(match, policy) &&
+    (await passesCollusionChecks(progression, match, policy));
   // Contexto de `dupla_afinada`: vitórias com o parceiro (já contando esta partida) e o melhor já gravado.
   const partnerWins = new Map<string, PartnerWins>();
   await Promise.all(
     match.players.map(async (p) => {
+      if (!scoring) return;
       const partner = match.players.find((q) => q.seat === partnerSeat(p.seat))?.userId;
       if (p.userId === null || partner == null || p.team !== match.winnerTeam) return;
       const [applied, rows] = await Promise.all([
@@ -36,22 +88,38 @@ export async function applyMatchProgression(
       partnerWins.set(p.userId, { current, best });
     }),
   );
-  const evaluations = evaluateMatch({ match, signalsBySeat, partnerWins });
-  if (evaluations.length === 0) return null;
   const keys = periodKeys(match.endedAt);
-  const deltas: UserProgressDelta[] = evaluations.map((e) => ({
-    userId: e.userId,
-    variant: e.variant,
-    played: 1,
-    won: e.won ? 1 : 0,
-    achievements: e.achievements,
-    missions: [
-      ...advanceMissions(dailyMissionsFor(e.userId, keys.daily), e.counters),
-      ...advanceMissions(weeklyMissionsFor(keys.weekly), e.counters),
-    ],
-  }));
+  const evaluations = scoring ? evaluateMatch({ match, signalsBySeat, partnerWins, policy }) : [];
+  const deltas: UserProgressDelta[] =
+    evaluations.length > 0
+      ? evaluations.map((e) => ({
+          userId: e.userId,
+          variant: e.variant,
+          played: 1,
+          won: e.won ? 1 : 0,
+          achievements: e.achievements,
+          missions: [
+            ...advanceMissions(dailyMissionsFor(e.userId, keys.daily), e.counters),
+            ...advanceMissions(weeklyMissionsFor(keys.weekly), e.counters),
+          ],
+        }))
+      : match.players.flatMap((p) =>
+          p.userId === null
+            ? []
+            : [
+                {
+                  userId: p.userId,
+                  variant: match.variant,
+                  played: 1,
+                  won: p.team === match.winnerTeam ? 1 : 0,
+                  achievements: [],
+                  missions: [],
+                },
+              ],
+        );
+  const options = { scored: evaluations.length > 0 };
   try {
-    return await progression.applyMatchProgress(matchId, deltas);
+    return await progression.applyMatchProgress(matchId, deltas, options);
   } catch (err) {
     if (!(err instanceof InvalidInputError)) throw err;
     // Conta apagada entre a gravação da partida e a avaliação: a transação foi desfeita inteira, então
@@ -61,6 +129,6 @@ export async function applyMatchProgression(
       if ((await progression.getPublicProfile(d.userId)) !== null) alive.push(d);
     }
     if (alive.length === 0 || alive.length === deltas.length) throw err;
-    return progression.applyMatchProgress(matchId, alive);
+    return progression.applyMatchProgress(matchId, alive, options);
   }
 }

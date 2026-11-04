@@ -5,7 +5,8 @@
  * relógio, banco ou mensagem do cliente. Quem aplica no banco é `service.ts`.
  *
  * Só conta partida `finished` com 4 `userId` distintos e nenhum bot (`botFrom === null` nos quatro): bot de
- * ausência, vaga de bot e conta repetida em dois assentos não pontuam (plano da Fase 6, seção 4).
+ * ausência, vaga de bot e conta repetida em dois assentos não pontuam (plano da Fase 6, seção 4). Também
+ * exige mínimo de mãos e de duração (anti-farm por conluio, auditoria 6I; ver `ProgressionPolicy`).
  * Log truncado (`options.logTruncated`) só SUBconta as conquistas derivadas de eventos, nunca superconta.
  */
 import { cardEquals, isManilha, variantById } from '@trucaco/rules';
@@ -26,6 +27,8 @@ export interface EvaluateInput {
   readonly signalsBySeat: ReadonlyMap<number, number>;
   /** `userId` -> vitórias com o parceiro desta partida (ausente = sem dado: `dupla_afinada` não avança). */
   readonly partnerWins: ReadonlyMap<string, PartnerWins>;
+  /** Padrão: `DEFAULT_PROGRESSION_POLICY`. */
+  readonly policy?: ProgressionPolicy;
 }
 
 export interface PlayerEvaluation {
@@ -38,8 +41,65 @@ export interface PlayerEvaluation {
   readonly counters: MissionCounters;
 }
 
-/** Partida elegível: terminada, com vencedor, 4 humanos distintos e nenhuma troca por bot. */
-export function isEligibleForProgression(match: FinishedMatchInput): boolean {
+/**
+ * Limites anti-farm por conluio (auditoria 6I). Partida que não os cumpre continua gravada normalmente;
+ * só não pontua. Valores padrão conservadores, ajustáveis aqui (nomeados) e injetáveis nos testes.
+ */
+export interface ProgressionPolicy {
+  /** Mínimo de mãos decididas (`handDecided`) no log. Ignorado se o log foi truncado. */
+  readonly minHands: number;
+  /** Duração mínima (`endedAt - startedAt`) em ms. */
+  readonly minDurationMs: number;
+  /** Máximo de partidas que pontuaram, nas 24 h anteriores, para QUALQUER par dos 4 jogadores. */
+  readonly pairDailyLimit: number;
+  /** Mesa privada só de convidados (4 `provider = guest`) não pontua. */
+  readonly blockAllGuestPrivate: boolean;
+  /** Máximo de partidas PONTUADAS de mesa privada por usuário nas 24 h anteriores (fecha o contorno 1 conta social + 3 convidados novos). */
+  readonly userPrivateDailyLimit: number;
+}
+
+/** Um jogo de truco com 4 pessoas reais tem várias mãos; 4 já barra o "fecha em 1 ou 2 mãos" do farm. */
+export const MIN_HANDS_FOR_PROGRESSION = 4;
+/** 3 minutos: abaixo disso não há partida humana de verdade (tempo para pensar, apostar, jogar). */
+export const MIN_MATCH_DURATION_MS = 3 * 60_000;
+/** Cada par de jogadores pontua no máximo 5 partidas por janela de 24 h (a 6ª partida do mesmo grupo não pontua). */
+export const PAIR_DAILY_PROGRESSION_LIMIT = 5;
+/** Cada usuário pontua no máximo 10 partidas de mesa privada por janela de 24 h (mesa pública não tem esse teto). */
+export const USER_PRIVATE_DAILY_PROGRESSION_LIMIT = 10;
+/** Janela do teto por par: as 24 h anteriores ao fim da partida. */
+export const PAIR_LIMIT_WINDOW_MS = 24 * 3_600_000;
+
+export const DEFAULT_PROGRESSION_POLICY: ProgressionPolicy = {
+  minHands: MIN_HANDS_FOR_PROGRESSION,
+  minDurationMs: MIN_MATCH_DURATION_MS,
+  pairDailyLimit: PAIR_DAILY_PROGRESSION_LIMIT,
+  blockAllGuestPrivate: true,
+  userPrivateDailyLimit: USER_PRIVATE_DAILY_PROGRESSION_LIMIT,
+};
+
+/** Sem nenhum limite de esforço ou conluio (só para testes que não tratam disso). */
+export const NO_EFFORT_POLICY: ProgressionPolicy = {
+  minHands: 0,
+  minDurationMs: 0,
+  pairDailyLimit: Number.MAX_SAFE_INTEGER,
+  blockAllGuestPrivate: false,
+  userPrivateDailyLimit: Number.MAX_SAFE_INTEGER,
+};
+
+/** Mãos decididas no log. */
+export function countHands(match: FinishedMatchInput): number {
+  let n = 0;
+  for (const entry of match.events) {
+    if (isObject(entry.event) && entry.event['type'] === 'handDecided') n++;
+  }
+  return n;
+}
+
+/**
+ * Partida VÁLIDA: terminada, com vencedor, 4 humanos distintos e nenhuma troca por bot. Só ela entra em
+ * `user_stats` (played/won), mesmo que o anti-farm barre conquistas e missões.
+ */
+export function isValidMatch(match: FinishedMatchInput): boolean {
   if (match.status !== 'finished' || match.winnerTeam === null) return false;
   if (match.players.length !== 4) return false;
   const ids = new Set<string>();
@@ -48,6 +108,21 @@ export function isEligibleForProgression(match: FinishedMatchInput): boolean {
     ids.add(p.userId);
   }
   return ids.size === 4;
+}
+
+/**
+ * Partida que PONTUA conquistas e missões: válida, com o mínimo de mãos e de duração. (Convidados em mesa
+ * privada e os tetos por par e por usuário dependem do banco: `service.ts`.)
+ */
+export function isEligibleForProgression(
+  match: FinishedMatchInput,
+  policy: ProgressionPolicy = DEFAULT_PROGRESSION_POLICY,
+): boolean {
+  if (!isValidMatch(match)) return false;
+  if (match.endedAt.getTime() - match.startedAt.getTime() < policy.minDurationMs) return false;
+  const truncated = isObject(match.options) && match.options['logTruncated'] === true;
+  if (!truncated && countHands(match) < policy.minHands) return false;
+  return true;
 }
 
 /** Zap: a manilha de paus (Paulista) ou o 4 de paus (Mineiro, primeira manilha fixa). */
@@ -180,7 +255,7 @@ function perfectSeries(match: FinishedMatchInput, team: 0 | 1): boolean {
  */
 export function evaluateMatch(input: EvaluateInput): PlayerEvaluation[] {
   const { match } = input;
-  if (!isEligibleForProgression(match)) return [];
+  if (!isEligibleForProgression(match, input.policy)) return [];
   const variant = variantById(match.variant);
   const facts = collectFacts(match, variant);
   const out: PlayerEvaluation[] = [];

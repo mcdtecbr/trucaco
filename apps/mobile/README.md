@@ -213,6 +213,15 @@ Código em `src/audio/`. Os arquivos de `assets/audio/` são **placeholders sile
 - **Não verificado**: E2E novo para histórico, bloqueio e apagar conta (não escrito). Os testes são de unidade e de tela (`profile.test.tsx`, `history.test.ts`, `moderation.test.ts`, `session.account.test.ts`). Nada disso foi visto em aparelho.
 - **Resíduo no aparelho**: depois de apagar a conta, `trucaco.muted.v1` (silenciados) e o `sessionStorage` continuam.
 
+## Login, vínculo, conquistas e missões (Fase 6, bloco 6G)
+
+- **Entrar** (`app/login.tsx`): convidado e os botões Google e Apple. Os dois botões aparecem sempre, mas só ficam disponíveis quando o aparelho tem o SDK registrado (`registerIdentityProvider`, em `src/net/identity.ts`) **e** o servidor lista o provedor em `GET /health` (`socialProviders`). Hoje nenhum SDK é registrado no app (`expo-auth-session` não é dependência), então o login social não funciona de ponta a ponta. Sem SDK, o botão mostra "ainda não está disponível neste aparelho".
+- **Vincular conta** (Configurações, só para convidado): `runSocialAuth` com `mode: 'link'` (`src/lobby/socialAuth.ts`). `PROVIDER_TAKEN` oferece "entrar na conta existente", e o convidado atual é perdido (fusão de contas fora da fase).
+- **Conquistas** (`app/achievements.tsx`): catálogo inteiro, nível 0 = bloqueada. **Missões** (`app/missions.tsx`): as diárias sorteadas e a semanal. Ambas com atalho na tela inicial (`HomeView`).
+- **Resultado** (`FinishedView`): "Conquista desbloqueada!" com as conquistas que subiram de nível nesta partida.
+- **Perfil público** (`app/profile/[id].tsx`, `GET /users/:id`): apelido, avatar, conquistas e partidas e vitórias por variante. Nunca mostra histórico nem provedor.
+- **Não verificado**: nada disso em aparelho, e o E2E de vínculo chama `POST /auth/link` pela API com o idToken de teste (`test:<sub>`) antes de conferir a tela.
+
 ## Reserva, saída e a verificar
 
 - A reserva de assento é validada antes de qualquer rede (`isSafeReservation`): ids `[A-Za-z0-9_-]+` e `publicAddress`, se vier, com o mesmo host do servidor; o transporte também recusa host diferente. Reserva adulterada vira `JOIN_FAILED` sem enviar o JWT.

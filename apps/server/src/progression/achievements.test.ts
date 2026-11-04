@@ -12,7 +12,17 @@ import {
 import type { Card, GameEvent, PublicGameEvent, SeriesState } from '@trucaco/rules';
 import { describe, expect, it } from 'vitest';
 import type { FinishedMatchInput, JsonValue, MatchEventLogEntry } from '../db/types';
-import { evaluateMatch, isEligibleForProgression, isZap } from './achievements';
+import {
+  DEFAULT_PROGRESSION_POLICY,
+  MIN_HANDS_FOR_PROGRESSION,
+  MIN_MATCH_DURATION_MS,
+  NO_EFFORT_POLICY,
+  countHands,
+  evaluateMatch,
+  isEligibleForProgression as isEligibleWith,
+  isZap,
+} from './achievements';
+import type { ProgressionPolicy } from './achievements';
 import type { EvaluateInput, PartnerWins, PlayerEvaluation } from './achievements';
 
 const IDS = [randomUUID(), randomUUID(), randomUUID(), randomUUID()] as const;
@@ -97,6 +107,7 @@ function run(
     match: m,
     signalsBySeat: new Map(),
     partnerWins: new Map(),
+    policy: NO_EFFORT_POLICY,
     ...extra,
   });
 }
@@ -108,6 +119,20 @@ const got = (e: PlayerEvaluation | undefined): Record<string, number> =>
   );
 
 const empty = new Log();
+const isEligibleForProgression = (
+  m: FinishedMatchInput,
+  policy: ProgressionPolicy = NO_EFFORT_POLICY,
+): boolean => isEligibleWith(m, policy);
+
+/** Log com `n` mãos decididas. */
+function logWithHands(n: number): Log {
+  const l = new Log();
+  for (let i = 0; i < n; i++) {
+    l.hand(null);
+    l.handEnd(0, 1, [1, 0]);
+  }
+  return l;
+}
 
 describe('isEligibleForProgression', () => {
   it('aceita 4 humanos distintos, sem bot, partida terminada', () => {
@@ -138,6 +163,36 @@ describe('isEligibleForProgression', () => {
       }),
     ).toBe(false);
     expect(isEligibleForProgression({ ...m, players: players.slice(0, 3) })).toBe(false);
+  });
+
+  it('anti-farm: exige o mínimo de mãos e a duração mínima (padrões)', () => {
+    const d = DEFAULT_PROGRESSION_POLICY;
+    const long = (m: FinishedMatchInput): FinishedMatchInput => ({
+      ...m,
+      startedAt: new Date(m.endedAt.getTime() - MIN_MATCH_DURATION_MS),
+    });
+    const ok = long(match(logWithHands(MIN_HANDS_FOR_PROGRESSION)));
+    expect(countHands(ok)).toBe(MIN_HANDS_FOR_PROGRESSION);
+    expect(isEligibleForProgression(ok, d)).toBe(true);
+    // mãos a menos
+    expect(
+      isEligibleForProgression(long(match(logWithHands(MIN_HANDS_FOR_PROGRESSION - 1))), d),
+    ).toBe(false);
+    expect(isEligibleForProgression(long(match(empty)), d)).toBe(false);
+    // duração a menos (1 ms)
+    expect(
+      isEligibleForProgression(
+        { ...ok, startedAt: new Date(ok.endedAt.getTime() - MIN_MATCH_DURATION_MS + 1) },
+        d,
+      ),
+    ).toBe(false);
+    // log truncado: não dá para contar mãos, só a duração vale
+    expect(
+      isEligibleForProgression({ ...long(match(empty)), options: { logTruncated: true } }, d),
+    ).toBe(true);
+    // e a avaliação respeita a política padrão
+    expect(run(match(logWithHands(1)), { policy: d })).toEqual([]);
+    expect(run(ok, { policy: d })).toHaveLength(4);
   });
 
   it('partida inelegível não avalia ninguém', () => {

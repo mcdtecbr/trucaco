@@ -77,25 +77,26 @@ Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas
 
 ### Índices e a consulta que cada um atende
 
-| Índice                                                   | Consulta                                                                                         |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `users_provider_provider_subject_key` (UNIQUE)           | `findByProvider` no login (guest, Google, Apple) e `POST /auth/link`                             |
-| `users_nickname_lower_key` (UNIQUE em `lower(nickname)`) | Apelido único sem diferenciar caixa; busca por apelido sem diferença de caixa (`lower(...) = ?`) |
-| `match_players_user_id_match_id_idx`                     | `GET /matches`: partidas de um usuário (junta com `matches` por `match_id`)                      |
-| `matches_ended_at_id_idx` (`ended_at DESC, id DESC`)     | Ordenação e cursor `(ended_at, id)` de `GET /matches`; expurgo por `ended_at`                    |
-| `blocks_blocker_id_blocked_id_key` (UNIQUE)              | "Quem eu bloqueei" (prefixo `blocker_id`) e `addBlock` idempotente                               |
-| `blocks_blocked_id_idx`                                  | "Quem me bloqueou": o sorteio de mesa pública checa os dois sentidos                             |
-| `partner_codes_user_a_id_user_b_id_key` (UNIQUE)         | `GET/PUT /me/partners/:id/codes` e duplas frequentes do lado A                                   |
-| `partner_codes_user_b_id_idx`                            | Duplas frequentes do lado B                                                                      |
-| `reports_status_created_at_idx`                          | Fila de moderação: reports abertos, mais antigos primeiro                                        |
-| `reports_reported_id_created_at_idx`                     | Histórico de denúncias contra um jogador (decidir banimento)                                     |
-| `reports_reporter_id_created_at_idx`                     | Limitar denúncias por autor (abuso do recurso)                                                   |
-| `reports_match_id_idx`                                   | Denúncias de uma partida e o `SetNull` do expurgo sem varredura                                  |
-| `user_achievements_pkey` `(user_id, achievement_id)`     | `GET /me/achievements`, perfil público (prefixo `user_id`) e a soma atômica `ON CONFLICT`        |
-| `user_missions_pkey` `(user_id, mission_id, period_key)` | Soma atômica de progresso e `ensureMissions` idempotente (`ON CONFLICT DO NOTHING`)              |
-| `user_missions_user_id_period_key_idx`                   | `GET /me/missions`: missões do usuário no dia e na semana (`period_key IN (...)`)                |
-| `user_stats_pkey` `(user_id, variant)`                   | `GET /me` e perfil público: estatísticas por variante; soma atômica                              |
-| `progression_applied_pkey` `(match_id)`                  | Decide, por partida, quem aplica a progressão (inserção única; transação concorrente espera)     |
+| Índice                                                   | Consulta                                                                                                                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users_provider_provider_subject_key` (UNIQUE)           | `findByProvider` no login (guest, Google, Apple) e `POST /auth/link`                                                                                                      |
+| `users_nickname_lower_key` (UNIQUE em `lower(nickname)`) | Apelido único sem diferenciar caixa; busca por apelido sem diferença de caixa (`lower(...) = ?`)                                                                          |
+| `match_players_user_id_match_id_idx`                     | `GET /matches`: partidas de um usuário (junta com `matches` por `match_id`)                                                                                               |
+| `matches_ended_at_id_idx` (`ended_at DESC, id DESC`)     | Ordenação e cursor `(ended_at, id)` de `GET /matches`; expurgo por `ended_at`                                                                                             |
+| `blocks_blocker_id_blocked_id_key` (UNIQUE)              | "Quem eu bloqueei" (prefixo `blocker_id`) e `addBlock` idempotente                                                                                                        |
+| `blocks_blocked_id_idx`                                  | "Quem me bloqueou": o sorteio de mesa pública checa os dois sentidos                                                                                                      |
+| `partner_codes_user_a_id_user_b_id_key` (UNIQUE)         | `GET/PUT /me/partners/:id/codes` e duplas frequentes do lado A                                                                                                            |
+| `partner_codes_user_b_id_idx`                            | Duplas frequentes do lado B                                                                                                                                               |
+| `reports_status_created_at_idx`                          | Fila de moderação: reports abertos, mais antigos primeiro                                                                                                                 |
+| `reports_reported_id_created_at_idx`                     | Histórico de denúncias contra um jogador (decidir banimento)                                                                                                              |
+| `reports_reporter_id_created_at_idx`                     | Limitar denúncias por autor (abuso do recurso)                                                                                                                            |
+| `reports_match_id_idx`                                   | Denúncias de uma partida e o `SetNull` do expurgo sem varredura                                                                                                           |
+| `reports_reporter_id_reported_id_match_id_key` (UNIQUE)  | Uma denúncia por (denunciante, denunciado, partida): `POST /reports` repetido não grava de novo (migração `20261106100000_reports_unique`, auditoria 6I). NULL não colide |
+| `user_achievements_pkey` `(user_id, achievement_id)`     | `GET /me/achievements`, perfil público (prefixo `user_id`) e a soma atômica `ON CONFLICT`                                                                                 |
+| `user_missions_pkey` `(user_id, mission_id, period_key)` | Soma atômica de progresso e `ensureMissions` idempotente (`ON CONFLICT DO NOTHING`)                                                                                       |
+| `user_missions_user_id_period_key_idx`                   | `GET /me/missions`: missões do usuário no dia e na semana (`period_key IN (...)`)                                                                                         |
+| `user_stats_pkey` `(user_id, variant)`                   | `GET /me` e perfil público: estatísticas por variante; soma atômica                                                                                                       |
+| `progression_applied_pkey` `(match_id)`                  | Decide, por partida, quem aplica a progressão (inserção única; transação concorrente espera)                                                                              |
 
 `GET /matches` pagina por cursor (`endedAt`, `id`) em vez de `OFFSET`: o custo não cresce com a página e o empate de `ended_at` é resolvido pelo id. O cursor é opaco (base64url) e o servidor devolve `InvalidInputError` se vier adulterado. Tamanho de página padrão 20, máximo 50. O resumo devolvido não contém `events`, `deals` nem `seed`.
 
