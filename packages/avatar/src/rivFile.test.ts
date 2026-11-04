@@ -29,7 +29,16 @@ describe('assets/rive/avatar.riv', () => {
     }
   });
 
-  it('tem um input Number para cada parte do avatar', () => {
+  // Fatia 3: 13 Numbers (com `brows` e `nose`), 6 rostos, 6 estilos de olho, 4 sobrancelhas e 8 narizes.
+  // O .riv guarda o nome das animações (não o dos objetos): confere a última timeline de cada dimensão.
+  it('tem as animações dos rostos, olhos, sobrancelhas e narizes da Fatia 3', () => {
+    for (const name of ['face_5', 'eyes_5', 'brows_3', 'nose_7']) {
+      expect(text.includes(name), `animação ausente no .riv: ${name}`).toBe(true);
+    }
+  });
+
+  it('tem um input Number para cada parte do avatar (13)', () => {
+    expect(AVATAR_PART_KEYS).toHaveLength(13);
     for (const key of AVATAR_PART_KEYS) {
       expect(text.includes(key), `input ausente no .riv: ${key}`).toBe(true);
     }

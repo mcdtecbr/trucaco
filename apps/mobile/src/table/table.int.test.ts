@@ -611,6 +611,8 @@ describe('4E/4F: sinais e avatar contra o servidor real', () => {
       hair_color: 4,
       eye_color: 2,
       outfit_color: 9,
+      brows: 2,
+      nose: 5,
     };
     const ps = await seatedAndPlaying(async (all) => {
       const s = all[1]!.session;

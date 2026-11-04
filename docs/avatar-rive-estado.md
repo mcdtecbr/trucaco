@@ -178,3 +178,33 @@ Arquivo "Untitled" (editor.rive.app/file/untitled/2701970): artboard `Avatar` 51
 - Renomear input existente: clicar, esperar, `F2`, digitar, `Enter`. Renomear a state machine **não funcionou** (duplo clique, F2, menu de contexto sem "Rename"); renomear manualmente para `Main` ou ajustar `AVATAR_STATE_MACHINE` em `packages/avatar/src/signals.ts`.
 - A lista de inputs marca "Deprecated" na seção de inputs da state machine: o Rive está migrando para data binding de ViewModel. Os runtimes ainda leem inputs; conferir se o seu plano e versão mantêm isso.
 - Vários recursos mostram "Upgrade" (Share, Tags): conferir se o plano permite exportar `.riv` e o uso comercial.
+
+## Fatia 3: rosto, olhos, sobrancelhas e nariz (05/11/2026)
+
+Ampliação do catálogo, fatia 3 de 5 (ADR 0006). `avatar.riv` de 38,5 KB (é o export `avatar (11).riv`), só o artboard `Avatar`, state machine `Main`, **13 Numbers e 16 triggers**. Orçamento de vértices do rig: 760 (122 paths, 725 vértices).
+
+- Dimensões novas: `brows` (4) e `nose` (8), ao fim de `AVATAR_PART_KEYS`. `face_shape` e `eyes` passam a 6 opções.
+- Estrutura no Rive: Solo `brows4` dentro do `Bone 1`, com 4 grupos `bset_0..3` (par l/r em cada); Solo `noses3` com 8 narizes; grupo `fatia3b` com os Solos `eyesL` e `eyesR` (6 filhos `eyeL_n`/`eyeR_n`); Solo `faces3` com 6 rostos.
+- Timelines `face_0..5`, `eyes_0..5`, `brows_0..3` e `nose_0..7`; layers `eyes`, `brows` e `nose`. A layer dos rostos ficou com o nome "Layer 2" (renomear falhou).
+- `idle_blink`, `idle_look` e `sig_look_away` chaveiam o grupo `fatia3b`; `sig_wink` e `sig_wink_r` chaveiam `eyesL` e `eyesR`; `sig_nose_twitch` foi refeita (balanço em X do `noses3`, 900 ms); `sig_eyebrow` sobe o Solo das sobrancelhas 14 px.
+- Código e banco: `PROTOCOL_VERSION` 4. Migração `20261105120000_avatar_rosto` faz `DELETE FROM "avatars"` por decisão do usuário (sem compatibilidade); os avatares são recriados no criador.
+- Validado no runtime web (`@rive-app/canvas` 2.21.6): 13 Numbers, 16 triggers, `Main`, só `Avatar`; 6 rostos, 6 estilos de olho, 4 sobrancelhas, 8 narizes, 3 cores de olho, 8 cores de sobrancelha (seguem `hair_color`) e 8 tons de pele nos rostos e narizes. `wink_l` e `wink_r` fecham o olho nos estilos 0, 1, 3, 4 e 5. `sig_eyebrow` foi validado só pelo número (14 px): o movimento é sutil e não ficou nítido nas capturas. Aparelho iOS/Android não testado.
+
+Receitas do editor aprendidas:
+
+- **Path importado aberto:** um caminho fechado cuja última curva termina no ponto inicial pode entrar ABERTO no Rive. O preenchimento fecha com uma reta e aparece uma diagonal no canto do rosto. Correção: selecionar o objeto, Edit Vertices, "Close Path". Feito em oval, round, triangle, long e heart; face_square já estava certo. Conferir qualquer path importado grande e arredondado.
+- **Busca em Animations:** com o filtro de busca ativo, a timeline nova some e o nome digitado vira atalho. Limpar a busca antes de criar.
+- **Campo de tempo da timeline:** não digitar nele. As teclas viram atalhos e alteram opacidade e vértices (desfeito com Ctrl+Z). Posicionar o playhead clicando na régua.
+- **Chave com valor igual:** digitar o valor e clicar no diamante só cria chave se o valor mudar. Para chavear um valor igual ao atual, clicar no diamante com o valor já no ponto.
+- **Edição em outro quadro:** o Rive cria uma chave em 0 com o valor original ao editar em outro quadro. Conferir antes de dar por certa a animação.
+- **Validação no runtime:** capturar sinais com vários canvases na mesma página atrasa os timers e dá falso negativo. O "wink não fecha" inicial era artefato de captura. Validar com um canvas por vez.
+
+Lacunas e pendências:
+
+- Nariz sem o Multiply 70% e Feather 5 do desenho anterior (preenchimento sólido da sombra da pele).
+- Ajustes de pescoço, sombra e nariz da fatia 1 seguem só no Rive, fora do `art.ts`.
+- `sig_tongue` (fatia 2): transição de ida sem 150 ms e Cubic, e giro/balanço da língua só no fallback.
+- `idle_blink` aleatório não validado por captura nos 6 estilos de olho.
+- `sig_eyebrow` pouco nítido.
+- Layer dos rostos chamada "Layer 2"; grupos e objetos do Rive com nomes genéricos ("Group").
+- Nada testado em iOS/Android. O Rive não é o renderizador de produção (ADR 0002).

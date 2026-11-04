@@ -45,7 +45,7 @@ const BLUSH = 'rgba(0,0,0,0.16)';
 type Region = readonly [x: number, y: number, w: number, h: number];
 const FULL: Region = [0, 0, 512, 512];
 const REGIONS = {
-  nose: [224, 232, 64, 62],
+  nose: [216, 230, 80, 66],
   eyeL: [160, 189, 96, 90],
   eyeR: [256, 189, 96, 90],
   browL: [172, 178, 80, 44],
@@ -88,6 +88,8 @@ export function AvatarFallback(props: AvatarFallbackProps) {
     hair_color: safeIndex('hair_color', parsed.hair_color),
     eye_color: safeIndex('eye_color', parsed.eye_color),
     outfit_color: safeIndex('outfit_color', parsed.outfit_color),
+    brows: safeIndex('brows', parsed.brows),
+    nose: safeIndex('nose', parsed.nose),
   };
   const bg = BG_COLORS[cfg.bg_color] ?? BG_COLORS[0]!;
   const skin = resolveFill('skin', cfg);

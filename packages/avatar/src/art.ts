@@ -1,5 +1,5 @@
 /**
- * Arte vetorial do avatar: os mesmos 75 paths do rig `assets/rive/avatar.riv` (viewBox 512x512). É o que
+ * Arte vetorial do avatar: os mesmos 104 paths do rig `assets/rive/avatar.riv` (viewBox 512x512). É o que
  * o `AvatarFallback` desenha com react-native-svg, então fallback e Rive mostram o mesmo avatar (ADR 0003).
  * Só caminhos absolutos M/L/C/Q/Z (contagem de vértices confiável). Sem bitmaps.
  */
@@ -46,8 +46,59 @@ export type Selector = ((c: Cfg) => boolean) & { key: AvatarPartKey; value: numb
 const is = (k: AvatarPartKey, v: number): Selector =>
   Object.assign((c: Cfg) => c[k] === v, { key: k, value: v });
 
+/** Par de peças de olho (esquerdo da tela e direito, espelhado): `<name>` e `<name>_r`. */
+const eyePair = (name: string, eyes: number, fill: Fill, d: string): Part[] => [
+  { name, layer: 5, fill, when: is('eyes', eyes), d },
+  { name: `${name}_r`, layer: 5, fill, when: is('eyes', eyes), mirror: true, d },
+];
+/** Par de sobrancelhas (esquerda da tela e direita, espelhada) de um estilo `brows`. */
+const browPair = (names: readonly [string, string], brows: number, d: string): Part[] => [
+  { name: names[0], layer: 5, fill: HAIR, when: is('brows', brows), d },
+  { name: names[1], layer: 5, fill: HAIR, when: is('brows', brows), mirror: true, d },
+];
+
 const TILT_CAP = 'rotate(-5 256 150)';
 const TILT_HAT = 'rotate(-4 256 150)';
+
+/** Sobrancelha esquerda (da tela) de cada estilo; a direita é a mesma espelhada. */
+const BROWS: readonly string[] = [
+  'M174,210Q178,198 212,196Q238,194 248,200Q250,208 242,210Q214,204 186,214Q174,216 174,210Z',
+  'M174,196Q196,190 222,200Q244,208 250,216Q246,224 238,220Q220,212 196,206Q182,204 174,196Z',
+  'M174,214Q200,206 226,198Q244,188 252,184Q250,196 240,204Q214,214 186,220Q174,220 174,214Z',
+  'M174,214Q196,192 222,192Q244,194 250,208Q232,200 218,202Q196,204 174,214Z',
+];
+
+/**
+ * Nariz de frente (silhueta com asas) a partir de: topo, meia-largura da ponte, meia-largura das asas,
+ * y das asas e y da base. Proporções medidas nas duas fileiras de narizes da prancha de referência.
+ */
+function nose(
+  top: number,
+  bridge: number,
+  wing: number,
+  wingY: number,
+  base: number,
+  flat = 0,
+): string {
+  const x = (dx: number) => f(256 + dx);
+  return (
+    `M${x(-flat)},${top}${flat > 0 ? `L${x(flat)},${top}` : ''}Q${x(bridge)},${top + 6} ${x(bridge)},${f((top + wingY) / 2)}` +
+    `Q${x(bridge)},${wingY - 8} ${x(wing)},${wingY - 2}Q${x(wing + 4)},${wingY + 8} ${x(wing - 8)},${wingY + 10}` +
+    `Q${x(wing / 2)},${base} 256,${base - 2}Q${x(-wing / 2)},${base} ${x(-wing + 8)},${wingY + 10}` +
+    `Q${x(-wing - 4)},${wingY + 8} ${x(-wing)},${wingY - 2}Q${x(-bridge)},${wingY - 8} ${x(-bridge)},${f((top + wingY) / 2)}` +
+    `Q${x(-bridge)},${top + 6} ${x(-flat)},${top}Z`
+  );
+}
+const NOSES: readonly string[] = [
+  nose(236, 12, 32, 278, 292), // 0 ponte longa, ponta redonda, asas largas
+  nose(232, 6, 18, 274, 286), // 1 fino e pontudo
+  nose(234, 16, 30, 276, 290), // 2 ponte larga e alta
+  nose(238, 11, 24, 276, 288, 8), // 3 topo reto, base média
+  nose(238, 10, 32, 278, 290, 20), // 4 topo reto e largo, ponte estreita, asas largas
+  nose(236, 14, 34, 280, 294), // 5 ponta bem redonda, asas muito largas
+  nose(232, 18, 36, 278, 292), // 6 largo e robusto
+  nose(242, 7, 20, 276, 288), // 7 pequeno e estreito
+];
 
 export const PARTS: readonly Part[] = [
   // 1. Fundo
@@ -158,148 +209,139 @@ export const PARTS: readonly Part[] = [
     d: 'M150,512L168,432Q190,430 214,438Q256,470 298,438Q322,430 344,432L362,512Z',
   },
 
-  // 4. Formato da cabeça e sombra do pescoço
+  // 4. Formato da cabeça e sombra do pescoço. Os 6 formatos seguem a 1ª linha da prancha de referência
+  // (esquerda para a direita = índices 0 a 5).
   {
-    name: 'face_oval',
+    name: 'face_oval', // 0: oval alto, queixo estreito
     layer: 4,
     fill: 'skin',
     when: is('face_shape', 0),
-    d: 'M256,100C330,100 366,170 366,240C366,310 320,372 256,372C192,372 146,310 146,240C146,170 182,100 256,100Z',
+    d: 'M256,96C320,96 358,150 358,224C358,290 318,376 256,376C194,376 154,290 154,224C154,150 192,96 256,96Z',
   },
   {
-    name: 'face_square',
+    name: 'face_round', // 1: redondo largo
     layer: 4,
     fill: 'skin',
     when: is('face_shape', 1),
-    d: 'M150,130Q150,108 175,108L337,108Q362,108 362,130L368,290L332,362L180,362L144,290Z',
+    d: 'M256,104C330,104 378,160 378,234C378,314 330,372 256,372C182,372 134,314 134,234C134,160 182,104 256,104Z',
   },
   {
-    name: 'face_triangle',
+    name: 'face_square', // 2: quadrado de cantos arredondados
     layer: 4,
     fill: 'skin',
     when: is('face_shape', 2),
-    d: 'M256,104C350,104 378,170 370,230C362,280 300,330 256,380C212,330 150,280 142,230C134,170 162,104 256,104Z',
+    d: 'M138,158Q138,110 188,108L324,108Q374,110 374,158L376,290Q374,366 306,370L206,370Q138,366 136,290Z',
   },
   {
-    name: 'face_round',
+    name: 'face_heart', // 3: coração (testa larga com entalhe, queixo fino)
     layer: 4,
     fill: 'skin',
     when: is('face_shape', 3),
-    d: ell(256, 240, 128, 138),
+    d: 'M256,128Q230,100 190,104Q140,112 140,190Q142,250 176,300Q216,350 256,382Q296,350 336,300Q370,250 372,190Q372,112 322,104Q282,100 256,128Z',
+  },
+  {
+    name: 'face_triangle', // 4: bochechas largas e queixo em V
+    layer: 4,
+    fill: 'skin',
+    when: is('face_shape', 4),
+    d: 'M256,100C320,100 364,118 372,180C378,236 352,290 318,330Q286,368 256,382Q226,368 194,330C160,290 134,236 140,180C148,118 192,100 256,100Z',
+  },
+  {
+    name: 'face_long', // 5: oval comprido
+    layer: 4,
+    fill: 'skin',
+    when: is('face_shape', 5),
+    d: 'M256,88C318,88 356,134 356,210C356,290 330,382 256,382C182,382 156,290 156,210C156,134 194,88 256,88Z',
   },
   { name: 'neck_shadow', layer: 4, d: 'M224,366Q256,402 288,366L292,396L220,396Z', fill: 'shade' },
 
   // 5. Olhos, sobrancelhas, nariz e boca
-  {
-    name: 'eye_white_0',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 0),
-    d: 'M180,228Q210,204 240,228Q210,250 180,228Z',
-  },
-  {
-    name: 'eye_white_0_r',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 0),
-    mirror: true,
-    d: 'M180,228Q210,204 240,228Q210,250 180,228Z',
-  },
-  { name: 'eye_pupil_0', layer: 5, fill: 'iris', when: is('eyes', 0), d: ell(212, 228, 11, 11) },
-  {
-    name: 'eye_pupil_0_r',
-    layer: 5,
-    fill: 'iris',
-    when: is('eyes', 0),
-    mirror: true,
-    d: ell(212, 228, 11, 11),
-  },
-  {
-    name: 'eye_white_1',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 1),
-    d: 'M180,234Q210,218 240,228Q214,250 180,234Z',
-  },
-  {
-    name: 'eye_white_1_r',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 1),
-    mirror: true,
-    d: 'M180,234Q210,218 240,228Q214,250 180,234Z',
-  },
-  {
-    name: 'eye_pupil_1',
-    layer: 5,
-    fill: 'iris',
-    when: is('eyes', 1),
-    d: ell(212, 236, 9, 8) + 'M176,232L244,222L244,230Q210,232 176,242Z',
-  },
-  {
-    name: 'eye_pupil_1_r',
-    layer: 5,
-    fill: 'iris',
-    when: is('eyes', 1),
-    mirror: true,
-    d: ell(212, 236, 9, 8) + 'M176,232L244,222L244,230Q210,232 176,242Z',
-  },
-  { name: 'eye_white_2', layer: 5, fill: '#FFFFFF', when: is('eyes', 2), d: ell(208, 236, 36, 38) },
-  {
-    name: 'eye_white_2_r',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 2),
-    mirror: true,
-    d: ell(208, 236, 36, 38),
-  },
-  { name: 'eye_pupil_2', layer: 5, fill: 'iris', when: is('eyes', 2), d: ell(212, 240, 20, 22) },
-  {
-    name: 'eye_pupil_2_r',
-    layer: 5,
-    fill: 'iris',
-    when: is('eyes', 2),
-    mirror: true,
-    d: ell(212, 240, 20, 22),
-  },
-  {
-    name: 'eye_white_3',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 3),
-    d: 'M176,230Q210,214 246,230Q210,242 176,230Z',
-  },
-  {
-    name: 'eye_white_3_r',
-    layer: 5,
-    fill: '#FFFFFF',
-    when: is('eyes', 3),
-    mirror: true,
-    d: 'M176,230Q210,214 246,230Q210,242 176,230Z',
-  },
-  { name: 'eye_pupil_3', layer: 5, fill: 'iris', when: is('eyes', 3), d: ell(212, 230, 10, 7) },
-  {
-    name: 'eye_pupil_3_r',
-    layer: 5,
-    fill: 'iris',
-    when: is('eyes', 3),
-    mirror: true,
-    d: ell(212, 230, 10, 7),
-  },
-  { name: 'brow_l', layer: 5, fill: HAIR, d: 'M178,204Q210,186 244,200L242,211Q210,202 180,218Z' },
-  {
-    name: 'brow_r',
-    layer: 5,
-    fill: HAIR,
-    mirror: true,
-    d: 'M178,204Q210,186 244,200L242,211Q210,202 180,218Z',
-  },
-  {
-    name: 'nose',
-    layer: 5,
-    fill: 'shade',
-    d: 'M256,238Q244,270 236,278Q256,288 276,278Q268,270 256,238Z',
-  },
+  // Olhos (6 estilos, na ordem da prancha de referência: cima para baixo): 0 amendoado com delineador,
+  // 1 aberto com pálpebra marcada, 2 redondo liso, 3 arregalado com cílios, 4 grande com brilho,
+  // 5 cílios longos. Cada estilo: branco, íris (cor = `eye_color`), miolo, pálpebra/cílios (e brilho no 4).
+  ...eyePair('eye_white_0', 0, '#FFFFFF', 'M176,236Q208,206 246,232Q210,258 176,236Z'),
+  ...eyePair('eye_pupil_0', 0, 'iris', ell(210, 233, 13, 13)),
+  ...eyePair('eye_core_0', 0, '#0B0B0D', ell(210, 233, 6, 6)),
+  ...eyePair(
+    'eye_lid_0',
+    0,
+    '#241A1A',
+    'M164,230Q176,222 192,213Q224,200 250,228L246,232Q222,210 194,222Q182,230 170,236Z',
+  ),
+  ...eyePair(
+    'eye_white_1',
+    1,
+    '#FFFFFF',
+    'M174,238Q176,208 210,206Q244,208 246,238Q240,262 210,262Q178,262 174,238Z',
+  ),
+  ...eyePair('eye_pupil_1', 1, 'iris', ell(210, 236, 18, 18)),
+  ...eyePair('eye_core_1', 1, '#0B0B0D', ell(210, 236, 8, 8)),
+  ...eyePair(
+    'eye_lid_1',
+    1,
+    '#241A1A',
+    'M170,234Q176,198 212,196Q246,198 250,234Q244,210 212,205Q178,208 170,234Z',
+  ),
+  ...eyePair('eye_white_2', 2, '#FFFFFF', ell(208, 236, 31, 31)),
+  ...eyePair('eye_pupil_2', 2, 'iris', ell(210, 236, 15, 15)),
+  ...eyePair('eye_core_2', 2, '#0B0B0D', ell(210, 236, 7, 7)),
+  ...eyePair(
+    'eye_lid_2',
+    2,
+    '#241A1A',
+    'M176,230Q182,206 208,205Q234,206 240,230Q232,214 208,213Q184,214 176,230Z',
+  ),
+  ...eyePair('eye_white_3', 3, '#FFFFFF', ell(208, 236, 35, 36)),
+  ...eyePair('eye_pupil_3', 3, 'iris', ell(208, 238, 8, 8)),
+  ...eyePair(
+    'eye_lid_3',
+    3,
+    '#241A1A',
+    'M172,234Q178,198 208,198Q238,198 244,234Q238,208 208,206Q180,208 172,234Z' +
+      'M176,218L160,208Q170,206 182,212Z' +
+      'M184,206L170,192Q182,192 192,201Z' +
+      'M198,200L192,184Q204,188 207,198Z',
+  ),
+  ...eyePair('eye_white_4', 4, '#FFFFFF', ell(208, 236, 34, 34)),
+  ...eyePair('eye_pupil_4', 4, 'iris', ell(210, 238, 22, 22)),
+  ...eyePair('eye_core_4', 4, '#0B0B0D', ell(210, 238, 9.5, 9.5)),
+  ...eyePair('eye_glint_4', 4, '#FDFDFF', ell(218, 229, 5.5, 5.5)),
+  ...eyePair(
+    'eye_lid_4',
+    4,
+    '#241A1A',
+    'M172,232Q178,198 210,196Q242,198 248,232Q242,206 210,204Q180,208 172,232Z',
+  ),
+  ...eyePair('eye_white_5', 5, '#FFFFFF', ell(208, 236, 34, 32)),
+  ...eyePair('eye_pupil_5', 5, 'iris', ell(210, 236, 17, 17)),
+  ...eyePair('eye_core_5', 5, '#0B0B0D', ell(210, 236, 8, 8)),
+  ...eyePair(
+    'eye_lid_5',
+    5,
+    '#241A1A',
+    'M172,232Q178,200 210,198Q242,200 248,232Q242,210 210,208Q180,210 172,232Z' +
+      'M172,236L156,238Q160,230 174,228Z' +
+      'M174,226L158,218Q168,214 180,220Z' +
+      'M184,212L172,198Q184,198 192,206Z',
+  ),
+  // Sobrancelhas (4 estilos da prancha; cor = `hair_color`): 0 arco grosso, 1 inclinada para baixo (brava),
+  // 2 inclinada para cima (preocupada), 3 arco fino. As de índice 0 usam os nós `brow_l`/`brow_r`.
+  { name: 'brow_l', layer: 5, fill: HAIR, when: is('brows', 0), d: BROWS[0]! },
+  { name: 'brow_r', layer: 5, fill: HAIR, when: is('brows', 0), mirror: true, d: BROWS[0]! },
+  ...browPair(['brow_1_l', 'brow_1_r'], 1, BROWS[1]!),
+  ...browPair(['brow_2_l', 'brow_2_r'], 2, BROWS[2]!),
+  ...browPair(['brow_3_l', 'brow_3_r'], 3, BROWS[3]!),
+  // Narizes (8 estilos das duas fileiras da prancha, só os de frente; cor = sombra da pele). O 0 usa o nó `nose`.
+  { name: 'nose', layer: 5, fill: 'shade', when: is('nose', 0), d: NOSES[0]! },
+  ...NOSES.slice(1).map(
+    (d, i): Part => ({
+      name: `nose_${i + 1}`,
+      layer: 5,
+      fill: 'shade',
+      when: is('nose', i + 1),
+      d,
+    }),
+  ),
   // Bocas (5 opções; ADR 0004 / Fatia 2). Cada uma é lábio superior + inferior; a 1 e a 2 têm interior
   // (e dentes na 1) porque a abertura precisa de cor própria. Lábios com arco do cupido e inferior cheio.
   {
@@ -607,9 +649,9 @@ export type ArtGroup =
 
 export function artGroup(p: Part): ArtGroup | null {
   if (p.name === 'BG') return null;
-  if (p.name === 'nose') return 'nose';
-  if (p.name === 'brow_l') return 'browL';
-  if (p.name === 'brow_r') return 'browR';
+  if (/^nose(_\d)?$/.test(p.name)) return 'nose';
+  if (/^brow_(\d_)?l$/.test(p.name)) return 'browL';
+  if (/^brow_(\d_)?r$/.test(p.name)) return 'browR';
   if (p.name.startsWith('eye_')) return p.mirror === true ? 'eyeR' : 'eyeL';
   if (p.name === 'tongue_center') return 'tongueCenter';
   if (p.name === 'tongue') return 'tongueSide';

@@ -6,14 +6,14 @@ import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } 
 const base = DEFAULT_AVATAR_PARTS;
 
 describe('arte do avatar (mesmos paths do rig)', () => {
-  it('tem os 75 paths do rig, com nomes únicos e orçamento de vértices', () => {
-    // 65 (Fatia 1) + 10: boca 4 (2), interior e dentes da boca 1 (2), interior da boca 2 (1) e 5 peças
-    // ocultas da boca aberta dos sinais (dentes de cima e de baixo, lábios aberto superior e inferior,
-    // língua centrada; `mouth_inside` e `tongue` já existiam). O orçamento de vértices continua 420
-    // (total atual: 403): as peças novas cabem nele, então não foi elevado.
-    expect(PARTS).toHaveLength(75);
+  it('tem os 122 paths do rig, com nomes únicos e orçamento de vértices', () => {
+    // Fatia 3: rostos (6) e olhos (6 estilos com branco, íris, miolo, pálpebra/cílios e brilho) refeitos
+    // pela prancha de referência, mais 4 sobrancelhas e 8 narizes. O orçamento de vértices subiu de 420
+    // para 760 (total atual: 725, ~7 KB a mais no .riv). Só as peças selecionadas são desenhadas, então o
+    // custo por avatar não cresce; o teto segue valendo para a fatia 4 não estourar o arquivo sem aviso.
+    expect(PARTS).toHaveLength(122);
     expect(new Set(PARTS.map((p) => p.name)).size).toBe(PARTS.length);
-    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(420);
+    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(760);
   });
 
   it('todo `when` aponta para parte e valor dentro do catálogo', () => {
@@ -61,7 +61,53 @@ describe('arte do avatar (mesmos paths do rig)', () => {
       expect(mouthParts[0]).toMatch(new RegExp(`^mouth_${parts.mouth}_`));
       expect(names.filter((n) => /^eye_white_\d$/.test(n))).toHaveLength(1);
       expect(names.filter((n) => /^eye_white_\d_r$/.test(n))).toHaveLength(1);
+      // um nariz e um par de sobrancelhas (esquerda e direita do mesmo estilo)
+      expect(names.filter((n) => /^nose(_\d)?$/.test(n))).toEqual([
+        parts.nose === 0 ? 'nose' : `nose_${parts.nose}`,
+      ]);
+      const brows = names.filter((n) => /^brow_/.test(n));
+      expect(brows).toEqual(
+        parts.brows === 0
+          ? ['brow_l', 'brow_r']
+          : [`brow_${parts.brows}_l`, `brow_${parts.brows}_r`],
+      );
     }
+  });
+
+  it('olhos, sobrancelhas e nariz novos caem nos grupos animados certos (piscar, eyebrow, nose_twitch)', () => {
+    for (let eyes = 0; eyes < AVATAR_PART_COUNTS.eyes; eyes++) {
+      const c = { ...base, eyes };
+      const eyeParts = selectParts(c).filter((p) => p.name.startsWith('eye_'));
+      // todo estilo tem as duas pontas: o lado esquerdo vai para eyeL e o espelhado para eyeR
+      expect(groupParts('eyeL', c).length, `eyes ${eyes}`).toBeGreaterThanOrEqual(2);
+      expect(groupParts('eyeL', c).length).toBe(groupParts('eyeR', c).length);
+      expect(groupParts('eyeL', c).length + groupParts('eyeR', c).length).toBe(eyeParts.length);
+    }
+    for (let brows = 0; brows < AVATAR_PART_COUNTS.brows; brows++) {
+      const c = { ...base, brows };
+      expect(groupParts('browL', c), `brows ${brows}`).toHaveLength(1);
+      expect(groupParts('browR', c)).toHaveLength(1);
+      expect(groupParts('browR', c)[0]!.mirror).toBe(true);
+    }
+    for (let nose = 0; nose < AVATAR_PART_COUNTS.nose; nose++) {
+      expect(groupParts('nose', { ...base, nose }), `nose ${nose}`).toHaveLength(1);
+    }
+  });
+
+  it('os 6 rostos seguem a ordem da prancha: oval, redondo, quadrado, coração, V, longo', () => {
+    const faces = [0, 1, 2, 3, 4, 5].map(
+      (face_shape) =>
+        selectParts({ ...base, face_shape }).find((p) => p.name.startsWith('face_'))!.name,
+    );
+    expect(faces).toEqual([
+      'face_oval',
+      'face_round',
+      'face_square',
+      'face_heart',
+      'face_triangle',
+      'face_long',
+    ]);
+    expect(new Set(PARTS.filter((p) => p.name.startsWith('face_')).map((p) => p.d)).size).toBe(6);
   });
 
   it('desenha na ordem de sobreposição (layer crescente)', () => {

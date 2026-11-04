@@ -30,7 +30,7 @@ describe('protocol', () => {
   });
 
   it('constantes', () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+    expect(PROTOCOL_VERSION).toBe(4);
     expect(TURN_TIMEOUT_MS).toBe(20000);
     expect(RECONNECT_SECONDS).toBe(60);
     expect(SFX_COOLDOWN_MS).toBe(5000);

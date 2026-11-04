@@ -18,6 +18,9 @@ export const AVATAR_PART_KEYS = [
   'hair_color',
   'eye_color',
   'outfit_color',
+  // Rosto (Fatia 3): sobrancelhas e nariz, dimensões novas. Acrescentadas ao fim, nesta ordem.
+  'brows',
+  'nose',
 ] as const;
 export type AvatarPartKey = (typeof AVATAR_PART_KEYS)[number];
 
@@ -28,10 +31,10 @@ export type AvatarPartKey = (typeof AVATAR_PART_KEYS)[number];
  * `docs/adr/0003-catalogo-do-avatar-segue-o-riv.md`.
  */
 export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
-  face_shape: 4,
+  face_shape: 6,
   skin: 8,
   hair: 8,
-  eyes: 4,
+  eyes: 6,
   mouth: 5,
   outfit: 6,
   accessory: 3,
@@ -39,6 +42,8 @@ export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   hair_color: 8,
   eye_color: 3,
   outfit_color: 11,
+  brows: 4,
+  nose: 8,
 };
 
 /** Vozes do avatar (usadas na Fase 5b; já reservadas no contrato). */
@@ -57,6 +62,8 @@ export interface AvatarParts {
   readonly hair_color: number;
   readonly eye_color: number;
   readonly outfit_color: number;
+  readonly brows: number;
+  readonly nose: number;
   readonly voice?: VoiceId;
 }
 
@@ -73,6 +80,8 @@ export const DEFAULT_AVATAR_PARTS: AvatarParts = {
   hair_color: 0,
   eye_color: 0,
   outfit_color: 0,
+  brows: 0,
+  nose: 0,
 };
 
 const KEY_SET: ReadonlySet<string> = new Set([...AVATAR_PART_KEYS, 'voice']);

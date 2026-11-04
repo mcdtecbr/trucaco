@@ -22,10 +22,10 @@ Cada input recebe o **índice** da variante (0 até n-1). O valor padrão de tod
 
 | Input (Number) | Variantes | O que controla                      |
 | -------------- | --------- | ----------------------------------- |
-| `face_shape`   | 4         | Formato do rosto                    |
+| `face_shape`   | 6         | Formato do rosto                    |
 | `skin`         | 8         | Cor da pele                         |
 | `hair`         | 8         | Cabelo (estilo e cor juntos)        |
-| `eyes`         | 4         | Estilo dos olhos                    |
+| `eyes`         | 6         | Estilo dos olhos                    |
 | `mouth`        | 5         | Estilo da boca                      |
 | `outfit`       | 6         | Roupa (modelo e cor juntos)         |
 | `accessory`    | 3         | Acessório (índice 0 = nenhum)       |
@@ -33,8 +33,10 @@ Cada input recebe o **índice** da variante (0 até n-1). O valor padrão de tod
 | `hair_color`   | 8         | Cor do cabelo, sobrancelha e bigode |
 | `eye_color`    | 3         | Cor da pupila                       |
 | `outfit_color` | 11        | Cor da roupa (0 = padrão do modelo) |
+| `brows`        | 4         | Sobrancelhas (cor = `hair_color`)   |
+| `nose`         | 8         | Nariz (cor = sombra da pele)        |
 
-São **11 Numbers** (ADR 0004). Cor é dimensão própria, separada da forma: `hair_color` vale para cabelo, sobrancelha e bigode (boné e chapéu não mudam); `eye_color` recolore a pupila; `outfit_color` 0 usa a cor principal de cada modelo de roupa e 1 a 10 aplicam a paleta (`OUTFIT_COLORS`). As chaves novas ficam ao fim de `AVATAR_PART_KEYS`.
+São **13 Numbers** (ADR 0004 e 0006; `face_shape` e `eyes` têm 6 opções). Cor é dimensão própria, separada da forma: `hair_color` vale para cabelo, sobrancelha e bigode (boné e chapéu não mudam); `eye_color` recolore a pupila; `outfit_color` 0 usa a cor principal de cada modelo de roupa e 1 a 10 aplicam a paleta (`OUTFIT_COLORS`). As chaves novas ficam ao fim de `AVATAR_PART_KEYS`.
 
 Os nomes são exatamente estes (minúsculas, sublinhado). O catálogo e as contagens vivem em `@trucaco/protocol` (`AVATAR_PART_KEYS`, `AVATAR_PART_COUNTS`).
 
@@ -88,7 +90,7 @@ O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma 
 - **`accessory` (3)**: 0 nenhum; 1 bigode (cor do cabelo); 2 brinco dourado (#F5B301). Óculos e boné de acessório **não existem**: os óculos escondem o piscar de olho, base dos sinais (ADR 0003).
 - **`bg_color` (8)**: 0 verde (#1E5631); 1 azul (#1D4ED8); 2 vermelho (#991B1B); 3 laranja (#D97706); 4 cinza (#4B5563); 5 roxo (#581C87); 6 laranja escuro (#C2410C); 7 turquesa (#0F766E). Cor chapada, sem degradê.
 
-A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (75 paths e 403 vértices, orçamento de 420; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
+A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (122 paths e 725 vértices, orçamento de 760; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
 
 Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam livremente (boné e chapéu cobrem o cabelo sem vazar; o cabelo longo e o afro ficam atrás do rosto). Camadas, de trás para a frente: fundo, cabelo de trás, pescoço e ombros/roupa, rosto, cabelo da frente, sobrancelhas, olhos, nariz, bochechas de sinal, boca, sinais de boca (dentes, língua, sorriso), acessório.
 

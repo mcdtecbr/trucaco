@@ -6,10 +6,31 @@ import { AVATAR_PART_COUNTS, type AvatarPartKey } from '@trucaco/protocol';
  * Os índices já estão gravados nos perfis: reordenar exige migração.
  */
 export const PART_VARIANT_NAMES: Readonly<Record<AvatarPartKey, readonly string[]>> = {
-  face_shape: ['oval', 'quadrado', 'triângulo', 'redondo'],
+  // Fatia 3: os 6 formatos da 1ª linha da prancha de referência, da esquerda para a direita.
+  face_shape: ['oval alto', 'redondo', 'quadrado', 'coração', 'queixo em V', 'longo'],
   skin: ['clara', 'dourada', 'morena', 'marrom', 'marrom escura', 'terrosa', 'oliva', 'rosada'],
   hair: ['careca', 'curto', 'afro', 'longo', 'coque', 'boné', 'chapéu', 'topete'],
-  eyes: ['normal', 'sonolento', 'grande', 'pequeno'],
+  // Fatia 3: estilos da prancha de referência, de cima para baixo.
+  eyes: [
+    'amendoado com delineador',
+    'aberto com pálpebra marcada',
+    'redondo liso',
+    'arregalado com cílios',
+    'grande com brilho',
+    'cílios longos',
+  ],
+  brows: ['arco grosso', 'inclinada para baixo', 'inclinada para cima', 'arco fino'],
+  // Os 8 primeiros narizes de frente das duas fileiras da prancha (esquerda, depois direita).
+  nose: [
+    'ponta redonda',
+    'fino e pontudo',
+    'ponte larga',
+    'topo reto',
+    'topo largo',
+    'bulbo grande',
+    'largo e robusto',
+    'pequeno',
+  ],
   // 0..3 mantêm o lugar (o visual de quem já salvou continua parecido); 4 é nova (cresceu de 4 para 5).
   mouth: [
     'sorriso discreto',
@@ -83,9 +104,6 @@ export const HAIR_COLORS: readonly string[] = [
   '#2B6CB0',
   '#D64C8F',
 ];
-
-/** Cor padrão do cabelo (índice 0). Mantida por compatibilidade. */
-export const HAIR_COLOR = HAIR_COLORS[0]!;
 
 /** Cores da íris/pupila (input `eye_color`). */
 export const EYE_COLORS: readonly string[] = ['#1B1B1F', '#6B3F1F', '#2B72C9'];
