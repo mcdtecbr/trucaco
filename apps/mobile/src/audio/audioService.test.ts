@@ -35,8 +35,8 @@ async function ready(audio: AudioService) {
 describe('pré-carregamento', () => {
   it('carrega só um take por evento das vozes presentes (com fallback por grupo) e os efeitos de jogo', async () => {
     const { backend, audio } = setup();
-    await audio.preloadVoices(['masc_3', 'masc_1', 'fem_2']);
-    // masc_3 -> masc_1 (já pedida), fem_2 -> fem_1: duas vozes, 1 take por evento, sem duplicar.
+    await audio.preloadVoices(['masc_3', 'masc_4', 'masc_1', 'fem_2', 'fem_4']);
+    // masc_3/masc_4 -> masc_1 (já pedida), fem_2/fem_4 -> fem_1: duas vozes, 1 take por evento, sem duplicar.
     expect(backend.loads).toHaveLength(VOICE_EVENTS.length * 2);
     await audio.preloadSfx();
     expect(backend.loads).toHaveLength(VOICE_EVENTS.length * 2 + GAME_SFX_IDS.length);

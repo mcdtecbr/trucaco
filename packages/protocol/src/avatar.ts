@@ -63,8 +63,18 @@ export function isHatAllowed(hair: number, hat: number): boolean {
   return hat === 0 || !HAIR_WITHOUT_HAT.includes(hair);
 }
 
-/** Vozes do avatar (usadas na Fase 5b; já reservadas no contrato). */
-export const VOICE_IDS = ['masc_1', 'masc_2', 'masc_3', 'fem_1', 'fem_2', 'fem_3'] as const;
+/** Vozes do avatar (5 masculinas e 4 femininas). Ids estáveis: o catálogo só cresce. */
+export const VOICE_IDS = [
+  'masc_1',
+  'masc_2',
+  'masc_3',
+  'masc_4',
+  'masc_5',
+  'fem_1',
+  'fem_2',
+  'fem_3',
+  'fem_4',
+] as const;
 export type VoiceId = (typeof VOICE_IDS)[number];
 
 export interface AvatarParts {

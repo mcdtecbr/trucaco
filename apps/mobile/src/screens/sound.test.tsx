@@ -215,7 +215,7 @@ describe('voz no criador de avatar', () => {
     ...over,
   });
 
-  it('lista as 6 vozes; a escolhida vem marcada (padrão masc_1); sem arquivo = "em breve" e sem Ouvir', () => {
+  it('lista as 9 vozes; a escolhida vem marcada (padrão masc_1); sem arquivo = "em breve" e sem Ouvir', () => {
     render(<AvatarEditorView {...base} parts={DEFAULT_AVATAR_PARTS} on={on()} />);
     for (const v of VOICES) expect(byTestId(`avatar-voice-${v.id}`)).not.toBeNull();
     expect(must('avatar-voice-masc_1').getAttribute('aria-checked')).toBe('true');
@@ -224,6 +224,8 @@ describe('voz no criador de avatar', () => {
     expect(disabled('avatar-voice-listen-masc_2')).toBe(true);
     expect(disabled('avatar-voice-listen-fem_1')).toBe(false);
     expect(fallbackNote('fem_3')).toContain('Feminina 1');
+    expect(fallbackNote('fem_4')).toContain('Feminina 1');
+    expect(fallbackNote('masc_4')).toContain('Masculina 1');
     expect(fallbackNote('masc_1')).toBeNull();
   });
 

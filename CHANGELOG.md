@@ -4,6 +4,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Vozes: catálogo ampliado de 6 para 9 (2026-11-04), branch `feat/audio-vozes-gemini`
+
+- `VOICE_IDS` passa a `masc_1..masc_5` e `fem_1..fem_4` (só acrescenta; ids antigos intactos). Sem migração (`voice` vive no JSON `parts`, validado por `parseAvatarParts`) e sem bump de `PROTOCOL_VERSION` (mudança aditiva, como o chat e o `voice` da 5b). Rótulos, notas de fallback e tela de som seguem `VOICE_IDS`.
+- Vozes alvo no Gemini TTS (`gemini-3.8-flash-tts`): Puck, Schedar, Zubenelgenubi, Sadaltager, Fenrir, Autonoe, Aoede, Despina, Zephyr. Sem arquivo novo: só `masc_1` e `fem_1` têm placeholder; as demais caem no fallback do grupo ("em breve"). Licença comercial do áudio gerado ainda não confirmada.
+
 ### Fase 6, blocos 6A e 6B: contrato, bloqueio, denúncia, histórico e apagar conta (2026-11-04), em andamento, branch `feat/fase-6b-social`
 
 Ressalvas: login Google e Apple (6F), conquistas, missões e estatísticas (6C a 6E) ainda não entraram. Bloquear e denunciar só a partir do histórico (o assento na mesa não tem `userId` público). Não validado em aparelho iOS ou Android, com leitor de tela, nem por E2E novo de histórico, bloqueio e apagar conta. Plano e status em `docs/specs/2026-11-04-fase-6-plano.md` (seção 7); contrato em `docs/protocolo-servidor.md`.
