@@ -10,7 +10,7 @@ describe('http', () => {
   it('códigos únicos, ordenados e com os de handshake e de refresh', () => {
     expect(new Set(HTTP_ERROR_CODES).size).toBe(HTTP_ERROR_CODES.length);
     expect([...HTTP_ERROR_CODES]).toEqual([...HTTP_ERROR_CODES].sort());
-    expect(HTTP_ERROR_CODES).toHaveLength(33);
+    expect(HTTP_ERROR_CODES).toHaveLength(40);
     for (const c of ['INVALID_REFRESH_TOKEN', 'BO3_REQUIRES_PRIVATE', 'TABLE_UNAVAILABLE']) {
       expect(HTTP_ERROR_CODES).toContain(c);
     }

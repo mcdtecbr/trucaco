@@ -1,5 +1,5 @@
 /** Versão do protocolo cliente/servidor. Incrementar a cada mudança incompatível de mensagem. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Ids estáveis dos sinais de truco (catálogo em docs/sinais.md). Nunca renomear, só adicionar.
  * `wink` é o olho esquerdo **da tela** (zap); `wink_r` o direito; `mouth_l`/`mouth_r` torcem a boca; `mouth_open` abre a boca com a língua ao centro. */

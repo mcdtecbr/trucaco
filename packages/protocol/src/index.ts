@@ -35,7 +35,7 @@ export type {
 } from './room';
 export { BET_CRY_BY_VALUE, BET_CRY_IDS, betCry } from './events';
 export type { BetCryId, HandEndReason, PublicGameEvent, SpecialKind } from './events';
-export { cleanPartnerCode, parseClientMessage } from './messages';
+export { cleanFreeText, cleanPartnerCode, parseClientMessage } from './messages';
 export type {
   ChatScope,
   ClientMessage,
@@ -45,12 +45,49 @@ export type {
 } from './messages';
 export {
   HTTP_ERROR_CODES,
+  HTTP_ROUTES,
+  ID_TOKEN_MAX_LENGTH,
+  MATCHES_PAGE_DEFAULT,
+  MATCHES_PAGE_MAX,
+  NONCE_MAX_LENGTH,
+  REFRESH_TOKEN_MAX_LENGTH,
+  REPORT_RATE_LIMIT_PER_HOUR,
+  REPORT_REASONS,
+  REPORT_TEXT_MAX_LENGTH,
   RESERVATION_TTL_SECONDS,
+  SOCIAL_PROVIDERS,
   WS_BEARER_PROTOCOL,
   isHttpErrorCode,
+  isReportReason,
+  isSocialProvider,
+  isUuid,
+  normalizeUuid,
+  parseBlockRequest,
+  parseDeleteAccountRequest,
+  parseLinkRequest,
+  parseReportRequest,
+  parseSocialAuthRequest,
 } from './http';
 export type {
+  AchievementsResponse,
   ApiError,
+  BlockRequest,
+  BlockedUser,
+  BlocksResponse,
+  DeleteAccountRequest,
+  LinkRequest,
+  MatchSummaryPlayerResponse,
+  MatchSummaryResponse,
+  MatchesPageResponse,
+  MissionsResponse,
+  PublicProfileResponse,
+  ReportReason,
+  ReportRequest,
+  SocialAuthRequest,
+  SocialAuthResponse,
+  SocialProvider,
+  UserStats,
+  VariantStats,
   AuthProvider,
   CreateTableRequest,
   CreateTableResponse,
@@ -98,3 +135,27 @@ export type {
   TableStateSnapshot,
   TrickSnapshot,
 } from './state';
+export {
+  ACHIEVEMENT_IDS,
+  ACHIEVEMENT_LEVELS,
+  ACHIEVEMENT_TARGETS,
+  DAILY_MISSIONS_PER_DAY,
+  MISSION_DEFINITIONS,
+  MISSION_IDS,
+  MISSION_PERIODS,
+  MISSION_TIME_ZONE,
+  achievementLevelFor,
+  isAchievementId,
+  isMissionId,
+  nextAchievementTarget,
+} from './gamification';
+export type {
+  AchievementId,
+  AchievementLevelName,
+  MissionDefinition,
+  MissionId,
+  MissionPeriod,
+  PublicAchievement,
+  UserAchievement,
+  UserMission,
+} from './gamification';

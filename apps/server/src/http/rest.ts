@@ -10,6 +10,7 @@ import type { Application, NextFunction, Request, RequestHandler, Response } fro
 import { AuthError, bearerFromHeader, type AuthService } from '../auth/authService';
 import type { RestLimits } from '../auth/config';
 import { parseAvatarParts } from '@trucaco/protocol';
+import type { MeResponse } from '@trucaco/protocol';
 import { log } from '../logger';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
 import {
@@ -254,13 +255,16 @@ export function mountRest(app: Application, opts: RestOptions): void {
     r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
       const user = locals(res).user;
       const avatar = await users.getAvatar(user.id);
-      res.json({
+      const body: MeResponse = {
         id: user.id,
         nickname: user.nickname,
         provider: user.provider,
         avatar,
         createdAt: user.createdAt.toISOString(),
-      });
+        // Zeros até o 6E (estatísticas reais); a forma já é a final (`UserStats`).
+        stats: { paulista: { played: 0, won: 0 }, mineiro: { played: 0, won: 0 } },
+      };
+      res.json(body);
     });
     r.put(byIp(ipLimiter, 60), authenticate, writeLimit, contentType, json, async (req, res) => {
       const body: unknown = req.body;
