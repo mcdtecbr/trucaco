@@ -74,7 +74,9 @@ export class MemoryProgressionRepository implements ProgressionRepository {
         const previousLevel = old?.level ?? 0;
         const progress = Math.min(
           PROGRESS_CAP,
-          a.progressSet ?? (old?.progress ?? 0) + (a.progressDelta ?? 0),
+          a.progressSet === undefined
+            ? (old?.progress ?? 0) + (a.progressDelta ?? 0)
+            : Math.max(old?.progress ?? 0, a.progressSet),
         );
         const level = Math.max(previousLevel, achievementLevelFor(a.achievementId, progress));
         const unlockedAt = old?.unlockedAt ?? (level > 0 ? (a.unlockedAt ?? now) : null);
@@ -159,6 +161,21 @@ export class MemoryProgressionRepository implements ProgressionRepository {
       .filter((r) => r.userId === id)
       .map(({ variant, played, won }) => ({ variant, played, won }))
       .sort((a, b) => byText(a.variant, b.variant));
+  }
+
+  async countWinsTogether(rawA: string, rawB: string): Promise<number> {
+    const a = normalizeId(rawA);
+    const b = normalizeId(rawB);
+    if (a === b) return 0;
+    return this.store.matches.filter(
+      (m) =>
+        this.store.progressionApplied.has(m.id) &&
+        m.input.status === 'finished' &&
+        m.input.players.every((p) => p.botFrom === null) &&
+        m.input.winnerTeam !== null &&
+        m.input.players.some((p) => p.userId === a && p.team === m.input.winnerTeam) &&
+        m.input.players.some((p) => p.userId === b && p.team === m.input.winnerTeam),
+    ).length;
   }
 
   async getPublicProfile(rawId: string): Promise<PublicProfileRecord | null> {

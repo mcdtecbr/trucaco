@@ -20,7 +20,13 @@ import { mulberry32, nextSeat, pendingSeat, teamOf } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { NotPartnersError } from '../db/types';
-import type { FinishedMatchInput, MatchRepository, PartnerCodesMap } from '../db/types';
+import type {
+  FinishedMatchInput,
+  MatchRepository,
+  PartnerCodesMap,
+  ProgressionRepository,
+  UserProgressDelta,
+} from '../db/types';
 import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
@@ -49,6 +55,39 @@ const fakeRepo: MatchRepository = {
   },
   listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
 };
+
+/** Progressão (Fase 6): guarda o que a sala aplicar; a variante `fail` sempre rejeita. */
+const progressCalls: { matchId: string; deltas: readonly UserProgressDelta[] }[] = [];
+const progressRepo = {
+  applyMatchProgress: (matchId: string, deltas: readonly UserProgressDelta[]) => {
+    progressCalls.push({ matchId, deltas });
+    return Promise.resolve({ applied: true, unlocked: [], missionsCompleted: [] });
+  },
+  countWinsTogether: () => Promise.resolve(1),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
+const failingCalls: (readonly UserProgressDelta[])[] = [];
+const failingProgressRepo = {
+  applyMatchProgress: (_matchId: string, deltas: readonly UserProgressDelta[]) => {
+    failingCalls.push(deltas);
+    return Promise.reject(new Error('banco fora'));
+  },
+  countWinsTogether: () => Promise.resolve(1),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
+
+/** Progressão que só termina quando o teste manda (prova que o dispose espera por ela). */
+const progressGate: { release: () => void }[] = [];
+const gatedProgressRepo = {
+  applyMatchProgress: () =>
+    new Promise((resolve) => {
+      progressGate.push({
+        release: () => resolve({ applied: true, unlocked: [], missionsCompleted: [] }),
+      });
+    }),
+  countWinsTogether: () => Promise.resolve(1),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
 
 /** Repositório cuja gravação só termina quando o teste manda (prova que o dispose espera). */
 const gateCalls: { input: FinishedMatchInput; release: () => void }[] = [];
@@ -152,6 +191,37 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     botThinkMs: 20,
     turnTimeoutMs: 60_000,
     matches: fakeRepo,
+  },
+  'truco-prog': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    signalCooldownMs: 50,
+    matches: fakeRepo,
+    progression: progressRepo,
+  },
+  'truco-prog-gate': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: fakeRepo,
+    progression: gatedProgressRepo,
+  },
+  'truco-prog-fail': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: fakeRepo,
+    progression: failingProgressRepo,
   },
   'truco-rematch-short': {
     ...FAST,
@@ -2209,6 +2279,66 @@ describe('TrucoRoom: revanche ("Jogar de novo")', () => {
     await settle(game, 'fim');
     return game;
   }
+
+  it('progressão: aplicada após gravar a partida, com sinais por assento', async () => {
+    savedMatches.length = 0;
+    progressCalls.length = 0;
+    const game = await startedRec('truco-prog');
+    const p1 = game.players[1] as Player;
+    p1.room.send('signal', { signalId: 'wink' });
+    await until(() => game.players.every((p) => inboxOf(p).signals.length === 1), 'sinal nos 4');
+    await drive(game, () => hasWinner(game), 'fim da série');
+    await until(() => progressCalls.length === 1, 'progressão aplicada');
+    const call = progressCalls[0] as (typeof progressCalls)[number];
+    expect(call.matchId).toBe('1'); // id devolvido por `saveMatch`
+    expect(call.deltas).toHaveLength(4);
+    expect(call.deltas.every((d) => d.played === 1)).toBe(true);
+    expect(call.deltas.filter((d) => d.won === 1)).toHaveLength(2);
+    const byAch = (d: UserProgressDelta | undefined): string[] =>
+      (d?.achievements ?? []).map((a) => a.achievementId);
+    for (const d of call.deltas) expect(byAch(d)).toContain('maratona');
+    // Só o assento que sinalizou ganha `sinaleiro`.
+    expect(call.deltas.filter((d) => byAch(d).includes('sinaleiro'))).toHaveLength(1);
+    expect(byAch(call.deltas[1])).toContain('sinaleiro');
+    expect(savedMatches).toHaveLength(1);
+  });
+
+  it('progressão com banco fora não derruba a sala nem a gravação; o log não tem PII', async () => {
+    savedMatches.length = 0;
+    failingCalls.length = 0;
+    const lines = logLines.length;
+    const game = await finished('truco-prog-fail');
+    await until(() => savedMatches.length === 1, 'partida gravada');
+    await until(() => failingCalls.length === 1, 'progressão tentada');
+    await until(
+      () => logLines.slice(lines).some((l) => l.includes('falha ao aplicar progressão')),
+      'log de erro',
+    );
+    await settle(game, 'após a falha da progressão');
+    expect(game.server.state.phase).toBe('finished');
+    expect(game.server.series?.winner).not.toBeNull();
+    const errors = logLines.slice(lines).filter((l) => l.includes('falha ao aplicar progressão'));
+    expect(errors).toHaveLength(1);
+    // Só nome do erro e código: nem a mensagem original nem userId de ninguém.
+    expect(errors[0]).not.toContain('banco fora');
+    for (const d of failingCalls[0] ?? []) expect(errors[0]).not.toContain(d.userId);
+  });
+
+  it('onDispose espera a progressão em andamento', async () => {
+    savedMatches.length = 0;
+    progressGate.length = 0;
+    const game = await finished('truco-prog-gate');
+    await until(() => progressGate.length === 1, 'progressão iniciada');
+    let done = false;
+    const disposing = Promise.resolve(game.server.onDispose()).then(() => {
+      done = true;
+    });
+    await sleep(300);
+    expect(done).toBe(false);
+    (progressGate[0] as { release: () => void }).release();
+    await disposing;
+    expect(done).toBe(true);
+  });
 
   it('publica a janela no fim com vencedor e NÃO na série cancelada', async () => {
     const game = await finished();

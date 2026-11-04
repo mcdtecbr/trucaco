@@ -41,9 +41,9 @@ export function progressionContract(name: string, harness: () => ProgressionHarn
     const user = (nick: string): Promise<UserRecord> =>
       h.users.createGuest({ providerSubject: `p-${++seq}-${nick}`, nickname: nick });
 
-    const match = async (players: readonly (string | null)[]): Promise<string> => {
+    const matchInput = async (players: readonly (string | null)[]): Promise<FinishedMatchInput> => {
       const endedAt = new Date('2026-11-04T12:00:00Z');
-      const input: FinishedMatchInput = {
+      return {
         variant: 'paulista',
         format: 'single',
         ironHand: false,
@@ -65,8 +65,9 @@ export function progressionContract(name: string, harness: () => ProgressionHarn
           botFrom: null,
         })),
       };
-      return h.matches.saveMatch(input);
     };
+    const match = async (players: readonly (string | null)[]): Promise<string> =>
+      h.matches.saveMatch(await matchInput(players));
 
     const delta = (userId: string, over: Partial<UserProgressDelta> = {}): UserProgressDelta => ({
       userId,
@@ -190,8 +191,34 @@ export function progressionContract(name: string, harness: () => ProgressionHarn
         ]);
         expect(r3.unlocked).toEqual([]);
         const [row] = await h.progression.listAchievements(a.id);
-        expect(row).toMatchObject({ achievementId: 'zap_na_mao', level: 2, progress: 3 });
+        // `progressSet` só sobe (GREATEST): 3 < 25 não rebaixa o progresso.
+        expect(row).toMatchObject({ achievementId: 'zap_na_mao', level: 2, progress: 25 });
         expect(row?.unlockedAt?.toISOString()).toBe(at.toISOString());
+      });
+
+      it('progressSet nunca regride, nem em partidas simultâneas com valores diferentes', async () => {
+        await setup();
+        const a = await user('Ana');
+        const ms = await Promise.all([1, 2, 3, 4, 5].map(() => match([a.id])));
+        const sets = [4, 9, 2, 7, 5];
+        await Promise.all(
+          ms.map((m, i) =>
+            h.progression.applyMatchProgress(m, [
+              delta(a.id, {
+                achievements: [{ achievementId: 'dupla_afinada', progressSet: sets[i] as number }],
+              }),
+            ]),
+          ),
+        );
+        const [row] = await h.progression.listAchievements(a.id);
+        expect(row).toMatchObject({ achievementId: 'dupla_afinada', progress: 9, level: 1 });
+        const m = await match([a.id]);
+        await h.progression.applyMatchProgress(m, [
+          delta(a.id, {
+            achievements: [{ achievementId: 'dupla_afinada', progressSet: 1 }],
+          }),
+        ]);
+        expect((await h.progression.listAchievements(a.id))[0]?.progress).toBe(9);
       });
 
       it('progresso abaixo do 1º degrau fica com nível 0 e sem data', async () => {
@@ -370,6 +397,66 @@ export function progressionContract(name: string, harness: () => ProgressionHarn
           ],
         });
         expect(await h.progression.getPublicProfile(GHOST)).toBeNull();
+      });
+    });
+
+    describe('countWinsTogether', () => {
+      it('conta só partidas JÁ aplicadas (progression_applied), finished, vencidas pela dupla e sem bot', async () => {
+        await setup();
+        const a = await user('Ana');
+        const b = await user('Beto');
+        const c = await user('Caio');
+        const d = await user('Duda');
+        const four = [a.id, b.id, c.id, d.id];
+        // Ana (0) e Caio (2) são dupla; Beto (1) e Duda (3) são a outra. A dupla 0 vence por padrão.
+        const apply = (id: string): Promise<unknown> =>
+          h.progression.applyMatchProgress(id, [delta(a.id)]);
+        const m1 = await match(four);
+        const m2 = await match(four);
+        await apply(m1);
+        await apply(m2);
+        // Gravada mas NÃO aplicada (anterior ao 6D, ou a que está sendo avaliada agora): não entra.
+        await match(four);
+        // Vitória da dupla 1 (Beto e Duda), aplicada: Ana e Caio perderam.
+        const lost = await h.matches.saveMatch({ ...(await matchInput(four)), winnerTeam: 1 });
+        await apply(lost);
+        // Com bot em algum assento, aplicada ou não, não entra.
+        const botInput = await matchInput(four);
+        const withBot = await h.matches.saveMatch({
+          ...botInput,
+          players: botInput.players.map((p) => (p.seat === 3 ? { ...p, botFrom: 5 } : p)),
+        });
+        await apply(withBot);
+        // Cancelada não conta.
+        const cancelled = await h.matches.saveMatch({
+          ...(await matchInput(four)),
+          status: 'cancelled',
+          winnerTeam: null,
+        });
+        await apply(cancelled);
+        expect(await h.progression.countWinsTogether(a.id, c.id)).toBe(2);
+        expect(await h.progression.countWinsTogether(c.id, a.id)).toBe(2);
+        expect(await h.progression.countWinsTogether(b.id, d.id)).toBe(1);
+        // Adversários nunca venceram juntos; o mesmo usuário consigo mesmo é zero.
+        expect(await h.progression.countWinsTogether(a.id, b.id)).toBe(0);
+        expect(await h.progression.countWinsTogether(a.id, a.id)).toBe(0);
+        expect(await h.progression.countWinsTogether(a.id, GHOST)).toBe(0);
+      });
+    });
+
+    describe('usuário apagado no meio', () => {
+      it('um usuário inexistente recusa a aplicação inteira (quem chama refaz sem ele)', async () => {
+        await setup();
+        const a = await user('Ana');
+        const b = await user('Beto');
+        const m = await match([a.id, b.id]);
+        await h.users.deleteUser(b.id);
+        await expect(
+          h.progression.applyMatchProgress(m, [delta(a.id), delta(b.id)]),
+        ).rejects.toBeInstanceOf(InvalidInputError);
+        // Nada foi gravado nem marcado: a nova tentativa só com quem existe aplica.
+        expect(await h.progression.getStats(a.id)).toEqual([]);
+        expect((await h.progression.applyMatchProgress(m, [delta(a.id)])).applied).toBe(true);
       });
     });
 

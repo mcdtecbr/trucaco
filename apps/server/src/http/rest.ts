@@ -23,6 +23,7 @@ import type {
   MatchSummaryResponse,
   MatchesPageResponse,
   MeResponse,
+  PublicProfileResponse,
 } from '@trucaco/protocol';
 import { log } from '../logger';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
@@ -33,6 +34,7 @@ import {
   PersistenceError,
   type MatchRepository,
   type MatchSummary,
+  type ProgressionRepository,
   type PartnerCodesMap,
   type UserRecord,
   type UserRepository,
@@ -40,6 +42,14 @@ import {
 import { assertPartnerCodes, normalizeId, validateNickname } from '../db/validation';
 import { TokenStoreUnavailableError } from '../auth/tokenStore';
 import { emitBlockChange, emitUserDeleted } from '../social/blockBus';
+import { dailyMissionsFor, weeklyMissionsFor } from '../progression/missions';
+import { periodKeys } from '../progression/period';
+import {
+  toAchievementsResponse,
+  toMissionsResponse,
+  toPublicAchievements,
+  toUserStats,
+} from '../progression/views';
 
 export const BODY_LIMIT = '8kb';
 /** Teto de bloqueios por usuário (memória e consultas do lobby/sala limitadas). */
@@ -73,6 +83,10 @@ export interface RestOptions {
   readonly users: UserRepository;
   /** Histórico (`GET /matches`) e validação de `matchId` das denúncias. Ausente: histórico vazio. */
   readonly matches?: MatchRepository;
+  /** Conquistas, missões e estatísticas (`/me/achievements`, `/me/missions`, `stats`, `/users/:id`). Ausente: tudo zerado. */
+  readonly progression?: ProgressionRepository;
+  /** Relógio (testes de virada de dia). Padrão: `new Date()`. */
+  readonly now?: () => Date;
   readonly limits: RestLimits;
   readonly corsOrigins: readonly string[];
   readonly trustProxy: boolean;
@@ -131,7 +145,8 @@ export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOpti
 }
 
 export function mountRest(app: Application, opts: RestOptions): void {
-  const { auth, users, limits, matches } = opts;
+  const { auth, users, limits, matches, progression } = opts;
+  const now = opts.now ?? ((): Date => new Date());
   const ipKey = (req: Request): string => clientKey(req, opts.trustProxy);
 
   const ipLimiter = new SlidingWindowLimiter(limits.perIpPerMin, 60_000);
@@ -333,8 +348,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
         provider: user.provider,
         avatar,
         createdAt: user.createdAt.toISOString(),
-        // Zeros até o 6E (estatísticas reais); a forma já é a final (`UserStats`).
-        stats: { paulista: { played: 0, won: 0 }, mineiro: { played: 0, won: 0 } },
+        stats: toUserStats((await progression?.getStats(user.id)) ?? []),
       };
       res.json(body);
     });
@@ -409,6 +423,90 @@ export function mountRest(app: Application, opts: RestOptions): void {
         items: page.items.map(toMatchResponse),
         nextCursor: page.nextCursor,
       };
+      res.json(body);
+    }),
+  );
+
+  // ------------------------------------------------------------ conquistas, missões e perfil
+  /** O catálogo inteiro de conquistas do PRÓPRIO usuário, com progresso (nível 0 = bloqueada). */
+  route('/me/achievements', ['GET'], (r) =>
+    r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
+      const rows = (await progression?.listAchievements(locals(res).user.id)) ?? [];
+      res.json(toAchievementsResponse(rows));
+    }),
+  );
+
+  /**
+   * Missões do dia e da semana correntes (`America/Sao_Paulo`). As linhas do período nascem aqui na primeira
+   * leitura (sorteio determinístico por `hash(userId, periodKey)`, sem job); o dia seguinte tem outra chave.
+   */
+  route('/me/missions', ['GET'], (r) =>
+    r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
+      if (progression === undefined) {
+        res.json(toMissionsResponse([]));
+        return;
+      }
+      const me = locals(res).user.id;
+      const keys = periodKeys(now());
+      const [daily, weekly] = await Promise.all([
+        progression.ensureMissions(me, keys.daily, dailyMissionsFor(me, keys.daily)),
+        progression.ensureMissions(me, keys.weekly, weeklyMissionsFor(keys.weekly)),
+      ]);
+      res.json(toMissionsResponse([...daily, ...weekly]));
+    }),
+  );
+
+  /**
+   * Perfil público (decisão 7 do plano): apelido, avatar, medalhas desbloqueadas e partidas/vitórias por
+   * variante. Nunca histórico, provedor nem datas. Sem oráculo: id malformado, inexistente, apagado ou em
+   * bloqueio (nos dois sentidos) respondem o MESMO `404 USER_NOT_FOUND`.
+   */
+  route('/users/:id', ['GET'], (r) =>
+    r.get(byIp(ipLimiter, 60), authenticate, async (req, res) => {
+      const me = locals(res).user.id;
+      const id = normalizeUuid(req.params['id']);
+      if (id === null) {
+        fail(res, 404, 'USER_NOT_FOUND');
+        return;
+      }
+      if (id !== me) {
+        const [blocked, blockers] = await Promise.all([
+          users.listBlockedIds(me),
+          users.listBlockerIds(me),
+        ]);
+        if (blocked.includes(id) || blockers.includes(id)) {
+          fail(res, 404, 'USER_NOT_FOUND');
+          return;
+        }
+      }
+      let body: PublicProfileResponse;
+      if (progression !== undefined) {
+        const profile = await progression.getPublicProfile(id);
+        if (profile === null) {
+          fail(res, 404, 'USER_NOT_FOUND');
+          return;
+        }
+        body = {
+          id: profile.userId,
+          nickname: profile.nickname,
+          avatar: profile.avatar,
+          achievements: toPublicAchievements(profile.achievements),
+          stats: toUserStats(profile.stats),
+        };
+      } else {
+        const user = await users.findById(id);
+        if (user === null) {
+          fail(res, 404, 'USER_NOT_FOUND');
+          return;
+        }
+        body = {
+          id: user.id,
+          nickname: user.nickname,
+          avatar: await users.getAvatar(id),
+          achievements: [],
+          stats: toUserStats([]),
+        };
+      }
       res.json(body);
     }),
   );
