@@ -185,6 +185,22 @@ Recarregar a página da mesa (web) ou reabrir o app (nativo) devolve o jogador a
 - **Limite conhecido**: mesa da **fila pública** não tem o caminho (2) (`POST /tables/join` só serve mesa privada). Reload dentro dos 60 s funciona nas duas; depois disso, só na privada.
 - O token nunca vai na URL, em log ou em mensagem de erro; a rota continua `/table/<código>` (o código da mesa já é público para quem convida).
 
+## Áudio (Fase 5b)
+
+Código em `src/audio/`. Os arquivos de `assets/audio/` são **placeholders silenciosos** (ver `assets/audio/README.md`); o aparelho toca o que o manifesto `@trucaco/avatar/audio` aponta.
+
+- **`AudioService`** (`audioService.ts`): ponto único que toca som. Fala com `AudioBackend`: `expoBackend.ts` (`expo-audio`) em produção e `fake.ts` nos testes. Pré-carrega **1 take por evento** (o primeiro) de cada voz presente na mesa (13 eventos × até 2 vozes) e os 3 efeitos de jogo (`card_shuffle`, `card_play`, `table_slam`), cerca de 29 players. Os demais (outros takes, `ambience_bar`, soundboard) entram num **LRU de 12** (`DEFAULT_MAX_ON_DEMAND`); os pré-carregados nunca saem.
+- **Diretor de fala** (`speechDirector.ts`): converte o evento público de jogo em fala e efeito. Ao falar um evento, toca o take já carregado e pede em segundo plano os outros takes dele (`warmEvent`), para a variação das próximas vezes. `pickTake` (em `@trucaco/avatar`) não repete o take anterior. A fala de fim de jogo espera 400 ms (`GAME_DECIDED_HOLD_MS`) antes de tocar. Replays do servidor (reconexão, retomada por token) não tocam fala.
+- **Legenda**: o balão grande (`SpeechBubble`, `packages/ui`) sai sempre, mesmo com "sem som", sem arquivo ou com o jogador silenciado.
+- **Desbloqueio no web** (`unlockOnGesture.ts`, `platform.web.ts`): o primeiro `pointerdown`, `touchstart`, `keydown` ou `click` libera o áudio. A escuta é em captura e não consome o evento, então o clique segue para o botão. No nativo, o áudio já está liberado.
+- **Preferências** (`prefs.ts`, `useAudioPrefs.ts`): `muted` (sem som geral), `voiceVolume` (1), `sfxVolume` (0,8) e `funnyMuted` (silenciar só os efeitos engraçados). Chave `trucaco.audio.v1`: `localStorage` no web e `expo-secure-store` no nativo. Nunca vão ao servidor. Silenciar um jogador é outra preferência (`mutedStore`, Fase 5).
+- **Soundboard** (`src/screens/SoundboardPanel.tsx`, aberto na mesa): envia `sfx { sfxId }`. O servidor limita a 1 efeito a cada 5 s por jogador e retransmite a todos, inclusive quem enviou. O cliente toca o efeito e mostra a marca no assento (`sfxMarks`). O efeito carrega no primeiro uso, então o primeiro som de cada efeito pode sair mudo.
+- **Configurações de som** (`src/screens/SoundSettings.tsx`, dentro de Configurações): volumes separados, "sem som" e "silenciar efeitos engraçados". Há também um atalho 🔊/🔇 na linha de menu da mesa (`sound-toggle`, `TableView.tsx`) que liga e desliga o "sem som".
+- **Escolha de voz** (`src/screens/VoicePicker.tsx`, no criador de avatar): grava `AvatarParts.voice` no `PUT /me/avatar`. Voz sem arquivo toca a do mesmo grupo (`resolveVoice`); a legenda é igual para qualquer voz.
+- **Testes**: `src/audio/*.test.ts`, `src/screens/sound.test.tsx`, `src/table/tableController.sfx.test.ts` e `tableController.speech.test.ts`. Sem E2E de áudio ainda.
+- **Não validado**: som em aparelho (iOS, Android), no Safari, latência do primeiro grito e memória dos players no Android. Mesas de 6 assentos (fase 8) não testadas com a pré-carga.
+- **Pendente**: animação `trig_shout` (não existe no `avatar.riv`; o ponto de extensão é `store.speech[seat].event`, em `tableStore`).
+
 ## Reserva, saída e a verificar
 
 - A reserva de assento é validada antes de qualquer rede (`isSafeReservation`): ids `[A-Za-z0-9_-]+` e `publicAddress`, se vier, com o mesmo host do servidor; o transporte também recusa host diferente. Reserva adulterada vira `JOIN_FAILED` sem enviar o JWT.

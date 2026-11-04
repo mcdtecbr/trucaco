@@ -3,6 +3,9 @@
  * Nada aqui roda no import: `getApp()` monta tudo na primeira chamada (as telas chamam em efeitos).
  */
 import type { SeatReservation } from '@trucaco/protocol';
+import { createAudioService } from '../audio/audioService';
+import type { AudioService } from '../audio/audioService';
+import { createPlatformAudio } from '../audio/platform';
 import { createGameClient } from '../net/colyseus';
 import type { GameClient } from '../net/colyseus';
 import { isJoinTableResponse } from '../net/guards';
@@ -27,6 +30,8 @@ export interface App {
   readonly session: Session;
   readonly rooms: RoomService;
   readonly table: TableController;
+  /** Som deste aparelho (vozes, efeitos, preferências locais). */
+  readonly audio: AudioService;
   /** Volta à mesa depois de recarregar a página ou reabrir o app (ver `room/tableResume.ts`). */
   readonly resume: TableResumeController;
   gameClient(): GameClient;
@@ -52,8 +57,19 @@ export function getApp(): App {
   };
   // O controlador envia pelo serviço de sala, e o serviço o alimenta: a referência é resolvida na hora do uso.
   let rooms: RoomService | null = null;
+  const platformAudio = createPlatformAudio();
+  const audio = createAudioService({
+    backend: platformAudio.backend,
+    sources: platformAudio.sources,
+    storage: platformAudio.storage,
+    unlocked: platformAudio.unlocked,
+  });
+  // Web: navegadores só liberam som depois de um gesto do usuário.
+  platformAudio.watchFirstGesture(() => audio.unlock());
+  void audio.hydrate();
   const table = createTableController({
     store: tableStore,
+    audio,
     send: (msg) => rooms?.send(msg) ?? false,
     isMuted: (nickname) => mutedStore.getState().has(nickname),
   });
@@ -91,6 +107,6 @@ export function getApp(): App {
       lobbyStore.getState().reset();
     }
   });
-  app = { session, rooms: roomsRef, table, resume, gameClient };
+  app = { session, rooms: roomsRef, table, audio, resume, gameClient };
   return app;
 }

@@ -88,8 +88,8 @@ export function ChatPanel(p: ChatPanelProps) {
               accessibilityRole="button"
               accessibilityLabel={
                 m.muted
-                  ? `Reativar ${m.name}. Só neste aparelho.`
-                  : `Silenciar ${m.name}. Só neste aparelho.`
+                  ? `Reativar ${m.name} (chat, voz e efeitos). Só neste aparelho.`
+                  : `Silenciar ${m.name} (chat, voz e efeitos). Só neste aparelho.`
               }
               accessibilityState={{ selected: m.muted }}
               onPress={() => p.on.toggleMute?.(m.seat)}

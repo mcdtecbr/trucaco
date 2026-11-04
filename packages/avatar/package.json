@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./audio": {
+      "types": "./dist/audioManifest.d.ts",
+      "default": "./dist/audioManifest.js"
     }
   },
   "scripts": {

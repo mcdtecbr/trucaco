@@ -87,6 +87,9 @@ function Screen({ h }: { h: Harness }) {
       chatUnreadTotal={s.chatUnread.table + s.chatUnread.partner}
       bubbles={s.bubbles}
       signals={s.signals}
+      sfxMarks={s.sfxMarks}
+      soundboard={{ onSend: (id) => table.sendSfx(id), silenced: false }}
+      sound={{ muted: false, onToggle: () => h.sent.push({ type: 'ready' } as ClientMessage) }}
       codes={s.codes}
       partnerSignalNote={s.partnerSignalNote}
       codesPanel={buildCodesPanelProps({
@@ -541,6 +544,26 @@ describe('4E: sinais na mesa', () => {
     click(must('signal-toggle'));
     click(must('signal-wink'));
     expect(h.sent).toHaveLength(1);
+  });
+});
+
+describe('5b: efeitos e som na mesa', () => {
+  it('efeitos: abre o painel, envia sfx pelo controlador e o emoji aparece no assento que recebeu', () => {
+    mount(snapshot());
+    expect(byTestId('soundboard-grid')).toBeNull();
+    click(must('soundboard-toggle'));
+    click(must('sfx-horn'));
+    expect(h.sent).toEqual([{ type: 'sfx', sfxId: 'horn' }]);
+    expect(byTestId('sfx-mark-1')).toBeNull();
+    act(() => h.table.onSfx({ seat: 1, sfxId: 'rooster', at: 1 }));
+    expect(must('sfx-mark-1').textContent).toBeTruthy();
+    act(() => h.clock.advance(1500));
+    expect(byTestId('sfx-mark-1')).toBeNull();
+  });
+
+  it('o atalho de som existe na mesa com rótulo acessível', () => {
+    mount(snapshot());
+    expect(must('sound-toggle').getAttribute('aria-label')).toBe('Som ligado. Desligar o som');
   });
 });
 

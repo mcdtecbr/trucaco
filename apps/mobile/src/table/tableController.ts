@@ -4,10 +4,11 @@
  * está em `legalActions` do snapshot atual (a UI desabilita o resto; o servidor revalida).
  * Mensagens de sala que não são ação de jogo (`voteCancel`, `chat`) passam pelo protocol.
  */
-import { MAX_SIGNAL_DURATION_MS, signalInfo } from '@trucaco/avatar';
+import { MAX_SIGNAL_DURATION_MS, signalInfo, soundboardInfo } from '@trucaco/avatar';
 import {
   ERROR_CODES,
   QUICK_PHRASES,
+  SFX_IDS,
   SIGNAL_IDS,
   parseClientMessage,
   parseLegalAction,
@@ -17,10 +18,15 @@ import type {
   ClientMessage,
   ErrorCode,
   PublicGameEvent,
+  SfxId,
   SignalId,
 } from '@trucaco/protocol';
 import { PUBLIC_EVENT_TYPES, announcementFor } from '@trucaco/ui';
 import type { HandResult } from '@trucaco/ui';
+import { createSpeechDirector } from '../audio/speechDirector';
+import type { SpeechDirector, SpeechLine } from '../audio/speechDirector';
+import { createSilentAudioService } from '../audio/audioService';
+import type { AudioService } from '../audio/audioService';
 import { messageForAction } from './actionMessage';
 import { createClockOffset } from './clockOffset';
 import type { ClockOffset } from './clockOffset';
@@ -34,6 +40,10 @@ export const BUSY_TIMEOUT_MS = 3000;
 export const NOTICE_MS = 3000;
 /** Balão de chat sobre o avatar (igual ao `CHAT_BUBBLE_MS` da UI). */
 export const BUBBLE_MS = 4000;
+/** Legenda grande da fala sobre o avatar (igual ao `SPEECH_BUBBLE_MS` da UI). */
+export const SPEECH_MS = 2000;
+/** Emoji do efeito engraçado sobre o avatar. */
+export const SFX_MARK_MS = 1500;
 export const PRESENCE_NOTE_MS = 5000;
 /**
  * Se o avatar não avisar o fim do sinal (desmontou na troca de tela), o controlador libera o assento
@@ -109,6 +119,13 @@ export interface TableControllerOptions {
    * store. Nunca vai ao servidor.
    */
   isMuted?: (nickname: string) => boolean;
+  /**
+   * Áudio local: vozes dos avatares e efeitos de jogo a partir dos eventos públicos. Omitido = só a
+   * legenda da fala. Nada disso trafega pela rede.
+   */
+  audio?: AudioService;
+  /** Aleatoriedade das falas (injetável nos testes). */
+  speechRng?: () => number;
 }
 
 export interface TableController {
@@ -143,6 +160,13 @@ export interface TableController {
   onSignalEnd(seat: number, key: number): void;
   /** Envia um sinal (mensagem `signal`). `false` = id inválido ou sem sala. */
   sendSignal(signalId: string): boolean;
+  /**
+   * Efeito do painel (público) de um assento: valida id e assento, ignora jogador silenciado aqui,
+   * toca o efeito (respeitando "sem som" e "silenciar engraçados"), mostra o emoji e anuncia.
+   */
+  onSfx(payload: unknown): void;
+  /** Envia um efeito do painel (mensagem `sfx`). `false` = id inválido ou sem sala. */
+  sendSfx(sfxId: string): boolean;
   /** Toque numa carta: seleciona; no mesmo item selecionado, confirma. */
   pressCard(actionId: string): void;
   /** Envia a ação se (e só se) ela estiver em `legalActions` e não houver outra em voo. */
@@ -263,6 +287,53 @@ export function createTableController(opts: TableControllerOptions): TableContro
   /** Fila de 1 posição por assento (sinal recebido durante a animação). */
   const queuedSignals = new Map<number, SignalId>();
   const signalTimers = new Map<number, unknown>();
+  const speechTimers = new Map<number, unknown>();
+  let speechId = 0;
+
+  function clearSpeech(): void {
+    for (const h of speechTimers.values()) timers.clearTimeout(h);
+    speechTimers.clear();
+  }
+
+  /** Legenda grande da fala: um por assento, a nova substitui a antiga e reinicia os 2 s. */
+  function showSpeech(line: SpeechLine): void {
+    const prev = speechTimers.get(line.seat);
+    if (prev !== undefined) timers.clearTimeout(prev);
+    speechTimers.set(
+      line.seat,
+      timers.setTimeout(() => {
+        speechTimers.delete(line.seat);
+        const rest = { ...store.getState().speech };
+        delete rest[line.seat];
+        store.getState().patch({ speech: rest });
+      }, SPEECH_MS),
+    );
+    const cur = store.getState();
+    cur.patch({
+      speech: {
+        ...cur.speech,
+        [line.seat]: { id: ++speechId, event: line.event, text: line.text },
+      },
+    });
+  }
+
+  const sfxTimers = new Map<number, unknown>();
+  let sfxMarkId = 0;
+
+  function clearSfxMarks(): void {
+    for (const h of sfxTimers.values()) timers.clearTimeout(h);
+    sfxTimers.clear();
+  }
+
+  // O diretor existe sempre: sem serviço de áudio ele usa um silencioso e a legenda sai do mesmo jeito.
+  const director: SpeechDirector = createSpeechDirector({
+    audio: opts.audio ?? createSilentAudioService(),
+    getVm: () => store.getState().vm,
+    ...(opts.isMuted !== undefined ? { isMuted: opts.isMuted } : {}),
+    onSpeak: showSpeech,
+    ...(opts.speechRng !== undefined ? { rng: opts.speechRng } : {}),
+    timers,
+  });
 
   function clearSignals(): void {
     for (const h of signalTimers.values()) timers.clearTimeout(h);
@@ -333,6 +404,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       busyTimer = lingerTimer = null;
       for (const h of bubbleTimers.values()) timers.clearTimeout(h);
       bubbleTimers.clear();
+      clearSpeech();
+      clearSfxMarks();
       clearSignals();
       trickPlays = [];
       closedTrick = null;
@@ -386,6 +459,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
         ...(partnerChanged ? { chatUnread: { ...cur.chatUnread, partner: 0 } } : {}),
       };
     }
+    director.onState(vm);
     // Um único `set` por patch do servidor.
     cur.patch({
       vm,
@@ -398,6 +472,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
             handLog: [],
             lingering: null,
             bubbles: {},
+            speech: {},
+            sfxMarks: {},
             signals: {},
             busy: false,
             coverMode: false,
@@ -534,6 +610,14 @@ export function createTableController(opts: TableControllerOptions): TableContro
           patch.handLog = [...(patch.handLog ?? cur.handLog), text].slice(-MAX_HAND_LOG);
         }
         if (text !== null && !replay) say(text);
+        // Voz, legenda e efeitos locais: nunca em replay de reconexão. Falha de áudio não derruba a mesa.
+        if (!replay) {
+          try {
+            director.onEvent(e);
+          } catch {
+            // Só som e legenda: o estado (fonte de verdade) segue valendo.
+          }
+        }
       }
       cur.patch(patch);
     },
@@ -744,6 +828,64 @@ export function createTableController(opts: TableControllerOptions): TableContro
       return true;
     },
 
+    onSfx(payload) {
+      if (typeof payload !== 'object' || payload === null) return;
+      const { seat, sfxId } = payload as { seat?: unknown; sfxId?: unknown };
+      if (typeof seat !== 'number' || !Number.isInteger(seat) || seat < 0 || seat > 3) return;
+      if (typeof sfxId !== 'string' || !(SFX_IDS as readonly string[]).includes(sfxId)) return;
+      const id = sfxId as SfxId;
+      const cur = store.getState();
+      const player = cur.vm?.seats[seat];
+      const mine = cur.vm !== null && seat === cur.vm.mySeat;
+      // Jogador silenciado neste aparelho: nem som, nem legenda, nem anúncio.
+      if (
+        !mine &&
+        player !== undefined &&
+        player.nickname !== '' &&
+        opts.isMuted?.(player.nickname) === true
+      ) {
+        return;
+      }
+      let info: ReturnType<typeof soundboardInfo>;
+      try {
+        info = soundboardInfo(id);
+      } catch {
+        return; // id do protocolo sem entrada no soundboard (versões diferentes): ignora, sem derrubar
+      }
+      say(`${seatName(seat)} usou o efeito ${info.label}`);
+      // O serviço respeita "sem som" e "silenciar efeitos engraçados"; a legenda sai sempre.
+      try {
+        opts.audio?.playSfx(id, 'funny');
+      } catch {
+        // Só som: nunca derruba a mesa.
+      }
+      const prev = sfxTimers.get(seat);
+      if (prev !== undefined) timers.clearTimeout(prev);
+      sfxTimers.set(
+        seat,
+        timers.setTimeout(() => {
+          sfxTimers.delete(seat);
+          const rest = { ...store.getState().sfxMarks };
+          delete rest[seat];
+          store.getState().patch({ sfxMarks: rest });
+        }, SFX_MARK_MS),
+      );
+      cur.patch({
+        sfxMarks: {
+          ...cur.sfxMarks,
+          [seat]: { id: ++sfxMarkId, icon: info.icon, label: info.label },
+        },
+      });
+    },
+
+    sendSfx(sfxId) {
+      const parsed = parseClientMessage({ type: 'sfx', sfxId });
+      if (!parsed.ok) return false;
+      if (!opts.send(parsed.message)) return false;
+      lastSend = 'other';
+      return true;
+    },
+
     onReconnected() {
       clear(noticeTimer);
       replayUntil = now() + REPLAY_WINDOW_MS;
@@ -848,6 +990,9 @@ export function createTableController(opts: TableControllerOptions): TableContro
       busyTimer = noticeTimer = presenceTimer = lingerTimer = signalNoteTimer = null;
       for (const h of bubbleTimers.values()) timers.clearTimeout(h);
       bubbleTimers.clear();
+      clearSpeech();
+      clearSfxMarks();
+      director.reset();
       clearSignals();
       busySignature = '';
       handNumber = 0;

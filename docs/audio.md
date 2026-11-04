@@ -17,28 +17,30 @@ Cada voz tem os mesmos eventos, para qualquer avatar poder usar qualquer voz.
 
 ### Eventos de voz
 
-| Evento         | Quando toca                                    | Exemplos de fala           |
-| -------------- | ---------------------------------------------- | -------------------------- |
-| `truco`        | Primeiro aumento (3 no Paulista, 4 no Mineiro) | "Truco!", "Truco, ladrão!" |
-| `seis`         | Aumento para 6                                 | "Seis!", "Seeeis!"         |
-| `oito`         | Aumento para 8 (só Mineiro)                    | "Oito!"                    |
-| `nove`         | Aumento para 9 (só Paulista)                   | "Nove!"                    |
-| `dez`          | Aumento para 10 (só Mineiro)                   | "Dez!"                     |
-| `doze`         | Aumento para 12                                | "Doze!", "Vale doze!"      |
-| `quero`        | Aceitou o aumento                              | "Quero!", "Vem!"           |
-| `corro`        | Correu do aumento                              | "Corro.", "Tô fora."       |
-| `mao_especial` | Mão de onze ou de dez, ao decidir jogar        | "Vamos nessa!"             |
-| `mao_de_ferro` | Início da mão de ferro                         | "Mão de ferro!"            |
-| `vaza`         | Ganhou uma vaza (opcional, menos frequente)    | "Boa!"                     |
-| `venceu_jogo`  | Dupla venceu o jogo                            | "É nossa!"                 |
-| `venceu_serie` | Dupla venceu a série melhor de 3               | "Campeões!"                |
+| Evento         | Quando toca                                          | Takes (id: fala)                                                                                                                                                     |
+| -------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `truco`        | Primeiro aumento (3 no Paulista, 4 no Mineiro)       | `truco_1`: "Truco, ladrão!"; `truco_2`: "Truco, marreco!"; `truco_3`: "Truco na orelha!"; `truco_4`: "Aqui tem coragem!"; `truco_5`: "Vem que tem!"                  |
+| `seis`         | Aumento para 6                                       | `seis_1`: "Meia dúzia!"; `seis_2`: "Meio pau!"; `seis_3`: "Seis!"; `seis_4`: "Foge não, que agora é tarde!"                                                          |
+| `oito`         | Aumento para 8 (só Mineiro)                          | `oito_1`: "Oito!"; `oito_2`: "Subiu pra oito!"; `oito_3`: "Oito, e agora?"                                                                                           |
+| `nove`         | Aumento para 9 (só Paulista)                         | `nove_1`: "Nove!"; `nove_2`: "Nooove!"; `nove_3`: "Foge não, que agora é tarde!"                                                                                     |
+| `dez`          | Aumento para 10 (só Mineiro)                         | `dez_1`: "Dez!"; `dez_2`: "Subiu pra dez!"; `dez_3`: "Dez, e aí?"                                                                                                    |
+| `doze`         | Aumento para 12                                      | `doze_1`: "Dooze!"; `doze_2`: "Queda!"; `doze_3`: "Cai o teto!"; `doze_4`: "Foge não, que agora é tarde!"                                                            |
+| `quero`        | Aceitou o aumento                                    | `quero_1`: "Quero!"; `quero_2`: "Vem pra cá!"; `quero_3`: "Tá pago!"                                                                                                 |
+| `corro`        | Correu do aumento ou da mão de onze/dez              | `corro_1`: "Corro!"; `corro_2`: "Tô fora!"; `corro_3`: "Dessa vez não!"; `corro_4`: "Pra mim chega!"; `corro_5`: "Pode ficar com essa!"; `corro_6`: "Não vou nessa!" |
+| `mao_especial` | Mão de onze ou de dez, ao decidir jogar              | `mao_especial_1`: "Vamos nessa!"; `mao_especial_2`: "Bora jogar!"; `mao_especial_3`: "Tô dentro!"                                                                    |
+| `mao_de_ferro` | Início da mão de ferro (fala o pé)                   | `mao_de_ferro_1`: "Mão de ferro!"; `mao_de_ferro_2`: "É no escuro!"; `mao_de_ferro_3`: "Fechei os olhos!"                                                            |
+| `vaza`         | Ganhou uma vaza (opcional, sorteio com chance baixa) | `vaza_1`: "Manda o Zap pra cá!"; `vaza_2`: "Boa!"; `vaza_3`: "Essa é minha!"                                                                                         |
+| `venceu_jogo`  | Dupla venceu o jogo                                  | `venceu_jogo_1`: "É nossa!"; `venceu_jogo_2`: "Tá no papo!"; `venceu_jogo_3`: "Ganhou, ganhou!"                                                                      |
+| `venceu_serie` | Dupla venceu a série melhor de 3                     | `venceu_serie_1`: "Campeões!"; `venceu_serie_2`: "Levamos tudo!"; `venceu_serie_3`: "Mesa limpa!"                                                                    |
 
 - O nome falado segue o valor da aposta e não a variante: o evento `seis` toca nas duas.
-- **2 a 3 variações (takes)** por evento, para não repetir sempre a mesma gravação. Arquivo: `assets/audio/voices/<voiceId>/<evento>_<n>.m4a`.
+- **Takes** por evento (3 a 6, conforme a tabela), para não repetir sempre a mesma gravação; o sorteio nunca repete o take anterior (`pickTake`). O texto do take é a **legenda do balão e o roteiro da gravação**, igual para qualquer voz. A fonte da tabela é `packages/avatar/src/audioCatalog.json`. Ids de take são estáveis (`<evento>_<n>`; só se acrescentam). Arquivo: `assets/audio/voices/<voiceId>/<evento>_<n>.m4a`.
 - Quem toca o grito é o aparelho de **cada jogador**, a partir do evento de jogo vindo do servidor. Nenhum áudio trafega pela rede.
-- Junto do grito, o avatar executa a animação Rive `trig_shout` (boca aberta) e aparece um balão grande com o texto da fala. O texto é obrigatório: serve de legenda para quem joga sem som.
+- Junto do grito, aparece um balão grande com o texto da fala. O texto é obrigatório: serve de legenda para quem joga sem som. A animação Rive `trig_shout` (boca aberta) está prevista, mas o `avatar.riv` atual não tem esse trigger e nada o dispara ainda; o ponto de extensão é `store.speech[seat].event` (pendente com `rai-avatar`).
 
 ## 2. Efeitos engraçados (soundboard)
+
+Além do painel, há **efeitos de jogo locais** (`card_play`, `card_shuffle`, `table_slam` para o soco na mesa quando alguém pede truco ou aumenta, e `ambience_bar` opcional). Eles não passam pelo servidor, não entram em `SFX_IDS` e não sofrem o limite de 5 s. Arquivos em `assets/audio/sfx/<id>.m4a`.
 
 Painel de efeitos que o jogador dispara durante a partida. Todos na mesa ouvem, como os sinais são vistos por todos.
 
@@ -70,8 +72,8 @@ Salvos no aparelho (não vão ao servidor), em Configurações e num atalho na m
 
 ## 4. Aspectos técnicos
 
-- Reprodução com `expo-audio` (web, iOS e Android). Confirmar na Fase 5b que a API cobre pré-carregar, tocar sobreposto e ajustar volume nas três plataformas.
-- **Pré-carregamento** ao entrar na mesa: só as vozes dos 4 avatares presentes, mais o soundboard.
+- Reprodução com `expo-audio` (web, iOS e Android). A API cobre pré-carregar, tocar sobreposto e ajustar volume; o export web e o Android empacotam os `.m4a` (conferido no build), mas o comportamento real em iOS, Android e Safari ainda não foi validado em aparelho.
+- **Pré-carregamento** ao entrar na mesa: cada player do `expo-audio` é um player nativo (um ExoPlayer no Android), então não se carrega tudo. Ficam fixos **1 take por evento** (o primeiro) das vozes presentes (13 × até 2 vozes) e os 3 efeitos de jogo (`card_shuffle`, `card_play`, `table_slam`): cerca de 29 players. O diretor de fala prefere o take já carregado, e ao falar um evento pede em segundo plano os outros takes dele (variação nas próximas vezes). Esses e o soundboard (carregado no primeiro uso, então o 1º som de um efeito engraçado pode sair mudo) entram num LRU de 12 players. Latência do primeiro grito e memória no Android: só medíveis em aparelho (não medido).
 - **Formato**: mono, curto (cerca de 1 s por fala), AAC `.m4a`. Verificar suporte em iOS, Android e nos navegadores-alvo antes de gravar tudo; se faltar, gerar também `.ogg`/`.mp3`.
 - **Orçamento**: meta de até 1 MB por voz completa e 1 MB para o soundboard. Medir na Fase 5b e ajustar.
 - **Web**: navegadores só liberam áudio após um gesto do usuário. A tela de entrada ou o botão "entrar na mesa" precisa desbloquear o áudio.
@@ -79,6 +81,7 @@ Salvos no aparelho (não vão ao servidor), em Configurações e num atalho na m
 
 ## 5. Fonte dos áudios e licenças
 
+- **Estado atual (Fase 5b, etapa 1)**: todos os arquivos são **placeholders silenciosos** (tom curto gerado por script, sem direitos de terceiros). Serviço de voz e fonte dos efeitos ainda não decididos; ver `assets/audio/README.md` e `LICENSES.md`.
 - **Protótipo (Fase 5b)**: vozes sintetizadas por serviço com **licença comercial**, só para validar o sistema (eventos, takes, volume, pré-carregamento). Os arquivos são trocáveis sem mudar código.
 - **Versão final**: vozes gravadas (contratadas ou do próprio time) e efeitos de biblioteca licenciada ou gravados. O usuário decide e fornece.
 - **Antes de publicar** (Fase 7): toda voz e todo efeito tem fonte e licença registrados em `assets/audio/LICENSES.md`. Áudio sem licença comercial confirmada não vai para produção. O repositório é público até o fim do levantamento: não versionar material sem direito de redistribuição.
@@ -99,6 +102,6 @@ type GameEvent =
   | { type: 'series_won'; team: 0 | 1 };
 ```
 
-`value` é o valor da aposta; o cliente converte em evento de voz (`truco`, `seis`, `oito`, `nove`, `dez`, `doze`) pela escada da variante.
+Esse formato é ilustrativo. O tipo real é `PublicGameEvent` (`betCalled`, `betRaised`, `betAccepted`, `betRun`, `specialDecided`, `handStarted`, `trickDecided`, `gameDecided`, `seriesDecided`), e `voiceEventForGameEvent` em `packages/avatar/src/speech.ts` faz a conversão para evento de voz; `voiceEventForBet(value, variant)` aplica a escada da variante (Paulista 3/6/9/12, Mineiro 4/6/8/10/12).
 
 Efeito (cliente → servidor → todos): `sfx { sfxId }` e `sfx { seat, sfxId, at }`.

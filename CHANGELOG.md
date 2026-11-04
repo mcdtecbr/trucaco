@@ -4,6 +4,38 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Fase 5b: áudio, vozes dos avatares e efeitos (2026-11-04), concluída com ressalvas, branch `feat/audio-5b`, ainda não mesclada
+
+Ressalvas: **todo o áudio é placeholder** (tom senoidal gerado por `scripts/audio/gen-placeholders.mjs`). O serviço de voz e a fonte dos efeitos seguem a definir (decisão do usuário), e nenhum arquivo real entra sem licença comercial registrada em `assets/audio/LICENSES.md`. Vozes `masc_2`, `masc_3`, `fem_2` e `fem_3` não têm arquivo (tocam a voz do mesmo grupo). `trig_shout` não existe no `avatar.riv` e não é disparado. Nada validado em aparelho iOS ou Android, nem no Safari. Detalhes em `docs/audio.md`, `assets/audio/README.md` e `apps/mobile/README.md`; status por etapa em `docs/plano-desenvolvimento.md` (Fase 5b).
+
+#### Adicionado
+
+- `packages/avatar`: catálogo de vozes (`voices.ts`, `resolveVoice` cai na primeira voz do grupo com arquivos), 13 eventos de fala com 3 a 6 takes cada e `pickTake` sem repetir o take anterior (`speech.ts`), escada de apostas Paulista e Mineiro (`voiceEventForBet`), catálogo dos efeitos do painel e de jogo (`sfx.ts`), e manifesto gerado para o cliente (`audioManifest.ts`, subcaminho `@trucaco/avatar/audio`).
+- `AvatarParts.voice` passa a ser usado: escolhido no criador de avatar (`VoicePicker`) e salvo em `PUT /me/avatar`. O campo já existia no contrato.
+- `apps/mobile/src/audio/`: `AudioService` sobre `expo-audio` (web, iOS e Android), com pré-carga de 1 take por evento das vozes da mesa e dos 3 efeitos de jogo, e LRU de 12 players para o resto; diretor de fala que converte o evento de jogo em voz e efeito; desbloqueio do áudio no primeiro gesto (web); preferências no aparelho (`trucaco.audio.v1`).
+- Balão grande com a fala (legenda) em `packages/ui` (`SpeechBubble`).
+- Painel de efeitos na mesa (`SoundboardPanel`, 8 efeitos, envia `sfx`) e marca do efeito no assento.
+- Configurações de som (`SoundSettings`): volume de vozes e de efeitos, "sem som" geral e "silenciar efeitos engraçados". Silenciar a voz de um jogador reusa o `mutedStore` da Fase 5.
+- Scripts `scripts/audio/gen-manifest.mjs` (regera o manifesto) e `scripts/audio/gen-placeholders.mjs` (placeholders; precisa de `ffmpeg`).
+- Arquivos de áudio em `assets/audio/` (placeholders), com `README.md` e `LICENSES.md`.
+- Textos das falas: repertório do usuário (truco, seis, nove, doze e provocações) e 6 falas novas de `corro`.
+
+#### Alterado
+
+- Cliente passa a tratar a mensagem `sfx` do servidor (até aqui só o servidor a emitia). O contrato do `protocol` e o servidor não mudaram nesta fase.
+
+#### Corrigido
+
+- Revisão (Rita-C, Claude opus): `venceu_serie` não toca em partida `single` (fila pública), só no fim de série `bo3`; replay de reconexão e de retomada por token não toca a fala de novo. Quatro achados P3 corrigidos.
+- Auditoria (Vitor): permissões do plugin `expo-audio` reduzidas (sem microfone, sem gravação no Android, sem reprodução em segundo plano); média corrigida. Três baixas corrigidas (script do manifesto, `soundboardInfo` e lockfile).
+
+#### Divergências conhecidas
+
+- A legenda sempre aparece, mesmo com "sem som", sem arquivo ou com o jogador silenciado.
+- O soundboard carrega no primeiro uso: o primeiro som de cada efeito engraçado pode sair mudo.
+- Falas da `rai-avatar` além do repertório (oito, dez, quero, mão especial, mão de ferro, vitórias) e "Meio pau!" em `seis` aguardam revisão do usuário.
+- `docs/audio.md` (seção 3) cita um atalho de volume na mesa; ele não existe no código. Os controles estão só em Configurações.
+
 ### Avatar: cabelos 4, 6, 11, 12, 13 e 15 sem cobrir olhos e sobrancelhas (2026-11-04), branch `fix/avatar-cabelos-rosto`, ainda não mesclada
 
 Correção de geometria e uma peça nova (`hair_12_back`), sem decisão nova de arquitetura. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento: cabelos 4, 6, 11, 12, 13 e 15") e `docs/avatar-rig.md` (seção 3.5). `assets/rive/avatar.riv` reexportado como `avatar (23).riv` (60.833 bytes, 15 Numbers e 16 triggers). Sem input novo, sem dimensão nova e sem migração; `PROTOCOL_VERSION` continua 5. Não validado em aparelho iOS/Android.
@@ -328,3 +360,6 @@ Assumidas por padrão nas fases acima. Cada uma precisa de confirmação do usu�
 - **`ROOM_NOT_FOUND` e `TOKEN_EXPIRED` reservados ao cliente** (Fase 3).
 - **Avatar vetorial como produção até existir o `.riv`; Rive web (4G) depois** (Fase 4): decisão do usuário em 2026-11-02. Rive nativo (4H) segue sem decisão formal.
 - **Sinal de bot só para bot de vaga, que hoje não existe** (Fase 4): o bot de ausência não sinaliza (confirmado pelo usuário em 2026-11-02). Decidir se o servidor cria vagas de bot.
+- **Vozes e efeitos placeholder até a licença**: a 5b entrega o sistema com arquivos silenciosos; serviço de voz e fonte dos efeitos a definir pelo usuário (5b).
+- **Vozes sem arquivo tocam a do mesmo grupo** (`resolveVoice`), e não ficam mudas (5b).
+- **Textos das falas**: a revisão do usuário cobre as falas da `rai-avatar` listadas na seção de divergências da 5b (5b).

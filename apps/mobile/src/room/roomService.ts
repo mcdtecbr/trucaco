@@ -67,19 +67,13 @@ export type TableSink = Pick<
   | 'onChat'
   | 'onCodes'
   | 'onSignal'
+  | 'onSfx'
   | 'onPresence'
   | 'onTurnTimer'
   | 'onServerError'
   | 'onReconnected'
   | 'reset'
 >;
-
-/**
- * Mensagens do servidor que esta entrega ainda não usa (efeitos `sfx`, Fase 5b): no-op para o SDK não
- * avisar de tipo sem handler. `event`, `signal`, `chat`, `presence`, `turnTimer` e `error` têm handler
- * próprio em `attach`.
- */
-const IGNORED_MESSAGES = ['sfx'];
 
 export function createRoomService(options: {
   getClient: () => RoomClientLike;
@@ -162,6 +156,9 @@ export function createRoomService(options: {
     r.onMessage('signal', (p) => {
       if (live()) table?.onSignal(p);
     });
+    r.onMessage('sfx', (p) => {
+      if (live()) table?.onSfx(p);
+    });
     r.onMessage('presence', (p) => {
       if (live()) table?.onPresence(p);
     });
@@ -196,7 +193,6 @@ export function createRoomService(options: {
       }
       void recover(r, gen);
     });
-    for (const type of IGNORED_MESSAGES) r.onMessage(type, () => undefined);
     // Todos os handlers (inclusive `codes`) já estão ligados: o `ready` faz o servidor reenviar o combinado
     // da dupla ao meu assento (o baseline do `onJoin` pode ter chegado antes do handler). Não sai na hora
     // (ver `shouldSendReady`).
@@ -270,7 +266,10 @@ export function createRoomService(options: {
   }
 
   /** Entrada em uma sala (reserva nova ou retomada por token): o resto do ciclo é o mesmo. */
-  async function open(connect: (client: RoomClientLike) => Promise<RoomLike>): Promise<string> {
+  async function open(
+    connect: (client: RoomClientLike) => Promise<RoomLike>,
+    resumed = false,
+  ): Promise<string> {
     // `gen` é tomado ANTES de qualquer await: um `leave()` durante a entrada invalida esta tentativa.
     const gen = ++generation;
     const previous = room;
@@ -302,6 +301,9 @@ export function createRoomService(options: {
     attach(r, gen);
     store.getState().patch({ connection: 'connected', errorCode: null });
     project(r);
+    // Retomada por token (reabriu o app): o servidor reenvia os eventos da ausência (`sendCatchUp`).
+    // Abre a janela de replay (sem voz, legenda nem relógio), como na reconexão do SDK.
+    if (resumed) table?.onReconnected();
     await firstState(r, gen);
     // O estado pode ter chegado só agora (código da sala): regrava com o token vigente.
     if (gen === generation && room === r) remember(r);
@@ -310,7 +312,7 @@ export function createRoomService(options: {
 
   return {
     enter: (reservation) => open((client) => client.joinWithReservation(reservation)),
-    resume: (reconnectionToken) => open((client) => client.reconnect({ reconnectionToken })),
+    resume: (reconnectionToken) => open((client) => client.reconnect({ reconnectionToken }), true),
 
     leave,
     current: () => room,

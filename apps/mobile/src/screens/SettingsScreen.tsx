@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
+import { useAudioPrefs } from '../audio/useAudioPrefs';
 import { messageForError } from '../i18n/errors';
 import { errorMessage } from '../i18n/errors';
 import { performLogout } from '../lobby/logout';
@@ -12,6 +13,8 @@ import { SettingsView } from './SettingsView';
 
 export function SettingsScreen() {
   const router = useRouter();
+  const audio = getApp().audio;
+  const audioPrefs = useAudioPrefs(audio);
   const nickname = useSessionStore(selectNickname);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -67,6 +70,7 @@ export function SettingsScreen() {
       error={error}
       saved={saved}
       appVersion={version}
+      sound={{ prefs: audioPrefs, onChange: (patch) => audio.setPrefs(patch) }}
       on={{
         draft: (t) => {
           setDraft(t);

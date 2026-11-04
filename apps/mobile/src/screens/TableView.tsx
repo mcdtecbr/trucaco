@@ -4,12 +4,13 @@
  */
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { betCry, parseLegalAction } from '@trucaco/protocol';
-import type { LegalActionId, SignalId } from '@trucaco/protocol';
+import type { LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
   BetButtons,
   Card,
   ChatBubble,
+  SpeechBubble,
   HandFan,
   MIN_TOUCH,
   PlayedCards,
@@ -29,9 +30,16 @@ import {
 import type { HandResult, LayoutMode } from '@trucaco/ui';
 import type { SeatView, TableViewModel } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
-import type { ActiveSignal, ChatBubbleEntry, LingeringTrick } from '../table/tableStore';
+import type {
+  ActiveSignal,
+  ChatBubbleEntry,
+  LingeringTrick,
+  SfxMarkEntry,
+  SpeechBubbleEntry,
+} from '../table/tableStore';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
+import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
@@ -69,6 +77,14 @@ export interface TableViewProps {
   partnerSignalNote?: string | null;
   /** Balão de chat por assento (4 s). */
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  /** Legenda grande da fala (grito, "quero", "corro") por assento (~2 s). Omitido = nenhuma. */
+  speech?: Readonly<Record<number, SpeechBubbleEntry>>;
+  /** Emoji do efeito engraçado por assento (~1,5 s). Omitido = nenhum. */
+  sfxMarks?: Readonly<Record<number, SfxMarkEntry>>;
+  /** Painel de efeitos engraçados. Omitido = sem o botão. */
+  soundboard?: { onSend(id: SfxId): boolean; silenced: boolean };
+  /** Atalho de som na mesa. Omitido = sem o botão. */
+  sound?: { muted: boolean; onToggle(): void };
   /** Sinal animando por assento. */
   signals: Readonly<Record<number, ActiveSignal>>;
   /** Preferência do sistema: sem animação, só destaque estático. */
@@ -107,28 +123,52 @@ function Bubble({
   seat,
   vm,
   bubbles,
+  speech,
+  marks,
 }: {
   seat: number;
   vm: TableViewModel;
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  speech?: Readonly<Record<number, SpeechBubbleEntry>> | undefined;
+  marks?: Readonly<Record<number, SfxMarkEntry>> | undefined;
 }) {
   const b = bubbles[seat];
-  if (b === undefined) return null;
+  const sp = speech?.[seat];
+  const mark = marks?.[seat];
+  if (b === undefined && sp === undefined && mark === undefined) return null;
   const author = seat === vm.mySeat ? 'Você' : vm.seats[seat]?.nickname || `Jogador ${seat + 1}`;
-  // Posição absoluta sobre o avatar: o balão aparece e some sem deslocar o layout.
+  // Posição absoluta sobre o avatar: o balão aparece e some sem deslocar o layout. A fala (grande)
+  // fica acima do chat quando os dois coexistem.
   return (
     <View style={styles.bubbleSlot} pointerEvents="none">
-      <ChatBubble
-        author={author}
-        text={b.text}
-        partner={b.scope === 'partner'}
-        testID={`bubble-${seat}`}
-      />
+      {mark !== undefined ? (
+        // O anúncio para o leitor de tela sai pelo controlador: o emoji é só visual.
+        <Text
+          style={styles.sfxMark}
+          testID={`sfx-mark-${seat}`}
+          aria-hidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          {mark.icon}
+        </Text>
+      ) : null}
+      {sp !== undefined ? (
+        <SpeechBubble author={author} text={sp.text} testID={`speech-${seat}`} />
+      ) : null}
+      {b !== undefined ? (
+        <ChatBubble
+          author={author}
+          text={b.text}
+          partner={b.scope === 'partner'}
+          testID={`bubble-${seat}`}
+        />
+      ) : null}
     </View>
   );
 }
 
 interface SeatSignals {
+  sfxMarks?: Readonly<Record<number, SfxMarkEntry>> | undefined;
   signals: Readonly<Record<number, ActiveSignal>>;
   reduceMotion: boolean;
   onSignalEnd(seat: number, key: number): void;
@@ -138,17 +178,19 @@ function Seat({
   s,
   vm,
   bubbles,
+  speech,
   fx,
 }: {
   s: SeatView;
   vm: TableViewModel;
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  speech?: Readonly<Record<number, SpeechBubbleEntry>> | undefined;
   fx: SeatSignals;
 }) {
   const status = s.nickname === '' && s.status === 'connected' ? 'empty' : s.status;
   return (
     <View testID={`table-seat-${s.seat}`} style={styles.seatBox}>
-      <Bubble seat={s.seat} vm={vm} bubbles={bubbles} />
+      <Bubble seat={s.seat} vm={vm} bubbles={bubbles} speech={speech} marks={fx.sfxMarks} />
       <AvatarPlaceholder
         nickname={s.nickname || '—'}
         status={status}
@@ -263,6 +305,7 @@ export function TableView(p: TableViewProps) {
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
   const fx: SeatSignals = {
+    sfxMarks: p.sfxMarks,
     signals: p.signals,
     reduceMotion: p.reduceMotion,
     onSignalEnd: p.on.signalEnd,
@@ -311,11 +354,11 @@ export function TableView(p: TableViewProps) {
   const board = (
     <View style={styles.board}>
       <View style={styles.partner}>
-        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} fx={fx} />
+        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
       </View>
       <View style={styles.middle}>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} fx={fx} />
+          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
         </View>
         <View style={styles.center} testID="trick">
           <PlayedCards
@@ -333,7 +376,7 @@ export function TableView(p: TableViewProps) {
           ) : null}
         </View>
         <View style={styles.side}>
-          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} fx={fx} />
+          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
         </View>
       </View>
     </View>
@@ -441,7 +484,7 @@ export function TableView(p: TableViewProps) {
   const footer = (
     <View style={styles.footer}>
       <View testID="my-seat" style={styles.seatBox}>
-        <Bubble seat={vm.mySeat} vm={vm} bubbles={p.bubbles} />
+        <Bubble seat={vm.mySeat} vm={vm} bubbles={p.bubbles} speech={p.speech} marks={p.sfxMarks} />
         <AvatarPlaceholder
           nickname={mineSeat.nickname || 'Você'}
           status={mineSeat.status}
@@ -495,6 +538,21 @@ export function TableView(p: TableViewProps) {
         >
           <Text style={styles.menuText}>{cancelText}</Text>
         </Pressable>
+        {p.sound !== undefined ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              p.sound.muted ? 'Som desligado. Ligar o som' : 'Som ligado. Desligar o som'
+            }
+            accessibilityState={{ checked: !p.sound.muted }}
+            aria-pressed={!p.sound.muted}
+            onPress={p.sound.onToggle}
+            style={[styles.menu, p.sound.muted && styles.menuOff]}
+            testID="sound-toggle"
+          >
+            <Text style={styles.menuText}>{p.sound.muted ? '\u{1F507}' : '\u{1F50A}'}</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Sair da mesa"
@@ -512,6 +570,13 @@ export function TableView(p: TableViewProps) {
             onSend={p.on.sendSignal}
             {...(p.codes !== undefined ? { codes: p.codes } : {})}
           />
+          {p.soundboard !== undefined ? (
+            <SoundboardPanel
+              connected={p.connected && !modalOpen}
+              onSend={p.soundboard.onSend}
+              silenced={p.soundboard.silenced}
+            />
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -629,7 +694,8 @@ const styles = StyleSheet.create({
   coverOn: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
   menuRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'flex-end' },
   menuOff: { opacity: 0.55 },
-  signalRow: { width: '100%' },
+  signalRow: { width: '100%', gap: spacing.sm },
+  sfxMark: { alignSelf: 'center', fontSize: fontSize.large },
   probe: { position: 'absolute', width: 1, height: 1, opacity: 0, overflow: 'hidden' },
   phone: { flex: 1 },
   phoneContent: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },

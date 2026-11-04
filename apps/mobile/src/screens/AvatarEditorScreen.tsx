@@ -1,11 +1,12 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
-import type { AvatarPartKey, AvatarParts } from '@trucaco/protocol';
+import { takesFor } from '@trucaco/avatar';
+import type { AvatarPartKey, AvatarParts, VoiceId } from '@trucaco/protocol';
 import { messageForError } from '../i18n/errors';
 import { useReduceMotion } from '../platform/useReduceMotion';
 import { getApp } from '../services/app';
-import { initialAvatar, samePartsAs } from './avatarEditorState';
+import { applyVoice, initialAvatar, samePartsAs } from './avatarEditorState';
 import { AvatarEditorView, applyPick } from './AvatarEditorView';
 
 export function AvatarEditorScreen() {
@@ -18,6 +19,7 @@ export function AvatarEditorScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -66,6 +68,21 @@ export function AvatarEditorScreen() {
     }
   };
 
+  /** Toca um take de exemplo ("Truco!") na voz escolhida. Só com som liberado e arquivo carregado. */
+  const preview = async (voice: VoiceId): Promise<void> => {
+    const audio = getApp().audio;
+    audio.unlock(); // o toque no botão é o gesto que libera o áudio no web
+    if (audio.getPrefs().muted) {
+      setVoiceNote('O som está desligado nas configurações.');
+      return;
+    }
+    const take = takesFor('truco')[0];
+    if (take === undefined) return;
+    await audio.preloadVoices([voice]);
+    if (!alive.current) return;
+    setVoiceNote(audio.playVoice(voice, take.id) ? null : 'Não foi possível tocar a amostra.');
+  };
+
   return (
     <AvatarEditorView
       loading={loading}
@@ -76,12 +93,19 @@ export function AvatarEditorScreen() {
       error={error}
       saved={justSaved}
       reduceMotion={reduceMotion}
+      voiceNote={voiceNote}
       on={{
         pick: (key: AvatarPartKey, index: number) => {
           setParts((cur) => applyPick(cur, key, index));
           setJustSaved(false);
           setError(null);
         },
+        voice: (id: VoiceId) => {
+          setParts((cur) => applyVoice(cur, id));
+          setJustSaved(false);
+          setError(null);
+        },
+        preview: (id: VoiceId) => void preview(id),
         save: () => void save(),
         reload: () => void load(),
         back: () => (router.canGoBack() ? router.back() : router.replace('/home')),

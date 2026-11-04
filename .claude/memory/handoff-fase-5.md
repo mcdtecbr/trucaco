@@ -1,4 +1,4 @@
-**Handoff para continuar em outra máquina ou ambiente** (atualizado em 2026-11-03, depois da Fase 5). Último commit de código: `debe97b` (correções da Fase 5). Os docs da Fase 5 (`docs/sinais.md`, `apps/mobile/README.md`, `docs/plano-desenvolvimento.md`, `CHANGELOG.md`, relatório e este handoff) estavam **sem commit** ao fim da sessão de documentação: o orquestrador commita. Leia este arquivo, depois `CLAUDE.md`, `docs/plano-desenvolvimento.md`, `docs/specs/2026-11-03-fase-5-relatorio.md`, `docs/adr/` e `docs/protocolo-servidor.md`.
+**Handoff para continuar em outra máquina ou ambiente** (atualizado em 2026-11-04, depois da Fase 5b). Último commit de código: `debe97b` (correções da Fase 5). Os docs da Fase 5 (`docs/sinais.md`, `apps/mobile/README.md`, `docs/plano-desenvolvimento.md`, `CHANGELOG.md`, relatório e este handoff) estavam **sem commit** ao fim da sessão de documentação: o orquestrador commita. Leia este arquivo, depois `CLAUDE.md`, `docs/plano-desenvolvimento.md`, `docs/specs/2026-11-03-fase-5-relatorio.md`, `docs/adr/` e `docs/protocolo-servidor.md`.
 
 ## Como retomar
 
@@ -19,17 +19,22 @@
   - **Divergências conhecidas** (documentadas, não corrigidas): (1) o aviso de convidado aparece para **todos**, porque `TableRoomScreen.tsx` passa `guest: true` fixo; (2) o comentário de `CODE_NOT_SAVED` em `packages/protocol/src/errors.ts` diz "gravação desligada", mas o servidor não emite o erro quando não há banco; (3) a rota REST `GET /me/partners/:partnerId/codes` não reaplica a limpeza (valor legado de até 140 caracteres volta inteiro).
   - **Não feito**: P3-5 da Rita (significado tradicional em cinza no painel de sinais da mesa; aviso "combinado salvo para esta dupla"); retomada da mesa da fila pública depois de 60 s (não há rota).
 - **Contagens** (`pnpm exec turbo run test --force`, 2026-11-03): rules 174 (12 arquivos), protocol 61 (9), avatar 26 (3), ui 75 (9), mobile 546 (37), server 456 (28). Total 1338 testes unitários. `test:e2e` e `test:int` não foram rodados nesta sessão de documentação. Fase 4 tinha `test:e2e` com 11 cenários (`table.spec.ts`, `avatar.spec.ts`); a Fase 5 acrescentou `codes.spec.ts` (2 cenários). `test:int` do mobile: `codes.int.test.ts` (3 casos) além dos da Fase 4.
+- **Fase 5b** (áudio, vozes e efeitos): **concluída com ressalvas em 2026-11-04**, branch `feat/audio-5b` (sem merge; o orquestrador commita). Status por etapa em `docs/plano-desenvolvimento.md`; uso em `apps/mobile/README.md` (seção Áudio) e `docs/audio.md`.
+  - **Feito**: catálogos de vozes e efeitos em `packages/avatar` (com manifesto gerado); `AvatarParts.voice` usado no criador e salvo; `AudioService` com `expo-audio` (pré-carga de 1 take por evento + LRU de 12); diretor de fala e legenda; soundboard (cliente trata `sfx`; servidor sem mudança); configurações de som; silenciar jogador (reuso do `mutedStore`).
+  - **Não é áudio real**: todos os arquivos são placeholders silenciosos. Serviço de voz e fonte dos efeitos seguem **A DEFINIR** (decisão do usuário; licença comercial antes de qualquer arquivo real).
+  - **Não feito**: vozes `masc_2`, `masc_3`, `fem_2`, `fem_3` sem arquivo (tocam a do mesmo grupo); `trig_shout` não existe no `avatar.riv` e não é disparado (ponto de extensão `store.speech[seat].event`; pedir ao `rai-avatar`); E2E de soundboard e voz não escrito; validação em iOS, Android e Safari; latência e memória no Android; mesas de 6 (fase 8).
+  - **Divergências aceitas**: replay de reconexão e retomada por token são silenciosos; legenda sempre aparece; primeiro som de cada efeito engraçado pode sair mudo. Falas da `rai-avatar` além do repertório e "Meio pau!" em `seis` aguardam revisão do usuário.
+  - **Contagens** (2026-11-04): protocol 70, rules 174, ui 77, mobile 622, server 456, avatar 102. E2E: 13 de 13 passaram.
+  - **Revisão**: Codex não lê o diff nesta máquina (erro 740), então Rita-C (Claude opus): 2 P2 corrigidos (`venceu_serie` em partida `single`; replay na retomada por token) e 4 P3 corrigidos. Auditoria do Vitor: 1 média (permissões do plugin `expo-audio`, corrigida) e 3 baixas corrigidas; nada crítico ou alto.
+- **Catálogo do avatar fechado** (PRs #12 a #19, 2026-11-04 e 2026-11-05): cores, bocas, rosto, cabelo/barba/chapéu, sombreado e correções de franja. Detalhes em `docs/avatar-rive-estado.md` e `CHANGELOG.md`.
 - **CI do GitHub**: não consultado para a Fase 5. Os jobs `verify`, `integration` e `e2e-web` rodaram verdes em `dd8ab6e` (Fase 3, run 41499226931).
 - **Dockerfile do servidor**: buildado em 2026-11-02 (Fase 3). Imagem ~616 MB, `GET /health` 200, `POST /auth/guest` ok com Postgres 16 e Redis reais após `db:deploy`. Não testado: Fly.io real, WebSocket de sala dentro do contêiner.
 
 ## Próximo passo
 
-Pela ordem de `docs/plano-desenvolvimento.md`, vem a **Fase 5b** (áudio). Ela **depende de decisões do usuário** que ainda não foram tomadas (`docs/audio.md`, seção 5):
+Pela ordem de `docs/plano-desenvolvimento.md`, vem a **Fase 6** (contas, perfil, conquistas e missões). A Fase 5b não bloqueia: o áudio real depende só de decisões do usuário (serviço de voz e fonte dos efeitos, com licença comercial), e o código já aceita os arquivos trocando nomes (`assets/audio/README.md`).
 
-- Serviço de voz para o **protótipo**, com licença comercial confirmada. O `rai-avatar` não gera os takes sem isso.
-- Efeitos: fonte e licença de cada um, registrados em `assets/audio/LICENSES.md`. O repositório é público até o fim do levantamento: não versionar material sem direito de redistribuição.
-
-Se o usuário não decidir essas questões, a **Fase 6** (contas, perfil, conquistas e missões, `docs/plano-desenvolvimento.md`) é o próximo caminho com menos bloqueio. Ela também tem decisão aberta (recompensas das conquistas e missões, proposta: itens cosméticos) e o login Google e Apple provavelmente depende de credenciais que o usuário precisa fornecer (confirmar). Dentro da Fase 6, o `POST /auth/link` resolve o vínculo do convidado e o combinado de sinais; o aviso de convidado precisa passar a ler o provedor real da sessão. Confirmar com o usuário antes de começar.
+A Fase 6 tem decisão aberta (recompensas das conquistas e missões, proposta: itens cosméticos) e o login Google e Apple provavelmente depende de credenciais que o usuário precisa fornecer (confirmar). Dentro da Fase 6, o `POST /auth/link` resolve o vínculo do convidado e o combinado de sinais; o aviso de convidado precisa passar a ler o provedor real da sessão. Confirmar com o usuário antes de começar.
 
 Sempre que começar uma fase, um plano curto do `artur-arquiteto` em `docs/specs/` (como nas fases 2, 3, 4 e 5).
 
@@ -65,6 +70,8 @@ Mão de ferro é opção da sala (padrão ligada); Mineiro com mão de 10; bot n
 
 **Fase 5 (2026-11-03)**: a sala de espera é a preparação, sem fase nova nem timer. Combinado de até **60 caracteres** (único teto). Par novo grava ao fim da 1ª partida terminada; série cancelada não grava. Silenciar só local, sem filtro de palavrões (bloqueio e denúncia na Fase 6). Convidado perde o combinado ao sair da conta, com aviso.
 
+**Fase 5b (2026-11-04)**: código e testes antes do áudio real (placeholders silenciosos). Serviço de voz e fonte dos efeitos a definir pelo usuário, com licença comercial antes de qualquer arquivo real. Falas da `rai-avatar` além do repertório e "Meio pau!" em `seis` a revisar.
+
 ## Decisões assumidas por padrão (pedir confirmação ao usuário)
 
 `voteCancel` unânime entre humanos conectados (zerado por mão); ban por sala em memória após strikes; texto de chat com ZWJ rejeitado (`CHAT_BLOCKED`, sem expulsão); cooldown de 60 s para reentrar na fila após casar e não sentar; janela de graça do refresh de 20 s (sucessor irmão uma vez; `REFRESH_REUSE_GRACE_SECONDS=0` desliga); "Nós" azul fixo e "Eles" laranja fixo; jogar carta = selecionar e confirmar; `typedRoutes` DESLIGADO (gerar `router.d.ts` no typecheck exigia subir o Metro, não portável ao Windows); estilo do baralho provisório (`cardColors` em `packages/ui`); textos de acessibilidade sem revisão de UX; `TOKEN_EXPIRED`/`ROOM_NOT_FOUND` ficam em `ERROR_CODES` como reservados ao cliente; borda branca como destaque de sinal com movimento reduzido; fila de sinal de 1 posição por assento, no cliente (`tableController`); `codes` reenviado no `ready` com limite de 500 ms por assento; silenciar por apelido normalizado (`trucaco.muted.v1`, até 50). Lista completa no `CHANGELOG.md`, "Decisões a confirmar".
@@ -96,6 +103,8 @@ Estado do lobby, fila, `JoinGuard`, limitadores e o combinado da sala (`pairs`, 
 - Codex CLI: falha com **erro 1332 do sandbox** no Windows. Não é cota nem rede: a Rita/Codex não roda até isso ser resolvido.
 - Playwright: o Chromium `chromium-1248` já está em `%LOCALAPPDATA%\ms-playwright` nesta máquina.
 - **Resíduos fora do repositório** (apagar à mão; não estão no repositório): `/scratch.sh` na raiz do Git Bash, **vazio** (0 bytes), criado por um agente. Em 2026-11-03 o `/scratch_edit.txt` não foi encontrado nesta máquina (só o `/scratch.sh` existe); se aparecer, conferir o conteúdo antes de apagar.
+
+**Vitest no pacote (2026-11-04):** `vitest` só está na raiz (hoisting). Um `packages/avatar/node_modules/.bin/vitest` antigo apontava para um caminho inexistente e `pnpm --filter @trucaco/avatar test` falhava; `pnpm install --frozen-lockfile --force` resolveu (102 testes passaram).
 
 **Cobertura:** o `apps/mobile` não tem provider de cobertura (`@vitest/coverage-v8` não está instalado no pacote; só `packages/rules` tem o script `test:coverage`). Não há `test:coverage` para o mobile até instalar o provider.
 

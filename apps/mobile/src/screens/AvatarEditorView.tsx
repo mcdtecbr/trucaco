@@ -6,10 +6,12 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Avatar, PART_VARIANT_NAMES } from '@trucaco/avatar';
 import { AVATAR_PART_COUNTS, HAIR_WITHOUT_HAT, isHatAllowed } from '@trucaco/protocol';
-import type { AvatarPartKey, AvatarParts } from '@trucaco/protocol';
+import type { AvatarPartKey, AvatarParts, VoiceId } from '@trucaco/protocol';
 import { MIN_TOUCH, colors, fontSize, radius, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
 import { Screen } from '../ui/Screen';
+import { voiceOf } from './avatarEditorState';
+import { VoicePicker } from './VoicePicker';
 import { Body, Card, ErrorText, Heading, Title } from '../ui/Typography';
 
 /** Lado da pré-visualização (px). */
@@ -86,8 +88,14 @@ export interface AvatarEditorViewProps {
   error: string | null;
   saved: boolean;
   reduceMotion: boolean;
+  /** Resultado do último "Ouvir" (ex.: "Som desligado."). */
+  voiceNote?: string | null;
   on: {
     pick(key: AvatarPartKey, index: number): void;
+    /** Escolhe a voz. Omitido = o editor não mostra o seletor de voz. */
+    voice?(id: VoiceId): void;
+    /** Toca a amostra da voz (o container checa som e arquivo). */
+    preview?(id: VoiceId): void;
     save(): void;
     reload(): void;
     back(): void;
@@ -184,6 +192,15 @@ export function AvatarEditorView(p: AvatarEditorViewProps) {
             : {})}
         />
       ))}
+      {p.on.voice !== undefined && p.on.preview !== undefined ? (
+        <VoicePicker
+          value={voiceOf(p.parts)}
+          disabled={p.busy}
+          note={p.voiceNote}
+          onPick={p.on.voice}
+          onPreview={p.on.preview}
+        />
+      ) : null}
       {p.error !== null ? <ErrorText testID="avatar-error">{p.error}</ErrorText> : null}
       {p.saved && !p.dirty ? <Body testID="avatar-saved">Avatar salvo.</Body> : null}
       <Button
