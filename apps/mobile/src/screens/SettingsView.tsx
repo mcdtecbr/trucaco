@@ -1,8 +1,10 @@
 import { PROTOCOL_VERSION } from '@trucaco/protocol';
+import type { AudioPrefs } from '../audio/prefs';
 import { Button } from '../ui/Button';
 import { Screen } from '../ui/Screen';
 import { TextField } from '../ui/TextField';
 import { Body, Card, ErrorText, Heading, Title } from '../ui/Typography';
+import { SoundSettings } from './SoundSettings';
 
 export interface SettingsViewProps {
   nickname: string | null;
@@ -11,6 +13,8 @@ export interface SettingsViewProps {
   error: string | null;
   saved: boolean;
   appVersion: string;
+  /** Preferências de som deste aparelho. Omitido = sem o cartão de som. */
+  sound?: { prefs: AudioPrefs; onChange(patch: Partial<AudioPrefs>): void };
   on: {
     draft(text: string): void;
     save(): void;
@@ -56,6 +60,9 @@ export function SettingsView(p: SettingsViewProps) {
           testID="settings-avatar"
         />
       </Card>
+      {p.sound !== undefined ? (
+        <SoundSettings prefs={p.sound.prefs} onChange={p.sound.onChange} />
+      ) : null}
       <Card>
         <Heading>Sessão</Heading>
         <Body muted>

@@ -18,5 +18,6 @@ export * from './AvatarPlaceholder';
 export * from './TurnTimer';
 export * from './BetButtons';
 export * from './ChatBubble';
+export * from './SpeechBubble';
 export * from './ChatText';
 export * from './ScoreLayers';

@@ -170,19 +170,36 @@ Status por etapa (2026-11-03):
 | Balões de chat da mesa sobre o avatar (4 s), frases rápidas                        | `fabio-frontend`              | —                                                |
 | Auditoria de chat: filtro, rate limit, vazamento entre canais                      | `vitor-seguranca`             | Sem achado alto                                  |
 
-## Fase 5b: áudio, vozes dos avatares e efeitos (1–2 semanas)
+## Fase 5b: áudio, vozes dos avatares e efeitos (1–2 semanas): concluída em 2026-11-04, com ressalvas
 
 Detalhes em `docs/audio.md`. Protótipo com voz sintetizada de licença comercial; vozes finais na Fase 7.
 
-| Etapa                                                                                                                 | Agente                                          | Pronto quando                                                                 |
-| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------- |
-| Catálogos `voices.ts` e `sfx.ts` em `packages/avatar`; `AvatarParts.voice` salvo em `PUT /me/avatar`                  | `rai-avatar` + `caio-colyseus`                  | Testes de catálogo: todo par voz × evento tem arquivo                         |
-| Áudio de protótipo: `masc_1` e `fem_1` com todos os eventos (2 takes) e 8 efeitos; `assets/audio/LICENSES.md`         | `rai-avatar` (usuário aprova serviço e licença) | Arquivos dentro do orçamento de tamanho; fonte e licença registradas          |
-| Player com `expo-audio`: pré-carregar vozes da mesa, tocar sobreposto, volumes separados, desbloqueio de áudio no web | `fabio-frontend`                                | Toca igual em web, iOS e Android; sem atraso perceptível                      |
-| `GameEvent` → evento de voz pela escada da variante; animação `trig_shout` e balão grande com a fala (legenda)        | `rai-avatar` + `fabio-frontend`                 | "Truco", "seis", "oito", "nove", "dez", "doze" tocam certo nas duas variantes |
-| Soundboard: `sfx` no servidor (validação e rate limit 1/5 s) e painel na mesa                                         | `caio-colyseus` + `fabio-frontend`              | Teste: 2 efeitos em 1 s → segundo rejeitado; todos ouvem o primeiro           |
-| Escolha de voz no criador de avatar; Configurações de som (vozes, efeitos, silenciar efeitos, silenciar um jogador)   | `fabio-frontend`                                | Preferências persistem no aparelho                                            |
-| Auditoria: spam de efeitos, silêncio por jogador, licenças                                                            | `vitor-seguranca`                               | Sem achado alto                                                               |
+**Status (2026-11-04, branch `feat/audio-5b`, ainda sem merge): concluída com ressalvas.** O código e os testes estão prontos. **O áudio real não**: todos os arquivos são placeholders silenciosos (tom senoidal gerado por script). O serviço de voz e a fonte dos efeitos seguem **A DEFINIR**, decisão do usuário. Por isso a etapa de áudio de protótipo e a de licença ficam abertas.
+
+| Etapa                                                                                                                 | Agente                                          | Status                                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catálogos `voices.ts` e `sfx.ts` em `packages/avatar`; `AvatarParts.voice` salvo em `PUT /me/avatar`                  | `rai-avatar` + `caio-colyseus`                  | **Feito.** Teste de catálogo confere que cada take de voz com arquivo existe em disco. `voice` persiste pelo `parseAvatarParts`. Vozes sem arquivo caem na do mesmo grupo (`resolveVoice`).                 |
+| Áudio de protótipo: `masc_1` e `fem_1` com todos os eventos e 8 efeitos; `assets/audio/LICENSES.md`                   | `rai-avatar` (usuário aprova serviço e licença) | **Parcial.** Arquivos existem (46 takes por voz, 3 a 6 por evento; 12 efeitos), mas são **placeholders silenciosos**. Fonte e licença: **A DEFINIR**. Dentro do orçamento de 1 MB por voz e por soundboard. |
+| Player com `expo-audio`: pré-carregar vozes da mesa, tocar sobreposto, volumes separados, desbloqueio de áudio no web | `fabio-frontend`                                | **Feito no código** (um `AudioService` para web, iOS e Android). **Não validado** em aparelho nem no Safari; latência e memória no Android não medidas.                                                     |
+| `GameEvent` → evento de voz pela escada da variante; animação `trig_shout` e balão grande com a fala (legenda)        | `rai-avatar` + `fabio-frontend`                 | **Parcial.** Escada e balão com a legenda feitos. **`trig_shout` não existe no `avatar.riv` e não é disparado** (ponto de extensão: `store.speech[seat].event`; pedir ao `rai-avatar`).                     |
+| Soundboard: `sfx` no servidor (validação e rate limit 1/5 s) e painel na mesa                                         | `caio-colyseus` + `fabio-frontend`              | **Feito.** Servidor já validava e limitava (Fase 2, sem mudança nesta fase); cliente toca o efeito e mostra a marca no assento. Teste de sala e de cliente; **E2E de soundboard não escrito**.              |
+| Escolha de voz no criador de avatar; Configurações de som (vozes, efeitos, silenciar efeitos, silenciar um jogador)   | `fabio-frontend`                                | **Feito.** `VoicePicker` no criador; `SoundSettings` em Configurações. Preferências no aparelho (`trucaco.audio.v1`). Silenciar jogador reusa o `mutedStore` da Fase 5.                                     |
+| Auditoria: spam de efeitos, silêncio por jogador, licenças                                                            | `vitor-seguranca`                               | **Feita.** Sem achado alto. Média (permissões do plugin `expo-audio`) e 3 baixas corrigidas.                                                                                                                |
+
+**Não feito (fica para depois da 5b):**
+
+- **Áudio real**: serviço de voz com licença comercial confirmada e fonte dos efeitos (A DEFINIR). Sem isso não há arquivo para registrar em `assets/audio/LICENSES.md`.
+- **Vozes `masc_2`, `masc_3`, `fem_2` e `fem_3`** sem arquivo (tocam a voz do mesmo grupo até existirem).
+- **`trig_shout`** no Rive e o disparo da animação de boca aberta.
+- **Validação em aparelho** iOS e Android, e no Safari. Latência do primeiro grito e memória dos players no Android.
+- **Mesas de 6 assentos** (fase 8): não testadas com a pré-carga e o LRU.
+- **E2E novo** de soundboard e de voz. A suíte E2E atual passa (13 de 13).
+
+**Divergências aceitas e registradas:**
+
+- Replay de reconexão e retomada por token são silenciosos (não tocam a fala de novo).
+- A legenda sempre aparece, mesmo com "sem som" ou com o jogador silenciado.
+- O soundboard carrega no primeiro uso: o primeiro som de cada efeito engraçado pode sair mudo.
 
 ## Fase 6: contas, perfil, conquistas e missões (3 semanas)
 

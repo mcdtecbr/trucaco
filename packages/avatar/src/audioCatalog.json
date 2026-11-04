@@ -1,0 +1,88 @@
+{
+  "voicesWithFiles": ["masc_1", "fem_1"],
+  "gameSfx": ["card_play", "card_shuffle", "table_slam", "ambience_bar"],
+  "soundboardSfx": [
+    "horn",
+    "sad_trombone",
+    "laugh",
+    "crowd_ooh",
+    "rooster",
+    "rimshot",
+    "clap",
+    "crickets"
+  ],
+  "voiceEvents": {
+    "truco": [
+      { "id": "truco_1", "text": "Truco, ladrão!" },
+      { "id": "truco_2", "text": "Truco, marreco!" },
+      { "id": "truco_3", "text": "Truco na orelha!" },
+      { "id": "truco_4", "text": "Aqui tem coragem!" },
+      { "id": "truco_5", "text": "Vem que tem!" }
+    ],
+    "seis": [
+      { "id": "seis_1", "text": "Meia dúzia!" },
+      { "id": "seis_2", "text": "Meio pau!" },
+      { "id": "seis_3", "text": "Seis!" },
+      { "id": "seis_4", "text": "Foge não, que agora é tarde!" }
+    ],
+    "oito": [
+      { "id": "oito_1", "text": "Oito!" },
+      { "id": "oito_2", "text": "Subiu pra oito!" },
+      { "id": "oito_3", "text": "Oito, e agora?" }
+    ],
+    "nove": [
+      { "id": "nove_1", "text": "Nove!" },
+      { "id": "nove_2", "text": "Nooove!" },
+      { "id": "nove_3", "text": "Foge não, que agora é tarde!" }
+    ],
+    "dez": [
+      { "id": "dez_1", "text": "Dez!" },
+      { "id": "dez_2", "text": "Subiu pra dez!" },
+      { "id": "dez_3", "text": "Dez, e aí?" }
+    ],
+    "doze": [
+      { "id": "doze_1", "text": "Dooze!" },
+      { "id": "doze_2", "text": "Queda!" },
+      { "id": "doze_3", "text": "Cai o teto!" },
+      { "id": "doze_4", "text": "Foge não, que agora é tarde!" }
+    ],
+    "quero": [
+      { "id": "quero_1", "text": "Quero!" },
+      { "id": "quero_2", "text": "Vem pra cá!" },
+      { "id": "quero_3", "text": "Tá pago!" }
+    ],
+    "corro": [
+      { "id": "corro_1", "text": "Corro!" },
+      { "id": "corro_2", "text": "Tô fora!" },
+      { "id": "corro_3", "text": "Dessa vez não!" },
+      { "id": "corro_4", "text": "Pra mim chega!" },
+      { "id": "corro_5", "text": "Pode ficar com essa!" },
+      { "id": "corro_6", "text": "Não vou nessa!" }
+    ],
+    "mao_especial": [
+      { "id": "mao_especial_1", "text": "Vamos nessa!" },
+      { "id": "mao_especial_2", "text": "Bora jogar!" },
+      { "id": "mao_especial_3", "text": "Tô dentro!" }
+    ],
+    "mao_de_ferro": [
+      { "id": "mao_de_ferro_1", "text": "Mão de ferro!" },
+      { "id": "mao_de_ferro_2", "text": "É no escuro!" },
+      { "id": "mao_de_ferro_3", "text": "Fechei os olhos!" }
+    ],
+    "vaza": [
+      { "id": "vaza_1", "text": "Manda o Zap pra cá!" },
+      { "id": "vaza_2", "text": "Boa!" },
+      { "id": "vaza_3", "text": "Essa é minha!" }
+    ],
+    "venceu_jogo": [
+      { "id": "venceu_jogo_1", "text": "É nossa!" },
+      { "id": "venceu_jogo_2", "text": "Tá no papo!" },
+      { "id": "venceu_jogo_3", "text": "Ganhou, ganhou!" }
+    ],
+    "venceu_serie": [
+      { "id": "venceu_serie_1", "text": "Campeões!" },
+      { "id": "venceu_serie_2", "text": "Levamos tudo!" },
+      { "id": "venceu_serie_3", "text": "Mesa limpa!" }
+    ]
+  }
+}

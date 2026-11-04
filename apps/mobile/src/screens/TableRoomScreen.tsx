@@ -1,8 +1,9 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveRegion, useAnnouncer, useLayoutMode } from '@trucaco/ui';
-import type { ChatScope, LegalActionId, SignalId } from '@trucaco/protocol';
+import type { ChatScope, LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import type { ChatPanelProps } from './ChatPanel';
+import { useAudioPrefs } from '../audio/useAudioPrefs';
 import { errorMessage } from '../i18n/errors';
 import { isE2EMode } from '../net/config';
 import { useReduceMotion } from '../platform/useReduceMotion';
@@ -230,6 +231,10 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   const coverMode = useTableStore((s) => s.coverMode);
   const chatUnread = useTableStore((s) => s.chatUnread);
   const rawBubbles = useTableStore((s) => s.bubbles);
+  const speech = useTableStore((s) => s.speech);
+  const sfxMarks = useTableStore((s) => s.sfxMarks);
+  const audio = getApp().audio;
+  const audioPrefs = useAudioPrefs(audio);
   const codes = useTableStore((s) => s.codes);
   const partnerSignalNote = useTableStore((s) => s.partnerSignalNote);
   const signals = useTableStore((s) => s.signals);
@@ -274,6 +279,16 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       codesPanel={codesPanel}
       partnerSignalNote={partnerSignalNote}
       bubbles={bubbles}
+      speech={speech}
+      sfxMarks={sfxMarks}
+      soundboard={{
+        onSend: (id: SfxId) => table.sendSfx(id),
+        silenced: audioPrefs.muted || audioPrefs.funnyMuted,
+      }}
+      sound={{
+        muted: audioPrefs.muted,
+        onToggle: () => audio.setPrefs({ muted: !audioPrefs.muted }),
+      }}
       signals={signals}
       reduceMotion={reduceMotion}
       deadlineAt={deadlineAt}

@@ -33,6 +33,23 @@ export interface ChatBubbleEntry {
   readonly text: string;
 }
 
+/**
+ * Legenda grande da fala de um avatar (grito de truco, "quero", "corro"...), ~2 s. Local: nada vai à rede.
+ * `event` é o ponto de extensão para o visual do grito no avatar (boca aberta) quando existir o trigger.
+ */
+export interface SpeechBubbleEntry {
+  readonly id: number;
+  readonly event: string;
+  readonly text: string;
+}
+
+/** Legenda curta de um efeito do painel (emoji sobre o avatar, ~1,5 s). Local. */
+export interface SfxMarkEntry {
+  readonly id: number;
+  readonly icon: string;
+  readonly label: string;
+}
+
 /** Sinal em animação sobre um assento. `key` muda a cada sinal (o mesmo id duas vezes anima duas vezes). */
 export interface ActiveSignal {
   readonly id: SignalId;
@@ -56,6 +73,10 @@ export interface TableStoreState {
   readonly chat: readonly ChatEntry[];
   /** Balão por assento (some sozinho após ~4 s). */
   readonly bubbles: Readonly<Record<number, ChatBubbleEntry>>;
+  /** Legenda da fala por assento (some sozinha após ~2 s; independente do balão de chat). */
+  readonly speech: Readonly<Record<number, SpeechBubbleEntry>>;
+  /** Emoji do efeito engraçado por assento (some sozinho após ~1,5 s). */
+  readonly sfxMarks: Readonly<Record<number, SfxMarkEntry>>;
   readonly chatUnread: Readonly<Record<ChatScope, number>>;
   readonly chatDraft: Readonly<Record<ChatScope, string>>;
   /** Código do último erro de chat (traduzido na tela). */
@@ -98,6 +119,8 @@ const INITIAL = {
   chatTab: 'table' as ChatScope,
   chat: [] as readonly ChatEntry[],
   bubbles: {} as Readonly<Record<number, ChatBubbleEntry>>,
+  speech: {} as Readonly<Record<number, SpeechBubbleEntry>>,
+  sfxMarks: {} as Readonly<Record<number, SfxMarkEntry>>,
   chatUnread: { table: 0, partner: 0 } as Readonly<Record<ChatScope, number>>,
   chatDraft: { table: '', partner: '' } as Readonly<Record<ChatScope, string>>,
   chatError: null as string | null,

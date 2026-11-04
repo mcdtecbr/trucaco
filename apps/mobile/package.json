@@ -22,6 +22,7 @@
     "@trucaco/protocol": "workspace:*",
     "@trucaco/ui": "workspace:*",
     "expo": "58.0.22",
+    "expo-audio": "58.0.11",
     "expo-constants": "58.0.14",
     "expo-linking": "58.0.15",
     "expo-router": "58.0.29",

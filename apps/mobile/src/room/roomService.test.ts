@@ -88,6 +88,7 @@ function setup() {
     onChat: vi.fn(),
     onCodes: vi.fn(),
     onSignal: vi.fn(),
+    onSfx: vi.fn(),
     onPresence: vi.fn(),
     onTurnTimer: vi.fn(),
     onServerError: vi.fn(),
@@ -296,6 +297,15 @@ describe('roomService alimentando a mesa', () => {
     expect(t.table.onReconnected).toHaveBeenCalledTimes(1);
   });
 
+  it('retomada por token abre a janela de replay; entrada por reserva não', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    expect(t.table.onReconnected).not.toHaveBeenCalled();
+    await t.service.resume('r:tok');
+    expect(t.client.reconnect).toHaveBeenCalledWith({ reconnectionToken: 'r:tok' });
+    expect(t.table.onReconnected).toHaveBeenCalledTimes(1);
+  });
+
   it('reconexão manual continua o seq da sala anterior (replay só do que falta)', async () => {
     const t = setup();
     await t.service.enter(reservation);
@@ -402,6 +412,13 @@ describe('4E: sinais', () => {
     await t.service.enter(reservation);
     t.rooms[0]!.emit('msg:signal', { seat: 2, signalId: 'wink', at: 1 });
     expect(t.table.onSignal).toHaveBeenCalledWith({ seat: 2, signalId: 'wink', at: 1 });
+  });
+
+  it('a mensagem sfx chega ao controlador da mesa (não é mais ignorada)', async () => {
+    const t = setup();
+    await t.service.enter(reservation);
+    t.rooms[0]!.emit('msg:sfx', { seat: 1, sfxId: 'horn', at: 1 });
+    expect(t.table.onSfx).toHaveBeenCalledWith({ seat: 1, sfxId: 'horn', at: 1 });
   });
 
   it('o estado da sala projeta o avatar (JSON) com fallback para o padrão', async () => {
