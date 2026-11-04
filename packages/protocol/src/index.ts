@@ -3,7 +3,9 @@ export {
   AVATAR_PART_COUNTS,
   AVATAR_PART_KEYS,
   DEFAULT_AVATAR_PARTS,
+  HAIR_WITHOUT_HAT,
   VOICE_IDS,
+  isHatAllowed,
   parseAvatarParts,
 } from './avatar';
 export type { AvatarPartKey, AvatarParts, VoiceId } from './avatar';

@@ -337,7 +337,11 @@ describe('GET/PUT /me', () => {
       { nested: { a: 1 } },
       { long: 'x'.repeat(200) },
       { ...DEFAULT_AVATAR_PARTS, extra: 1 },
-      { ...DEFAULT_AVATAR_PARTS, hair: 8 },
+      { ...DEFAULT_AVATAR_PARTS, hair: 19 },
+      { ...DEFAULT_AVATAR_PARTS, beard: 5 },
+      { ...DEFAULT_AVATAR_PARTS, hair: 2, hat: 1 },
+      { ...DEFAULT_AVATAR_PARTS, hair: 14, hat: 10 },
+      { ...DEFAULT_AVATAR_PARTS, hat: 11 },
       { ...DEFAULT_AVATAR_PARTS, eyes: '1' },
       { ...DEFAULT_AVATAR_PARTS, voice: 'robo' },
     ];

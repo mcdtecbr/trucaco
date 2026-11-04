@@ -28,7 +28,7 @@ export const RIVE_CONTRACT = {
 export const RIVE_INPUT_DOCS: Readonly<Record<AvatarPartKey, string>> = {
   face_shape: 'Number: formato do rosto (0..5)',
   skin: 'Number: cor da pele',
-  hair: 'Number: cabelo (estilo e cor)',
+  hair: 'Number: formato do cabelo (0..18; 0 = careca; cor = hair_color)',
   eyes: 'Number: estilo dos olhos (0..5)',
   mouth: 'Number: estilo da boca',
   outfit: 'Number: roupa',
@@ -39,4 +39,6 @@ export const RIVE_INPUT_DOCS: Readonly<Record<AvatarPartKey, string>> = {
   outfit_color: 'Number: cor principal da roupa (0 = padrão do modelo)',
   brows: 'Number: estilo das sobrancelhas (0..3; cor = hair_color)',
   nose: 'Number: estilo do nariz (0..7; cor = sombra da pele)',
+  beard: 'Number: barba (0 = sem barba, 1..4; cor = hair_color)',
+  hat: 'Number: chapéu ou boné (0 = nenhum, 1..10; cor própria de cada um)',
 };

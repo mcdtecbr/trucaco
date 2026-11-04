@@ -90,6 +90,8 @@ export function AvatarFallback(props: AvatarFallbackProps) {
     outfit_color: safeIndex('outfit_color', parsed.outfit_color),
     brows: safeIndex('brows', parsed.brows),
     nose: safeIndex('nose', parsed.nose),
+    beard: safeIndex('beard', parsed.beard),
+    hat: safeIndex('hat', parsed.hat),
   };
   const bg = BG_COLORS[cfg.bg_color] ?? BG_COLORS[0]!;
   const skin = resolveFill('skin', cfg);
@@ -138,11 +140,7 @@ export function AvatarFallback(props: AvatarFallbackProps) {
             fill={resolveFill(p.fill, cfg)}
             {...(p.evenodd === true ? { fillRule: 'evenodd' as const } : {})}
             {...(p.opacity !== undefined ? { fillOpacity: p.opacity } : {})}
-            {...(p.mirror === true
-              ? { transform: 'matrix(-1 0 0 1 512 0)' }
-              : p.tilt !== undefined
-                ? { transform: p.tilt }
-                : {})}
+            {...(p.mirror === true ? { transform: 'matrix(-1 0 0 1 512 0)' } : {})}
           />
         ))}
       </Svg>

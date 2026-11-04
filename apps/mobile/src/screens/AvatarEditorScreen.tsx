@@ -6,7 +6,7 @@ import { messageForError } from '../i18n/errors';
 import { useReduceMotion } from '../platform/useReduceMotion';
 import { getApp } from '../services/app';
 import { initialAvatar, samePartsAs } from './avatarEditorState';
-import { AvatarEditorView } from './AvatarEditorView';
+import { AvatarEditorView, applyPick } from './AvatarEditorView';
 
 export function AvatarEditorScreen() {
   const router = useRouter();
@@ -78,7 +78,7 @@ export function AvatarEditorScreen() {
       reduceMotion={reduceMotion}
       on={{
         pick: (key: AvatarPartKey, index: number) => {
-          setParts((cur) => ({ ...cur, [key]: index }));
+          setParts((cur) => applyPick(cur, key, index));
           setJustSaved(false);
           setError(null);
         },

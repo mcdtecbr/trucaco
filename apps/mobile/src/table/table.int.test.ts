@@ -602,7 +602,7 @@ describe('4E/4F: sinais e avatar contra o servidor real', () => {
     const chosen = {
       face_shape: 1,
       skin: 3,
-      hair: 6,
+      hair: 16,
       eyes: 2,
       mouth: 1,
       outfit: 4,
@@ -613,6 +613,8 @@ describe('4E/4F: sinais e avatar contra o servidor real', () => {
       outfit_color: 9,
       brows: 2,
       nose: 5,
+      beard: 3,
+      hat: 7,
     };
     const ps = await seatedAndPlaying(async (all) => {
       const s = all[1]!.session;

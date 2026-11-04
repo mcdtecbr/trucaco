@@ -84,8 +84,12 @@ describe('contrato do rig', () => {
   it('o catálogo segue o avatar.riv: contagens e nomes', () => {
     expect(AVATAR_PART_COUNTS.accessory).toBe(3);
     expect(PART_VARIANT_NAMES.accessory).toEqual(['nenhum', 'bigode', 'brinco']);
-    expect(PART_VARIANT_NAMES.hair[2]).toBe('afro');
-    expect(PART_VARIANT_NAMES.hair[7]).toBe('topete');
+    expect(PART_VARIANT_NAMES.hair[0]).toBe('careca');
+    expect(PART_VARIANT_NAMES.hair[8]).toBe('afro');
+    expect(PART_VARIANT_NAMES.hair[18]).toBe('raspado');
+    expect(PART_VARIANT_NAMES.beard[0]).toBe('sem barba');
+    expect(PART_VARIANT_NAMES.hat[0]).toBe('sem chapéu');
+    expect(AVATAR_PART_COUNTS).toMatchObject({ hair: 19, beard: 5, hat: 11 });
     expect(SKIN_COLORS[0]).toEqual({ base: '#FCE4D6', shade: '#E8B89B' });
     expect(BG_COLORS[0]).toBe('#1E5631');
   });

@@ -3,7 +3,14 @@ import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@tru
 import { SIGNALS } from '@trucaco/avatar';
 import { describe, expect, it, vi } from 'vitest';
 import { initialAvatar, samePartsAs } from './avatarEditorState';
-import { AvatarEditorView, EDITOR_PART_ORDER, PART_TITLES, variantLabel } from './AvatarEditorView';
+import {
+  AvatarEditorView,
+  EDITOR_PART_ORDER,
+  HAT_BLOCKED_HINT,
+  PART_TITLES,
+  applyPick,
+  variantLabel,
+} from './AvatarEditorView';
 import type { AvatarEditorViewProps } from './AvatarEditorView';
 import { SeatAvatar } from './SeatAvatar';
 import { SignalPanel } from './SignalPanel';
@@ -98,6 +105,47 @@ describe('AvatarEditorView', () => {
     expect(i('brows')).toBeGreaterThan(i('eye_color'));
     expect(PART_TITLES.brows).toBe('Sobrancelhas');
     expect(PART_TITLES.nose).toBe('Nariz');
+    // Fatia 4: barba e chapéu têm título e vêm logo depois do cabelo e da sua cor
+    expect(i('beard')).toBe(i('hair_color') + 1);
+    expect(i('hat')).toBe(i('beard') + 1);
+    expect(PART_TITLES.beard).toBe('Barba');
+    expect(PART_TITLES.hat).toBe('Chapéu');
+  });
+
+  it('cabelo 2 e 14: escolher zera o chapéu e escolher chapéu depois não muda nada', () => {
+    const withHat = { ...DEFAULT_AVATAR_PARTS, hair: 3, hat: 5 };
+    for (const hair of [2, 14]) {
+      const next = applyPick(withHat, 'hair', hair);
+      expect(next).toMatchObject({ hair, hat: 0 });
+      expect(applyPick(next, 'hat', 4)).toBe(next);
+      expect(applyPick(next, 'hat', 0)).toEqual(next);
+    }
+    // outros cabelos e outras partes seguem livres
+    expect(applyPick(withHat, 'hair', 8)).toMatchObject({ hair: 8, hat: 5 });
+    expect(applyPick(withHat, 'hat', 7)).toMatchObject({ hair: 3, hat: 7 });
+  });
+
+  it('com cabelo 2/14 as opções de chapéu (menos "Sem chapéu") ficam desabilitadas, com dica', () => {
+    for (const hair of [2, 14]) {
+      const out = editor({ parts: { ...DEFAULT_AVATAR_PARTS, hair } });
+      const tag = (i: number): string =>
+        new RegExp(`<[^>]*data-testid="avatar-part-hat-${i}"[^>]*>`).exec(out)![0];
+      expect(tag(0)).not.toContain('disabled');
+      for (let i = 1; i < AVATAR_PART_COUNTS.hat; i++) {
+        expect(tag(i), `hat ${i}`).toContain('aria-disabled="true"');
+      }
+      expect(out).toContain('data-testid="avatar-part-hat-hint"');
+      expect(out).toContain(HAT_BLOCKED_HINT);
+    }
+  });
+
+  it('com outro cabelo o chapéu fica livre e sem dica', () => {
+    const out = editor({ parts: { ...DEFAULT_AVATAR_PARTS, hair: 3, hat: 2 } });
+    expect(out).not.toContain('avatar-part-hat-hint');
+    expect(out).not.toContain(HAT_BLOCKED_HINT);
+    expect(new RegExp('<[^>]*data-testid="avatar-part-hat-5"[^>]*>').exec(out)![0]).not.toContain(
+      'aria-disabled="true"',
+    );
   });
 
   it('rótulos vêm do catálogo; índice além do catálogo vira "Opção N"', () => {

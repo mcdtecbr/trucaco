@@ -1,0 +1,13 @@
+-- ===========================================================================
+-- Migração escrita à mão (sem alteração de schema.prisma): dados.
+-- Ampliação do catálogo do avatar, fatia 4 (cabelo, barba e chapéu). `hair` passa a ter 19 formatos na ordem
+-- das pranchas de referência (boné e chapéu saíram de `hair`) e entram duas chaves obrigatórias no fim de
+-- AvatarParts, `beard` (5 opções) e `hat` (11 opções). Os índices de `hair` foram REFEITOS (sem compatibilidade
+-- com o catálogo anterior), então os avatares já gravados deixam de fazer sentido: DECISÃO DO USUÁRIO, eles
+-- são EXCLUÍDOS e cada jogador recria o seu. Sem avatar, o servidor devolve `avatar: null` em `GET /me` e o
+-- cliente (criador de avatar e mesa) usa `DEFAULT_AVATAR_PARTS`, sem erro.
+-- `avatars` só tem FK para `users` (nada referencia `avatars`), então o DELETE não cascateia para nada.
+-- Idempotente: rodar de novo apaga 0 linhas (a menos que já existam avatares novos; por isso a migração
+-- roda uma única vez, pelo `prisma migrate deploy`).
+-- ===========================================================================
+DELETE FROM "avatars";

@@ -21,6 +21,9 @@ export const AVATAR_PART_KEYS = [
   // Rosto (Fatia 3): sobrancelhas e nariz, dimensões novas. Acrescentadas ao fim, nesta ordem.
   'brows',
   'nose',
+  // Cabelo, barba e chapéu (Fatia 4): barba e chapéu são dimensões novas. Acrescentadas ao fim, nesta ordem.
+  'beard',
+  'hat',
 ] as const;
 export type AvatarPartKey = (typeof AVATAR_PART_KEYS)[number];
 
@@ -33,7 +36,7 @@ export type AvatarPartKey = (typeof AVATAR_PART_KEYS)[number];
 export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   face_shape: 6,
   skin: 8,
-  hair: 8,
+  hair: 19,
   eyes: 6,
   mouth: 5,
   outfit: 6,
@@ -44,7 +47,21 @@ export const AVATAR_PART_COUNTS: Readonly<Record<AvatarPartKey, number>> = {
   outfit_color: 11,
   brows: 4,
   nose: 8,
+  beard: 5,
+  hat: 11,
 };
+
+/**
+ * Cabelos que não combinam com chapéu (2 longo ondulado e 14 longo liso): com um deles, `hat` tem que ser 0.
+ * Regra do catálogo, validada pelo servidor em `parseAvatarParts`; o editor impede a combinação e o desenho
+ * ignora o chapéu se ela aparecer mesmo assim (ADR 0007).
+ */
+export const HAIR_WITHOUT_HAT: readonly number[] = [2, 14];
+
+/** `true` se o par cabelo/chapéu é permitido (`hat` 0 sempre é). */
+export function isHatAllowed(hair: number, hat: number): boolean {
+  return hat === 0 || !HAIR_WITHOUT_HAT.includes(hair);
+}
 
 /** Vozes do avatar (usadas na Fase 5b; já reservadas no contrato). */
 export const VOICE_IDS = ['masc_1', 'masc_2', 'masc_3', 'fem_1', 'fem_2', 'fem_3'] as const;
@@ -64,6 +81,8 @@ export interface AvatarParts {
   readonly outfit_color: number;
   readonly brows: number;
   readonly nose: number;
+  readonly beard: number;
+  readonly hat: number;
   readonly voice?: VoiceId;
 }
 
@@ -82,6 +101,8 @@ export const DEFAULT_AVATAR_PARTS: AvatarParts = {
   outfit_color: 0,
   brows: 0,
   nose: 0,
+  beard: 0,
+  hat: 0,
 };
 
 const KEY_SET: ReadonlySet<string> = new Set([...AVATAR_PART_KEYS, 'voice']);
@@ -89,7 +110,8 @@ const KEY_SET: ReadonlySet<string> = new Set([...AVATAR_PART_KEYS, 'voice']);
 /**
  * Valida e devolve uma cópia canônica das partes, ou `null`. Aceita só objeto plano com EXATAMENTE as
  * chaves de `AVATAR_PART_KEYS` (inteiros em `0..n-1`) e, opcionalmente, `voice` do catálogo. Chave
- * extra, parte faltando, índice fora do intervalo, tipo errado ou protótipo estranho -> `null`.
+ * extra, parte faltando, índice fora do intervalo, tipo errado, protótipo estranho ou cabelo sem chapéu
+ * (`HAIR_WITHOUT_HAT`) com chapéu -> `null`.
  */
 export function parseAvatarParts(raw: unknown): AvatarParts | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
@@ -108,6 +130,7 @@ export function parseAvatarParts(raw: unknown): AvatarParts | null {
     }
     out[key] = v;
   }
+  if (!isHatAllowed(out['hair'] as number, out['hat'] as number)) return null;
   if (Object.hasOwn(rec, 'voice')) {
     const voice = rec['voice'];
     if (typeof voice !== 'string' || !(VOICE_IDS as readonly string[]).includes(voice)) return null;
