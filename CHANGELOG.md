@@ -4,7 +4,27 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Avatar: ampliação do catálogo, fatia 5 (sombreado) (2026-11-04), sem commit
+### Avatar: fechamento das pendências visuais (2026-11-04), sem commit
+
+Branch `fix/avatar-pendencias`. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento das pendências visuais") e `docs/avatar-rig.md` (seção 3.3). `assets/rive/avatar.riv` reexportado (60.502 bytes, 15 Numbers, 16 triggers). Sem mudança de catálogo, de inputs nem de migração. Não validado em aparelho iOS/Android.
+
+#### Corrigido
+
+- Franjas dos cabelos 1, 5, 7, 10 e 17 subidas para as sobrancelhas ficarem visíveis (Rive e fallback vetorial).
+- Cabelo 18 (raspado) com opacidade de 72% (antes 50%).
+- Pompom do chapéu 6 menor e mais baixo; o gorro inteiro cabe no artboard.
+- Transições Any State para `eye_color_0`, `nose_0` e `outfit_color_0` que faltavam no Rive: voltar ao 0 mantinha o valor anterior.
+- Nós vazios `jawsoftnew_new` e `jawnew_new` removidos do `.riv`.
+
+#### Alterado
+
+- `packages/avatar/src/art.test.ts` ganhou o bloco "margem no artboard 512x512" (chapéus e cabelos com y >= 8; pompom com y >= 50; cabelo 18 com opacidade >= 0,7).
+
+#### Divergências conhecidas
+
+- Continuam: cabelos 2, 12 e 14 cobrem de 5% a 40% dos olhos e das sobrancelhas; brilho do cabelo no Rive recorta pelo Solo inteiro (no fallback, pelo cabelo escolhido); assets de importação ainda no painel Assets do Rive. Lista completa em `docs/avatar-rive-estado.md`.
+
+### Avatar: ampliação do catálogo, fatia 5 (sombreado) (2026-11-04), mesclada no PR #16 (7fdca9e)
 
 Decisão em `docs/adr/0008-sombreado-fixo-sem-sombra-projetada-e-recorte-por-solo.md`. O `assets/rive/avatar.riv` foi reexportado (60.606 bytes, 15 Numbers, 16 triggers) e validado no runtime web (`@rive-app/canvas` 2.21.6). Não validado em aparelho iOS/Android.
 

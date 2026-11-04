@@ -5,7 +5,7 @@
 - [Rodízio do pé e revanche](decisao_rodizio_pe_revanche.md) — usuário decidiu: criar mensagem de revanche e aplicar rodízio do pé nela
 - [Resposta de aposta e onze/dez](decisao_resposta_aposta_onze_dez.md) — usuário: só um jogador responde truco/retruco; onze/dez: os dois decidem, um correr = dupla corre
 - [Ideia de arte: tela de carregamento](ideia_arte_tela_carregamento.md) — imagem conceito guardada para a Fase 7; sem marcas de terceiros, não está no repo
-- [Avatar Rive: estado](avatar-rive-estado.md) — `avatar.riv` no develop (16,5 KB, sem splash, 15 sinais, 8 Numbers); catálogo e fallback seguem o `.riv` (ADR 0003); pendências: Termos de Serviço do Rive, aparelho, ossos
+- [Avatar Rive: estado](avatar-rive-estado.md) — `avatar.riv` no develop (60,5 KB, 15 Numbers, 16 triggers, após fix/avatar-pendencias); catálogo e fallback seguem o `.riv` (ADR 0003); pendências: Termos de Serviço do Rive, aparelho, assets sem uso no painel
 - [Receitas do editor Rive](rive-editor-receitas.md) — como operar o editor Rive por automação: receitas validadas, coordenadas, armadilhas
 - [PR e revisão](feedback_pr_e_revisao.md) — gh instalado, abrir o link do PR, Codex só com o diff no prompt (erro 740), worktree curto, pedir autorização para downloads
 - [Autonomia no Rive](feedback_autonomia_rive.md) — o agente faz o trabalho no editor Rive; nunca gerar o .riv por código

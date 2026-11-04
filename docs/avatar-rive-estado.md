@@ -254,3 +254,48 @@ Pendências:
 - **Assets duplicados** no painel Assets do Rive: limpar antes de exportar a próxima versão.
 - **ClipPath nativo** (react-native-svg, iOS e Android) não visto em aparelho.
 - Aparelho iOS/Android não testado. O Rive não é o renderizador de produção (ADR 0002).
+
+## Fechamento das pendências visuais (04/11/2026, branch `fix/avatar-pendencias`)
+
+Correção visual do `avatar.riv` depois da fatia 5: franjas, cabelo raspado, gorro e transições. Sem mudança de catálogo, de inputs nem de migração; `PROTOCOL_VERSION` continua 5.
+
+`assets/rive/avatar.riv` reexportado como `avatar (20).riv`: **60.502 bytes**, artboard `Avatar`, state machine `Main`, **15 Numbers e 16 triggers**. Validado no runtime web (`@rive-app/canvas`) na sessão de correção; a validação não foi repetida ao documentar. Não validado em iOS/Android.
+
+### Corrigido no Rive
+
+- **Franjas dos cabelos 1, 5, 7, 10 e 17**: borda subida para as sobrancelhas ficarem visíveis. Validado: sobrancelhas visíveis nesses cinco.
+- **Cabelo 18 (raspado)**: opacidade de 50% para 72%. O alpha era chaveado nas 8 timelines `hair_color_0` a `hair_color_7` (valor estático), e as 8 chaves foram ajustadas.
+- **Gorro (chapéu 6)**: pompom menor e mais baixo. Validado com 8 cabelos diferentes: o gorro cabe no artboard.
+- **Transições que faltavam**: Any State para `eye_color_0`, `nose_0` e `outfit_color_0`. Voltar ao 0 mantinha o valor anterior. As demais layers já tinham a transição; `hair_color` tinha sido corrigida na fatia 4. Validado: `eye_color` 2 para 0, `outfit_color` 8 para 0, `nose` 3 para 0 e `hair_color` 6 para 0 voltam ao estado base.
+- **Nós vazios** `jawsoftnew_new` e `jawnew_new` e os assets deles apagados.
+
+### Fallback (`packages/avatar/src/art.ts`)
+
+Mesma geometria do Rive: franjas 1, 5, 7, 10 e 17 subidas; cabelo 18 com `opacity` 0.72; pompom do chapéu 6 é `ell(256, 64, 23, 21)` escalado por `HAT_SCALE` (`'6'`), com topo em y 56,5, igual ao SVG de origem. `art.test.ts` ganhou o bloco "margem no artboard 512x512" (chapéus e cabelos com y >= 8; pompom com y >= 50; cabelo 18 com opacidade >= 0,7). Os 36 testes do arquivo passaram.
+
+Geometria por peça: `docs/avatar-rig.md`, seção 3.3.
+
+### Pendências fechadas
+
+- Franjas dos cabelos 1, 5, 7, 10 e 17 sobre as sobrancelhas.
+- Cabelo 18 cinza claro (agora 72%).
+- Chapéu 6 "no topo": o gorro inteiro cabe (cúpula em y 80,8; pompom em y 56,5). O SVG de origem nunca saiu do artboard (topo em y 47,5 antes da correção). O excesso visto antes foi leitura errada no editor, não geometria.
+- `eye_color` com possível defeito de transição: voltar ao 0 volta ao estado base.
+- Nós vazios e assets `jawsoftnew_new` / `jawnew_new`.
+
+### Pendências que continuam
+
+1. Cabelos 2, 12 e 14 cobrem de 5% a 40% dos olhos e das sobrancelhas (medido; fora do escopo desta correção).
+2. Brilho do cabelo: no Rive recorta pelo Solo inteiro (`cabelo4a`); no fallback, pelo cabelo escolhido (divergência da fatia 5).
+3. Assets de importação ainda no painel Assets do Rive: `shade_*`, `fatia2`, `fatia3a`, `fatia3b`, `fatia4b`, `cabelo4a`, `boca2`, `avatar_partes`, `hair_short`, `face_oval`. Não está provado que estão sem uso: conferir antes de apagar.
+4. Opacidade do cabelo 18 com `hair_color` 3 não lida depois da correção.
+5. Matriz de combinações da fatia 5 ainda não conferida toda no editor.
+6. iOS e Android não testados; `ClipPath` nativo não visto em aparelho.
+
+### Lições do editor
+
+- O campo numérico do inspetor engole o primeiro caractere: esperar 1 s antes do Ctrl+A.
+- Delete de asset aparece com atraso de alguns segundos.
+- Digitar X/Y e ângulo/distância das alças no inspetor do Edit Vertices reproduz um SVG com exatidão.
+- As exportações vão para `D:\Downloads` (não `C:\Users\marce\Downloads`).
+- A sessão do Chrome pode cair e o Rive pedir login. Nunca digitar credenciais: o usuário refaz o login.

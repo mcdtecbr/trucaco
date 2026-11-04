@@ -1,6 +1,6 @@
 ---
 name: avatar-rive-estado
-description: Estado do avatar Rive em 2026-11-03 (avatar.riv no develop, catálogo alinhado, 15 sinais) e o que falta
+description: Estado do avatar Rive em 2026-11-04 (avatar.riv 60.502 bytes após fix/avatar-pendencias, 15 Numbers, 16 triggers) e o que falta
 metadata:
   type: project
 ---
@@ -28,5 +28,6 @@ metadata:
 3. O Rive em si (4G web, 4H nativo) ainda não é o renderizador de produção: continua o fallback vetorial (ADR 0002 e 0003).
 4. Não existe `.rev`: o fonte do Rive fica na nuvem (`editor.rive.app/file/untitled/2701970`, arquivo `avatar`). Se a conta se perder, o rig precisa ser refeito.
 
-- **Fatia 5 (04/11/2026, ADR 0008, branch feat/avatar-sombreado, sem commit):** sombreado fixo (7 formas `shade_*`, sem input, sem dimensão, sem migração; `PROTOCOL_VERSION` 5). `avatar.riv` de 60.606 bytes, 15 Numbers, 16 triggers, validado no runtime web. Recorte por Solo no Rive (`faces3` e `cabelo4a`); fallback com o path exato. Divergência: o brilho do cabelo no Rive recorta pelo Solo inteiro. Pendências e lições em `docs/avatar-rive-estado.md` (fatia 5) e `docs/avatar-rig.md` (3.2).
+- **Fechamento das pendências visuais (04/11/2026, branch `fix/avatar-pendencias`, sem commit):** `avatar.riv` reexportado como `avatar (20).riv` (60.502 bytes, 15 Numbers, 16 triggers). Corrigido no Rive: franjas dos cabelos 1, 5, 7, 10 e 17; cabelo 18 com opacidade 72%; gorro 6 com pompom menor; transições Any State para `eye_color_0`, `nose_0` e `outfit_color_0`; nós vazios `jawsoftnew_new`/`jawnew_new` apagados. **Pendência fechada:** franjas sobre as sobrancelhas, cabelo 18 cinza, chapéu 6 "no topo" (o gorro cabe), `eye_color` com defeito de transição. Continua: cabelos 2, 12 e 14 cobrem olhos/sobrancelhas; brilho do cabelo recorta pelo Solo; assets de importação no painel; iOS/Android. Detalhes em `docs/avatar-rive-estado.md`.
+- **Fatia 5 (04/11/2026, ADR 0008, mesclada no PR #16, 7fdca9e):** sombreado fixo (7 formas `shade_*`, sem input, sem dimensão, sem migração; `PROTOCOL_VERSION` 5). `avatar.riv` de 60.606 bytes, 15 Numbers, 16 triggers, validado no runtime web. Recorte por Solo no Rive (`faces3` e `cabelo4a`); fallback com o path exato. Divergência: o brilho do cabelo no Rive recorta pelo Solo inteiro. Pendências e lições em `docs/avatar-rive-estado.md` (fatia 5) e `docs/avatar-rig.md` (3.2).
 - **Fatia 4 (05/11/2026, ADR 0007, mesclada no PR #15, 23cd3ab):** `hair` 19 formatos (sem tranças) (0 careca; boné e chapéu saíram), `beard` 5 e `hat` 11. `avatar.riv` reexportado e validado no runtime web: 58.135 bytes, 15 Numbers, 16 triggers. PROTOCOL*VERSION 5; migração `20261105130000_avatar_cabelo` apaga avatares. Estrutura em `docs/avatar-rig.md` (seção 3.1); lições e pendências (`eye_color` com possível defeito de transição, franjas sobre as sobrancelhas, cabelo 18 cinza claro, chapéu 6 no topo) em `docs/avatar-rive-estado.md`. hair 2 e 14 não aceitam chapéu (`HAIR_WITHOUT_HAT`). Chapéu esconde o cabelo da frente/topo (`hideWithHat`; no Rive, grupo `hair_front` com opacidade pelas timelines `hat*\*`, ADR 0007).

@@ -541,6 +541,74 @@ describe('cores como dimensão própria', () => {
       }
     });
 
+    it('franja dos cabelos 1, 5, 7, 10 e 17 não cobre as sobrancelhas (x 174..338)', () => {
+      // amostra densamente o contorno (M/L/C/Q/Z absolutos)
+      const sample = (d: string): [number, number][] => {
+        const pts: [number, number][] = [];
+        const toks = d.match(/[MLCQZ]|-?\d+(?:\.\d+)?/g) ?? [];
+        let i = 0;
+        let cur: [number, number] = [0, 0];
+        let start: [number, number] = [0, 0];
+        const line = (a: [number, number], b: [number, number]): void => {
+          for (let s = 0; s <= 40; s++) {
+            const t = s / 40;
+            pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+          }
+        };
+        while (i < toks.length) {
+          const cmd = toks[i++]!;
+          if (cmd === 'Z') {
+            line(cur, start);
+            cur = start;
+            continue;
+          }
+          const n = cmd === 'C' ? 3 : cmd === 'Q' ? 2 : 1;
+          const ps: [number, number][] = [];
+          for (let j = 0; j < n; j++) ps.push([Number(toks[i++]), Number(toks[i++])]);
+          if (cmd === 'M') start = ps[0]!;
+          if (cmd === 'L') line(cur, ps[0]!);
+          if (cmd === 'C' || cmd === 'Q') {
+            for (let s = 0; s <= 40; s++) {
+              const t = s / 40;
+              const m = 1 - t;
+              const all = [cur, ...ps];
+              const w =
+                cmd === 'C'
+                  ? [m * m * m, 3 * m * m * t, 3 * m * t * t, t * t * t]
+                  : [m * m, 2 * m * t, t * t];
+              pts.push([
+                all.reduce((a, p, k) => a + w[k]! * p[0], 0),
+                all.reduce((a, p, k) => a + w[k]! * p[1], 0),
+              ]);
+            }
+          }
+          cur = ps[n - 1]!;
+        }
+        return pts;
+      };
+      // nenhum ponto do contorno das sobrancelhas (os 4 estilos, os dois lados) cai dentro da franja
+      const inside = (poly: [number, number][], x: number, y: number): boolean => {
+        let r = false;
+        for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+          const [xa, ya] = poly[a]!;
+          const [xb, yb] = poly[b]!;
+          if (ya > y !== yb > y && x < ((xb - xa) * (y - ya)) / (yb - ya) + xa) r = !r;
+        }
+        return r;
+      };
+      const brows = PARTS.filter((p) => /^brow(_\d)?_[lr]$/.test(p.name));
+      expect(brows.length).toBe(8);
+      const browPts = brows.flatMap((p) =>
+        sample(p.d).map(([x, y]): [number, number] => [p.mirror ? 512 - x : x, y]),
+      );
+      for (const n of [1, 5, 7, 10, 17]) {
+        const part = PARTS.find((p) => p.name === `hair_${n}_front`)!;
+        const poly = sample(part.d);
+        const hit = browPts.find(([x, y]) => inside(poly, x, y));
+        expect(hit, `hair_${n}_front cobre sobrancelha`).toBeUndefined();
+      }
+    });
+
     it('cores derivadas da pele escolhida', () => {
       for (let skin = 0; skin < AVATAR_PART_COUNTS.skin; skin++) {
         const c = { ...base, skin };
@@ -548,6 +616,36 @@ describe('cores como dimensão própria', () => {
         expect(resolveFill('blush', c)).toMatch(/^#[0-9a-f]{6}$/);
         expect(resolveFill('deep', c)).not.toBe(resolveFill('shade', c));
       }
+    });
+  });
+  describe('margem no artboard 512x512', () => {
+    // Menor y (pontos de controle incluídos, então é conservador) dos números de um `d` M/L/C/Q/Z.
+    const minY = (d: string): number => {
+      let y = Infinity;
+      for (const m of d.matchAll(/[MLCQ]([^MLCQZ]*)/g)) {
+        const n = (m[1] ?? '')
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map(Number);
+        for (let i = 1; i < n.length; i += 2) y = Math.min(y, n[i]!);
+      }
+      return y;
+    };
+
+    it('chapéus e cabelos (inclusive os altos) ficam com folga abaixo do topo (y >= 8)', () => {
+      const tall = PARTS.filter((p) => /^(hat|hair)_/.test(p.name));
+      expect(tall.length).toBeGreaterThan(40);
+      for (const p of tall) expect(minY(p.d), p.name).toBeGreaterThanOrEqual(8);
+    });
+
+    it('o pompom do chapéu 6 fica dentro do artboard com folga de sobra', () => {
+      const pompom = PARTS.find((p) => p.name === 'hat_6_pompom')!;
+      expect(minY(pompom.d)).toBeGreaterThanOrEqual(50);
+    });
+
+    it('cabelo raspado (18) é opaco o bastante para ler como cabelo', () => {
+      const shaved = PARTS.find((p) => p.name === 'hair_18_front')!;
+      expect(shaved.opacity).toBeGreaterThanOrEqual(0.7);
     });
   });
 });
