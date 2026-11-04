@@ -111,6 +111,50 @@ describe('loadServerConfig', () => {
       600,
     );
   });
+
+  it('login social: sem variáveis fica desligado; client IDs viram lista limpa; verificador de teste só em dev/test', () => {
+    const ok = { ...base, JWT_SECRET: secret };
+    expect(loadServerConfig(ok).social).toEqual({
+      googleClientIds: [],
+      appleClientIds: [],
+      testIdentity: false,
+    });
+    expect(
+      loadServerConfig({
+        ...ok,
+        GOOGLE_CLIENT_IDS: ' a.apps.googleusercontent.com, ,b ,a.apps.googleusercontent.com',
+        APPLE_CLIENT_IDS: 'com.mcdtec.trucaco',
+      }).social,
+    ).toMatchObject({
+      googleClientIds: ['a.apps.googleusercontent.com', 'b'],
+      appleClientIds: ['com.mcdtec.trucaco'],
+    });
+    expect(loadServerConfig({ ...ok, GOOGLE_CLIENT_IDS: '   ' }).social.googleClientIds).toEqual(
+      [],
+    );
+    expect(() => loadServerConfig({ ...ok, GOOGLE_CLIENT_IDS: 'com espaco' })).toThrow(
+      /GOOGLE_CLIENT_IDS/,
+    );
+    expect(() => loadServerConfig({ ...ok, APPLE_CLIENT_IDS: 'x'.repeat(257) })).toThrow(
+      /APPLE_CLIENT_IDS/,
+    );
+    // verificador de teste: fail-closed fora de development/test
+    expect(() => loadServerConfig({ ...ok, AUTH_TEST_IDENTITY: '1' })).toThrow(
+      /AUTH_TEST_IDENTITY/,
+    );
+    expect(
+      loadServerConfig({ NODE_ENV: 'test', AUTH_TEST_IDENTITY: '1' }).social.testIdentity,
+    ).toBe(true);
+    expect(loadServerConfig({ ...ok, AUTH_TEST_IDENTITY: '0' }).social.testIdentity).toBe(false);
+    expect(() => loadServerConfig({ NODE_ENV: 'test', AUTH_TEST_IDENTITY: 'sim' })).toThrow(
+      /AUTH_TEST_IDENTITY/,
+    );
+    expect(loadServerConfig(ok).limits.socialPerIpPerMin).toBe(20);
+    expect(
+      loadServerConfig({ ...ok, AUTH_SOCIAL_PER_IP_PER_MIN: '5' }).limits.socialPerIpPerMin,
+    ).toBe(5);
+    expect(() => loadServerConfig({ ...ok, AUTH_SOCIAL_PER_IP_PER_MIN: '0' })).toThrow();
+  });
 });
 
 describe('AccessTokenService (JWT HS256)', () => {

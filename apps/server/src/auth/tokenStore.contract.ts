@@ -228,6 +228,53 @@ export function tokenStoreContract(name: string, make: (clock: () => number) => 
       expect(await store.isJtiRevoked(short)).toBe(false);
     });
 
+    it('revokeAllForUser com exceção: poupa a família indicada e devolve só os jti das revogadas', async () => {
+      const store = fresh();
+      const userId = randomUUID();
+      const a = await family(store);
+      void a;
+      const mk = () => ({
+        familyId: randomUUID(),
+        userId,
+        refreshHash: hex(),
+        jti: randomUUID(),
+        ttlSec: 60,
+      });
+      const x = mk();
+      const y = mk();
+      await store.createFamily(x);
+      await store.createFamily(y);
+      expect(await store.revokeAllForUser(userId, y.familyId)).toEqual([x.jti]);
+      const rotate = (refreshHash: string) =>
+        store.rotate({
+          refreshHash,
+          newRefreshHash: hex(),
+          newJti: randomUUID(),
+          ttlSec: 60,
+          graceSec: 0,
+          familyMaxSec: 7_776_000,
+        });
+      expect((await rotate(y.refreshHash)).status).toBe('rotated');
+      expect((await rotate(x.refreshHash)).status).toBe('revoked');
+    });
+
+    it('claimIdToken: uso único até o TTL; chaves distintas são independentes; só uma de N concorrentes vence', async () => {
+      const store = fresh();
+      const key = hex();
+      expect(await store.claimIdToken(key, 60)).toBe(true);
+      expect(await store.claimIdToken(key, 60)).toBe(false);
+      expect(await store.claimIdToken(hex(), 60)).toBe(true);
+      const race = hex();
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => store.claimIdToken(race, 60)),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+      const short = hex();
+      expect(await store.claimIdToken(short, 1)).toBe(true);
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(await store.claimIdToken(short, 60)).toBe(true);
+    });
+
     it('família expirada: refresh é desconhecido', async () => {
       const store = fresh();
       const f = await family(store, 1);

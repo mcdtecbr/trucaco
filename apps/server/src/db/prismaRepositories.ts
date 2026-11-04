@@ -16,8 +16,10 @@ import {
   type MatchSummary,
   type NewGuestInput,
   type NewReportInput,
+  type NewSocialUserInput,
   type PartnerCodesMap,
   type ReportRecord,
+  type SocialProviderId,
   type UserRecord,
   type UserRepository,
 } from './types';
@@ -51,6 +53,7 @@ function toUser(row: {
   nickname: string;
   createdAt: Date;
   lastSeenAt: Date;
+  linkedAt: Date | null;
 }): UserRecord {
   return {
     id: row.id,
@@ -59,6 +62,7 @@ function toUser(row: {
     nickname: row.nickname,
     createdAt: row.createdAt,
     lastSeenAt: row.lastSeenAt,
+    linkedAt: row.linkedAt,
   };
 }
 
@@ -74,6 +78,36 @@ export class PrismaUserRepository implements UserRepository {
       });
       return toUser(row);
     });
+  }
+
+  async createSocialUser(input: NewSocialUserInput): Promise<UserRecord> {
+    const nickname = validateNickname(input.nickname);
+    assertProviderSubject(input.providerSubject);
+    return guarded(async () => {
+      const row = await this.db.user.create({
+        data: { provider: input.provider, providerSubject: input.providerSubject, nickname },
+      });
+      return toUser(row);
+    });
+  }
+
+  async linkProvider(
+    rawId: string,
+    provider: SocialProviderId,
+    providerSubject: string,
+  ): Promise<UserRecord | null> {
+    const id = normalizeId(rawId);
+    assertProviderSubject(providerSubject);
+    // UPDATE condicional (`provider = guest`): atômico no banco. A unicidade `(provider, subject)` barra o
+    // mesmo `sub` em duas contas (P2002 -> `ProviderSubjectTakenError`).
+    const result = await guarded(() =>
+      this.db.user.updateMany({
+        where: { id, provider: 'guest' },
+        data: { provider, providerSubject, linkedAt: new Date() },
+      }),
+    );
+    if (result.count === 0) return null;
+    return this.findById(id);
   }
 
   async findById(id: string): Promise<UserRecord | null> {

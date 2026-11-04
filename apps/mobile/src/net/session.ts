@@ -12,7 +12,7 @@ import { getServerUrl } from './config';
 import { webRefreshLock } from './refreshLock';
 import type { RefreshLock } from './refreshLock';
 import type { StoredSession, TokenStorage } from './tokenStorageCore';
-import type { AuthProvider, TokenPairResponse } from '@trucaco/protocol';
+import type { AuthProvider, SocialAuthRequest, TokenPairResponse } from '@trucaco/protocol';
 
 /** Renova o access se faltar menos que isto para expirar. */
 export const REFRESH_AHEAD_MS = 60_000;
@@ -82,6 +82,16 @@ export interface Session {
    * `signedOut`; em erro a sessão continua como estava e o erro sobe.
    */
   deleteAccount(): Promise<void>;
+  /**
+   * Entra com Google/Apple (`POST /auth/google|apple`). A sessão atual (convidado) é substituída: o
+   * convidado anterior é perdido. Em erro a sessão continua como estava e o erro sobe.
+   */
+  loginSocial(req: SocialAuthRequest): Promise<void>;
+  /**
+   * Vincula a conta social ao convidado atual (`POST /auth/link`). O id não muda (avatar, histórico e
+   * combinados ficam); o par de tokens novo substitui o antigo. Em erro (`PROVIDER_TAKEN`...) nada muda.
+   */
+  linkAccount(req: SocialAuthRequest): Promise<void>;
   /** Cancela a escuta do armazenamento (outras abas). */
   dispose(): void;
 }
@@ -271,6 +281,31 @@ export function createSession(options: SessionOptions): Session {
     return api.refreshSession();
   }
 
+  function loadProvider(): Promise<void> {
+    const u = state.user;
+    if (u === null || u.provider !== undefined || state.status !== 'authenticated') {
+      return Promise.resolve();
+    }
+    // Uma chamada por vez e sem laço: falhou, só tenta de novo em `start()` (login ou restauração).
+    if (providerLoad !== null) return providerLoad;
+    if (providerTried) return Promise.resolve();
+    providerTried = true;
+    const p = (async () => {
+      try {
+        const me = await api.me();
+        const cur = state.user;
+        if (cur === null || cur.id !== u.id) return;
+        setState({ status: state.status, user: { ...cur, provider: me.provider } });
+      } catch {
+        // Sem o tipo de conta a UI só esconde avisos que dependem dele.
+      }
+    })().finally(() => {
+      if (providerLoad === p) providerLoad = null;
+    });
+    providerLoad = p;
+    return p;
+  }
+
   return {
     api,
     getState: () => state,
@@ -316,30 +351,7 @@ export function createSession(options: SessionOptions): Session {
         }
       }
     },
-    loadProvider() {
-      const u = state.user;
-      if (u === null || u.provider !== undefined || state.status !== 'authenticated') {
-        return Promise.resolve();
-      }
-      // Uma chamada por vez e sem laço: falhou, só tenta de novo em `start()` (login ou restauração).
-      if (providerLoad !== null) return providerLoad;
-      if (providerTried) return Promise.resolve();
-      providerTried = true;
-      const p = (async () => {
-        try {
-          const me = await api.me();
-          const cur = state.user;
-          if (cur === null || cur.id !== u.id) return;
-          setState({ status: state.status, user: { ...cur, provider: me.provider } });
-        } catch {
-          // Sem o tipo de conta a UI só esconde avisos que dependem dele.
-        }
-      })().finally(() => {
-        if (providerLoad === p) providerLoad = null;
-      });
-      providerLoad = p;
-      return p;
-    },
+    loadProvider,
     async deleteAccount() {
       await ensureAccessToken(); // renova antes: lê o refresh JÁ rotacionado
       const toRevoke = refreshToken;
@@ -353,6 +365,67 @@ export function createSession(options: SessionOptions): Session {
       } finally {
         setState({ status: 'signedOut', user: null });
       }
+    },
+    async loginSocial(req) {
+      const gen = generation;
+      const res = await api.loginSocial(req);
+      if (gen !== generation) return; // logout durante a chamada: descarta
+      const oldRefresh = refreshToken;
+      const user: SessionUser = {
+        id: res.user.id,
+        nickname: res.user.nickname,
+        provider: req.provider,
+      };
+      // Melhor esforço: revoga a família do convidado que está sendo deixado para trás (ainda com o
+      // access antigo). Falha (rede, 401) é ignorada; o refresh antigo expira sozinho.
+      if (oldRefresh !== null && state.user !== null && state.user.id !== user.id) {
+        try {
+          await ensureAccessToken();
+          await api.logout({ refreshToken: refreshToken ?? oldRefresh });
+        } catch {
+          // Sem efeito sobre a entrada na conta nova.
+        }
+        if (gen !== generation) return;
+      }
+      state = { ...state, user };
+      await adopt(res, user);
+      providerTried = true; // o provedor já é conhecido
+      setState({ status: 'authenticated', user });
+    },
+    async linkAccount(req) {
+      const cur = state.user;
+      if (cur === null) throw new SessionRequiredError();
+      const gen = generation;
+      await ensureAccessToken(); // o 401 do vínculo não é "access vencido": renova antes
+      let res;
+      try {
+        res = await api.linkAccount(req);
+      } catch (e) {
+        if (isApiError(e) && e.code === 'ALREADY_LINKED' && gen === generation) {
+          // A conta já tem provedor (outra aba ou aparelho): relê o tipo de conta em vez de ficar preso.
+          const u = state.user;
+          if (u !== null && u.id === cur.id) {
+            providerTried = false;
+            setState({ status: state.status, user: { id: u.id, nickname: u.nickname } });
+            await loadProvider();
+          }
+        }
+        throw e;
+      }
+      // Logout, apagar conta ou troca de usuário durante a chamada: não ressuscita a sessão.
+      if (gen !== generation || state.user === null || state.user.id !== cur.id) return;
+      const user: SessionUser = {
+        id: res.user.id,
+        nickname: res.user.nickname,
+        provider: req.provider,
+      };
+      await adopt(res, user);
+      if (gen !== generation) {
+        dropSession();
+        await storage.clear();
+        return;
+      }
+      setState({ status: 'authenticated', user });
     },
     async setNickname(nickname) {
       const res = await api.updateNickname(nickname);

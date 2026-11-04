@@ -166,7 +166,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
         hsts: process.env.NODE_ENV === 'production',
       });
       app.get('/health', (_req, res) => {
-        res.json(buildHealth());
+        res.json(buildHealth(deps.auth?.socialProviders() ?? []));
       });
       app.post(LIMITED_PATH, (req, res, next) => {
         if (!limited.has(req)) {

@@ -15,9 +15,10 @@ import type { Format, RoomOptions, Visibility } from './room';
  * (`ServerError`). Conjunto = catálogo congelado em `apps/server/src/errorCodes.contract.test.ts`
  * mais `INVALID_REFRESH_TOKEN` (emitido por variável, em `/auth/refresh`) e `BO3_REQUIRES_PRIVATE`
  * (vem de `validateRoomOptions`). Em ordem alfabética.
- * Fase 6 (contrato 6A, ainda não emitidos pelo servidor até os blocos 6B a 6F): `ALREADY_LINKED` (409),
+ * Fase 6 (contrato 6A; todos emitidos desde o 6F): `ALREADY_LINKED` (409),
  * `INVALID_BLOCK` (400), `INVALID_ID_TOKEN` (401), `INVALID_REPORT` (400), `PROVIDER_TAKEN` (409),
- * `SOCIAL_LOGIN_DISABLED` (503) e `USER_NOT_FOUND` (404).
+ * `SOCIAL_LOGIN_DISABLED` (503) e `USER_NOT_FOUND` (404). `NOT_IMPLEMENTED` (501) não é mais emitido
+ * (era o stub de `/auth/link|google|apple`); fica na lista por compatibilidade com o cliente.
  */
 export const HTTP_ERROR_CODES = [
   'ALREADY_IN_TABLE',
@@ -165,6 +166,8 @@ export type QueueStatusResponse =
 export interface HealthResponse {
   readonly status: 'ok';
   readonly protocol: number;
+  /** Provedores de login social ligados neste servidor (vazio = só convidado). O cliente esconde os botões dos outros. */
+  readonly socialProviders: readonly SocialProvider[];
 }
 
 /** Corpos de requisição, para o cliente tipar o que envia. */

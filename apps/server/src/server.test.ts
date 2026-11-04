@@ -22,7 +22,11 @@ describe('createServer', () => {
     expect(server.port).toBeGreaterThan(0);
     const res = await fetch(`http://127.0.0.1:${server.port}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'ok', protocol: PROTOCOL_VERSION });
+    expect(await res.json()).toEqual({
+      status: 'ok',
+      protocol: PROTOCOL_VERSION,
+      socialProviders: [],
+    });
   });
 
   const ROOM_OPTS = {

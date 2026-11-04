@@ -19,8 +19,10 @@ import {
   type MatchSummary,
   type NewGuestInput,
   type NewReportInput,
+  type NewSocialUserInput,
   type PartnerCodesMap,
   type ReportRecord,
+  type SocialProviderId,
   type UserRecord,
   type UserRepository,
 } from './types';
@@ -93,9 +95,54 @@ export class MemoryUserRepository implements UserRepository {
       nickname,
       createdAt: now,
       lastSeenAt: now,
+      linkedAt: null,
     };
     this.store.users.set(user.id, user);
     return user;
+  }
+
+  async createSocialUser(input: NewSocialUserInput): Promise<UserRecord> {
+    const nickname = validateNickname(input.nickname);
+    assertProviderSubject(input.providerSubject);
+    const lower = nickname.toLowerCase();
+    for (const user of this.store.users.values()) {
+      if (user.nickname.toLowerCase() === lower) throw new NicknameTakenError();
+      if (user.provider === input.provider && user.providerSubject === input.providerSubject) {
+        throw new ProviderSubjectTakenError();
+      }
+    }
+    const now = new Date();
+    const user: UserRecord = {
+      id: randomUUID(),
+      provider: input.provider,
+      providerSubject: input.providerSubject,
+      nickname,
+      createdAt: now,
+      lastSeenAt: now,
+      linkedAt: null,
+    };
+    this.store.users.set(user.id, user);
+    return user;
+  }
+
+  async linkProvider(
+    rawId: string,
+    provider: SocialProviderId,
+    providerSubject: string,
+  ): Promise<UserRecord | null> {
+    const id = normalizeId(rawId);
+    assertProviderSubject(providerSubject);
+    // Trecho síncrono (sem `await` entre a checagem e a gravação): atômico no event loop.
+    const user = this.store.users.get(id);
+    if (user === undefined || user.provider !== 'guest') return null;
+    for (const other of this.store.users.values()) {
+      if (other.provider === provider && other.providerSubject === providerSubject) {
+        throw new ProviderSubjectTakenError();
+      }
+    }
+    const linked: UserRecord = { ...user, provider, providerSubject, linkedAt: new Date() };
+    this.store.users.set(id, linked);
+    return linked;
   }
 
   async findById(id: string): Promise<UserRecord | null> {

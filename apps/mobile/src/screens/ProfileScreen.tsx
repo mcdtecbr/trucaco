@@ -11,6 +11,7 @@ import { getApp } from '../services/app';
 import { selectNickname, selectProvider, useSessionStore } from '../store/sessionStore';
 import type { ModerationState } from './ModerationPanel';
 import { ProfileView } from './ProfileView';
+import { useSocialAuth } from './useSocialAuth';
 import type { LoadState } from './ProfileView';
 
 const PAGE_SIZE = 20;
@@ -22,6 +23,11 @@ export function ProfileScreen() {
   const provider = useSessionStore(selectProvider);
   const userId = useSessionStore((s) => s.user?.id ?? null);
   const alive = useRef(true);
+  /** Sobe a cada troca de usuário: resposta de um usuário anterior é descartada. */
+  const epoch = useRef(0);
+  const social = useSocialAuth('link', () => {
+    void loadMe();
+  });
 
   const [meState, setMeState] = useState<LoadState>('loading');
   const [meError, setMeError] = useState<string | null>(null);
@@ -43,16 +49,17 @@ export function ProfileScreen() {
   }, []);
 
   const loadMe = useCallback(async (): Promise<void> => {
+    const my = epoch.current;
     setMeState('loading');
     setMeError(null);
     try {
       const me = await getApp().session.api.me();
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setAvatar(me.avatar ?? DEFAULT_AVATAR_PARTS);
       setStats(me.stats);
       setMeState('ready');
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setMeError(messageForError(e));
       setMeState('error');
     }
@@ -60,12 +67,13 @@ export function ProfileScreen() {
 
   const loadPage = useCallback(async (after: string | null): Promise<void> => {
     const first = after === null;
+    const my = epoch.current;
     if (first) setHistState('loading');
     else setLoadingMore(true);
     setHistError(null);
     try {
       const page = await getApp().session.api.matches(after ?? undefined, PAGE_SIZE);
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setMatches((cur) => {
         if (first) return page.items;
         const seen = new Set(cur.map((m) => m.id));
@@ -74,19 +82,26 @@ export function ProfileScreen() {
       setCursor(page.nextCursor);
       setHistState('ready');
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setHistError(messageForError(e));
       // Falha ao carregar mais mantém a lista já mostrada e o botão para tentar de novo.
       if (first) setHistState('error');
     } finally {
-      if (alive.current) setLoadingMore(false);
+      if (alive.current && my === epoch.current) setLoadingMore(false);
     }
   }, []);
 
+  // Troca de usuário (entrar em conta social): zera o que era do anterior e recarrega.
   useEffect(() => {
+    epoch.current += 1;
+    setMatches([]);
+    setCursor(null);
+    setStats(null);
+    setAvatar(null);
+    setModeration(null);
     void loadMe();
     void loadPage(null);
-  }, [loadMe, loadPage]);
+  }, [loadMe, loadPage, userId]);
 
   const rows: readonly HistoryRow[] =
     userId === null ? [] : matches.map((m) => toHistoryRow(m, userId));
@@ -113,7 +128,11 @@ export function ProfileScreen() {
         error: histError,
       }}
       moderation={moderation}
+      social={social}
       on={{
+        achievements: () => router.push('/achievements'),
+        missions: () => router.push('/missions'),
+        viewPlayer: (id) => router.push({ pathname: '/profile/[id]', params: { id } }),
         back: () => (router.canGoBack() ? router.back() : router.replace('/home')),
         retryMe: () => void loadMe(),
         retryHistory: () => void loadPage(null),

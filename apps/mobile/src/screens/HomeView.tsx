@@ -64,6 +64,8 @@ export interface HomeViewProps {
     settings(): void;
     avatar(): void;
     profile(): void;
+    missions?(): void;
+    achievements?(): void;
   };
 }
 
@@ -221,6 +223,24 @@ export function HomeView(p: HomeViewProps) {
         disabled={locked}
         testID="open-profile"
       />
+      {p.on.missions !== undefined ? (
+        <Button
+          label="Missões"
+          variant="secondary"
+          onPress={p.on.missions}
+          disabled={locked}
+          testID="open-missions"
+        />
+      ) : null}
+      {p.on.achievements !== undefined ? (
+        <Button
+          label="Conquistas"
+          variant="secondary"
+          onPress={p.on.achievements}
+          disabled={locked}
+          testID="open-achievements"
+        />
+      ) : null}
       <Button
         label="Configurações"
         variant="secondary"

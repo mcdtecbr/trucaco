@@ -7,7 +7,12 @@
  */
 import express from 'express';
 import type { Application, NextFunction, Request, RequestHandler, Response } from 'express';
-import { AuthError, bearerFromHeader, type AuthService } from '../auth/authService';
+import {
+  AuthError,
+  SocialAuthError,
+  bearerFromHeader,
+  type AuthService,
+} from '../auth/authService';
 import type { RestLimits } from '../auth/config';
 import {
   MATCHES_PAGE_MAX,
@@ -16,7 +21,9 @@ import {
   parseAvatarParts,
   parseBlockRequest,
   parseDeleteAccountRequest,
+  parseLinkRequest,
   parseReportRequest,
+  parseSocialAuthRequest,
 } from '@trucaco/protocol';
 import type {
   BlocksResponse,
@@ -24,6 +31,8 @@ import type {
   MatchesPageResponse,
   MeResponse,
   PublicProfileResponse,
+  SocialAuthResponse,
+  SocialProvider,
 } from '@trucaco/protocol';
 import { log } from '../logger';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
@@ -153,6 +162,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
   const guestIpLimiter = new SlidingWindowLimiter(limits.guestPerIpPerHour, 3_600_000);
   const guestGlobalLimiter = new SlidingWindowLimiter(limits.guestGlobalPerHour, 3_600_000);
   const refreshIpLimiter = new SlidingWindowLimiter(limits.refreshPerIpPerMin, 60_000);
+  const socialIpLimiter = new SlidingWindowLimiter(limits.socialPerIpPerMin, 60_000);
   const userLimiter = new SlidingWindowLimiter(limits.perUserPerMin, 60_000);
   // Escritas do perfil (apelido/avatar/códigos): bem mais restritas que a leitura.
   const writeLimiter = new SlidingWindowLimiter(
@@ -243,8 +253,6 @@ export function mountRest(app: Application, opts: RestOptions): void {
     });
   };
 
-  const notImplemented: RequestHandler = (_req, res) => fail(res, 501, 'NOT_IMPLEMENTED');
-
   // ------------------------------------------------------------------------------- /auth
   route('/auth/guest', ['POST'], (r) =>
     r.post(
@@ -302,17 +310,105 @@ export function mountRest(app: Application, opts: RestOptions): void {
     }),
   );
 
+  /** Falhas de login social e vínculo -> HTTP. Devolve `false` para erro de outra natureza (cai no tratador geral). */
+  const socialFail = (res: Response, err: unknown): boolean => {
+    if (!(err instanceof SocialAuthError)) return false;
+    switch (err.code) {
+      case 'ALREADY_LINKED':
+        fail(res, 409, 'ALREADY_LINKED');
+        break;
+      case 'PROVIDER_TAKEN':
+        fail(res, 409, 'PROVIDER_TAKEN');
+        break;
+      case 'INVALID_ID_TOKEN':
+        fail(res, 401, 'INVALID_ID_TOKEN');
+        break;
+      case 'SOCIAL_LOGIN_DISABLED':
+        fail(res, 503, 'SOCIAL_LOGIN_DISABLED');
+        break;
+    }
+    return true;
+  };
+
   /**
-   * CONTRATO (stub, Fase 3): `POST /auth/link` com `Authorization: Bearer <access de convidado>` e corpo
-   * `{ provider: 'google'|'apple', idToken: string }`. Valida o idToken no provedor, grava
-   * (provider, subject) no usuário convidado (409 `PROVIDER_TAKEN` se o subject já for de outra conta)
-   * e responde 200 com um par novo (`TokenPair`), revogando as famílias antigas. O `idToken` é de uso
-   * único (`jti:used` por `SET NX EX`).
+   * Login social: `POST /auth/google` e `/auth/apple`, corpo `{ provider, idToken, nonce? }` (o `provider`
+   * tem de bater com a rota). 200 conta existente, 201 conta nova (`created: true`). Sem Bearer.
    */
-  route('/auth/link', ['POST'], (r) => r.post(byIp(ipLimiter, 60), authenticate, notImplemented));
-  /** Login social: stub; contrato `{ idToken }` -> `TokenPair` (Fase 3). */
-  route('/auth/google', ['POST'], (r) => r.post(byIp(ipLimiter, 60), notImplemented));
-  route('/auth/apple', ['POST'], (r) => r.post(byIp(ipLimiter, 60), notImplemented));
+  const socialLogin =
+    (provider: SocialProvider): RequestHandler =>
+    async (req, res) => {
+      const parsed = parseSocialAuthRequest(req.body);
+      if (parsed === null || parsed.provider !== provider) {
+        fail(res, 400, 'INVALID_BODY');
+        return;
+      }
+      try {
+        const { user, pair, created } = await auth.loginSocial(
+          provider,
+          parsed.idToken,
+          parsed.nonce,
+        );
+        const body: SocialAuthResponse = {
+          user: { id: user.id, nickname: user.nickname },
+          ...pair,
+          created,
+        };
+        res.status(created ? 201 : 200).json(body);
+      } catch (err) {
+        if (!socialFail(res, err)) throw err;
+      }
+    };
+  route('/auth/google', ['POST'], (r) =>
+    r.post(
+      byIp(ipLimiter, 60),
+      byIp(socialIpLimiter, 60),
+      contentType,
+      json,
+      socialLogin('google'),
+    ),
+  );
+  route('/auth/apple', ['POST'], (r) =>
+    r.post(byIp(ipLimiter, 60), byIp(socialIpLimiter, 60), contentType, json, socialLogin('apple')),
+  );
+
+  /**
+   * Vincular o convidado autenticado a Google/Apple. Corpo `{ provider, idToken, nonce? }`; o `userId` vem
+   * do token de acesso. 200 com par novo (as sessões antigas morrem); 409 `ALREADY_LINKED` (a conta não é
+   * convidada) ou `PROVIDER_TAKEN` (o `sub` é de outra conta; o idToken não é gasto, serve para entrar nela).
+   */
+  route('/auth/link', ['POST'], (r) =>
+    r.post(
+      byIp(ipLimiter, 60),
+      byIp(socialIpLimiter, 60),
+      authenticate,
+      writeLimit,
+      contentType,
+      json,
+      async (req, res) => {
+        const parsed = parseLinkRequest(req.body);
+        if (parsed === null) {
+          fail(res, 400, 'INVALID_BODY');
+          return;
+        }
+        try {
+          const { user, pair } = await auth.linkGuest(
+            { userId: locals(res).user.id, jti: res.locals['jti'] as string },
+            parsed.provider,
+            parsed.idToken,
+            parsed.nonce,
+          );
+          const body: SocialAuthResponse = {
+            user: { id: user.id, nickname: user.nickname },
+            ...pair,
+            created: false,
+          };
+          res.status(200).json(body);
+        } catch (err) {
+          if (!socialFail(res, err)) throw err;
+        }
+      },
+    ),
+  );
 
   // --------------------------------------------------------------------------------- /me
   /**

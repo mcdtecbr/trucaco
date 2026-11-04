@@ -231,11 +231,12 @@ export class RedisTokenStore implements TokenStore {
     });
   }
 
-  async revokeAllForUser(userId: string): Promise<string[]> {
+  async revokeAllForUser(userId: string, exceptFamilyId?: string): Promise<string[]> {
     return this.run(async () => {
       const ids = await this.redis.smembers(`${REDIS_PREFIX}userfam:${userId}`);
       const jtis: string[] = [];
       for (const id of ids) {
+        if (id === exceptFamilyId) continue;
         const last = await this.scripts.trucacoRevoke(
           `${REDIS_PREFIX}rtfam:${id}`,
           String(this.now()),
@@ -256,6 +257,19 @@ export class RedisTokenStore implements TokenStore {
   async isJtiRevoked(jti: string): Promise<boolean> {
     return this.run(
       async () => (await this.redis.exists(`${REDIS_PREFIX}jti:revoked:${jti}`)) === 1,
+    );
+  }
+
+  async claimIdToken(key: string, ttlSec: number): Promise<boolean> {
+    return this.run(
+      async () =>
+        (await this.redis.set(
+          `${REDIS_PREFIX}idtoken:used:${key}`,
+          '1',
+          'EX',
+          Math.max(1, Math.ceil(ttlSec)),
+          'NX',
+        )) === 'OK',
     );
   }
 

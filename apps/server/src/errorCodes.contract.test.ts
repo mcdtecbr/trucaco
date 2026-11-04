@@ -8,9 +8,10 @@ import { ERROR_CODES, ROOM_OPTIONS_ERRORS } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { dynamicCodes, emittedRoomOptionErrors, scanHttp } from './errorCodeScan.contract';
 
-/** Catálogo congelado (Fase 2; Fase 6B acrescentou INVALID_BLOCK, INVALID_REPORT e USER_NOT_FOUND). Chave = código; valor = status HTTP possíveis. */
+/** Catálogo congelado (Fase 2; Fase 6B acrescentou INVALID_BLOCK, INVALID_REPORT e USER_NOT_FOUND; 6F, ALREADY_LINKED, INVALID_ID_TOKEN, PROVIDER_TAKEN e SOCIAL_LOGIN_DISABLED; NOT_IMPLEMENTED deixou de ser emitido). Chave = código; valor = status HTTP possíveis. */
 const KNOWN: Record<string, number[]> = {
   ALREADY_IN_TABLE: [409],
+  ALREADY_LINKED: [409],
   ALREADY_SEATED: [409],
   BANNED: [403],
   CORS_FORBIDDEN: [403],
@@ -21,6 +22,7 @@ const KNOWN: Record<string, number[]> = {
   INVALID_BODY: [400],
   INVALID_CODE: [400],
   INVALID_CODES: [400],
+  INVALID_ID_TOKEN: [401],
   INVALID_INPUT: [400],
   INVALID_JSON: [400],
   INVALID_NICKNAME: [400],
@@ -30,14 +32,15 @@ const KNOWN: Record<string, number[]> = {
   METHOD_NOT_ALLOWED: [405],
   NICKNAME_TAKEN: [409],
   NOT_FOUND: [404],
-  NOT_IMPLEMENTED: [501],
   NOT_PARTNERS: [403],
   PAYLOAD_TOO_LARGE: [413],
+  PROVIDER_TAKEN: [409],
   QUEUE_COOLDOWN: [429],
   QUEUE_FULL: [503],
   RATE_LIMITED: [429],
   ROOM_FULL: [409],
   SERVICE_UNAVAILABLE: [503],
+  SOCIAL_LOGIN_DISABLED: [503],
   TABLE_UNAVAILABLE: [404],
   UNAUTHORIZED: [401],
   UNAVAILABLE: [503],
