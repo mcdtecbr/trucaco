@@ -5,7 +5,8 @@ import type { FinishedResult, RematchView } from '../table/tableRoute';
 import { secondsLeft } from '../table/tableRoute';
 import { Button } from '../ui/Button';
 import { Screen } from '../ui/Screen';
-import { Body, Card, Title } from '../ui/Typography';
+import { Body, Card, Notice, Title } from '../ui/Typography';
+import type { AchievementGain } from '../profile/progress';
 import { useNow } from './useNow';
 
 export interface FinishedViewProps {
@@ -21,6 +22,9 @@ export interface FinishedViewProps {
   /** Erro traduzido do último `error` do servidor. */
   errorText?: string | null;
   onRematch?(): void;
+  /** Conquistas que subiram de nível nesta partida (lidas do servidor ao fim dela). */
+  gains?: readonly AchievementGain[];
+  onOpenAchievements?(): void;
 }
 
 /** Fim da partida ou da série: resultado, placares, histórico das mãos do último jogo, revanche e saída. */
@@ -33,6 +37,8 @@ export function FinishedView({
   clockOffsetMs = 0,
   errorText = null,
   onRematch,
+  gains = [],
+  onOpenAchievements,
 }: FinishedViewProps) {
   const names = defaultTeamNames(myTeam);
   const now = useNow(rematch !== null);
@@ -58,6 +64,26 @@ export function FinishedView({
           </Body>
         ))}
       </Card>
+      {gains.length > 0 ? (
+        <Card>
+          <Notice testID="finished-achievements">
+            {gains.length === 1 ? 'Conquista desbloqueada!' : 'Conquistas desbloqueadas!'}
+          </Notice>
+          {gains.map((g) => (
+            <Text key={g.id} style={styles.line} testID={`gain-${g.id}`}>
+              {`${g.name} · ${g.levelLabel}`}
+            </Text>
+          ))}
+          {onOpenAchievements !== undefined ? (
+            <Button
+              label="Ver conquistas"
+              variant="secondary"
+              onPress={onOpenAchievements}
+              testID="finished-open-achievements"
+            />
+          ) : null}
+        </Card>
+      ) : null}
       {history.length > 0 ? (
         <Card>
           <Text accessibilityRole="header" style={styles.sub}>

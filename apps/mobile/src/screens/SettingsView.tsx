@@ -8,6 +8,8 @@ import { StyleSheet, View } from 'react-native';
 import { spacing } from '@trucaco/ui';
 import { Body, Card, ErrorText, Heading, Notice, Title } from '../ui/Typography';
 import { PROVIDER_LABEL } from '../profile/history';
+import { SocialAuthPanel } from './SocialAuthPanel';
+import type { SocialAuthPanelProps } from './SocialAuthPanel';
 import { SoundSettings } from './SoundSettings';
 
 export const DELETE_WARNING_TEXT =
@@ -27,7 +29,13 @@ export interface AccountSectionProps {
     busyId: string | null;
   };
   deletion: { step: 0 | 1 | 2; busy: boolean; error: string | null };
+  /** Vincular conta (só aparece para convidado). */
+  social?: SocialAuthPanelProps;
   on: {
+    achievements?(): void;
+    missions?(): void;
+    /** Tela de entrada com conta existente (convidado). */
+    login?(): void;
     profile(): void;
     unblock(userId: string): void;
     retryBlocks(): void;
@@ -104,6 +112,39 @@ export function SettingsView(p: SettingsViewProps) {
           disabled={p.busy}
           testID="settings-profile"
         />
+      ) : null}
+      {p.account?.on.achievements !== undefined ? (
+        <Button
+          label="Conquistas"
+          variant="secondary"
+          onPress={p.account.on.achievements}
+          disabled={p.busy}
+          testID="settings-achievements"
+        />
+      ) : null}
+      {p.account?.on.missions !== undefined ? (
+        <Button
+          label="Missões"
+          variant="secondary"
+          onPress={p.account.on.missions}
+          disabled={p.busy}
+          testID="settings-missions"
+        />
+      ) : null}
+      {p.account?.provider === 'guest' && p.account.social !== undefined ? (
+        <Card>
+          <Heading>Vincular conta</Heading>
+          <SocialAuthPanel {...p.account.social} />
+          {p.account.on.login !== undefined ? (
+            <Button
+              label="Já tenho uma conta"
+              variant="secondary"
+              onPress={p.account.on.login}
+              disabled={p.busy}
+              testID="settings-login"
+            />
+          ) : null}
+        </Card>
       ) : null}
       {p.account !== undefined ? <BlockedSection account={p.account} busy={p.busy} /> : null}
       <Card>

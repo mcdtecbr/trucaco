@@ -1,5 +1,6 @@
 import { AuthService } from './auth/authService';
 import { loadServerConfig } from './auth/config';
+import { buildIdentityVerifier } from './auth/identity';
 import { RedisTokenStore } from './auth/redisTokenStore';
 import { MemoryTokenStore, type TokenStore } from './auth/tokenStore';
 import {
@@ -136,7 +137,11 @@ async function main(): Promise<void> {
   } else {
     throw new Error('DATABASE_URL é obrigatório fora de development/test.');
   }
-  const auth = new AuthService(users, tokens, config.auth);
+  const identity = buildIdentityVerifier(config.social);
+  const auth = new AuthService(users, tokens, config.auth, Date.now, identity);
+  const social = auth.socialProviders();
+  if (config.social.testIdentity) log.warn('AUTH_TEST_IDENTITY ligado: idToken de teste aceito');
+  log.info('login social', { providers: social.length === 0 ? 'desligado' : social.join(',') });
 
   const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
   const server = await createServer({

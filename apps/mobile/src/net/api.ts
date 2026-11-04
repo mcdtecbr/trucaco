@@ -10,6 +10,7 @@
  */
 import { isHttpErrorCode } from '@trucaco/protocol';
 import type {
+  AchievementsResponse,
   BlocksResponse,
   CreateTableRequest,
   CreateTableResponse,
@@ -20,9 +21,13 @@ import type {
   LogoutRequest,
   MatchesPageResponse,
   MeResponse,
+  MissionsResponse,
+  PublicProfileResponse,
   QueueRequest,
   QueueStatusResponse,
   ReportRequest,
+  SocialAuthRequest,
+  SocialAuthResponse,
   TokenPairResponse,
   UpdateAvatarResponse,
   UpdateNicknameResponse,
@@ -128,6 +133,17 @@ export interface ApiClient {
   block(userId: string): Promise<void>;
   unblock(userId: string): Promise<void>;
   report(report: ReportRequest): Promise<void>;
+  myAchievements(): Promise<AchievementsResponse>;
+  myMissions(): Promise<MissionsResponse>;
+  /** Perfil público de outro jogador (`GET /users/:id`). Nunca traz histórico nem provedor. */
+  publicProfile(userId: string): Promise<PublicProfileResponse>;
+  /** `POST /auth/google|apple` (sem Bearer). O convidado atual é substituído pela conta devolvida. */
+  loginSocial(req: SocialAuthRequest): Promise<SocialAuthResponse>;
+  /**
+   * `POST /auth/link` (Bearer, convidado). Devolve par novo (o servidor revoga as famílias antigas).
+   * Sem repetição por 401: ele pode ser `INVALID_ID_TOKEN`; quem chama garante o access antes.
+   */
+  linkAccount(req: SocialAuthRequest): Promise<SocialAuthResponse>;
   /** `DELETE /me`: o refresh token é a prova de acesso recente. Sem repetição por 401. */
   deleteAccount(refreshToken: string): Promise<void>;
 }
@@ -161,6 +177,12 @@ function isGuestResponse(x: unknown): x is GuestAuthResponse {
   if (!isTokenPair(x)) return false;
   const user = (x as unknown as Record<string, unknown>)['user'];
   return isRecord(user) && typeof user['id'] === 'string' && typeof user['nickname'] === 'string';
+}
+
+function isSocialResponse(x: unknown): x is SocialAuthResponse {
+  return (
+    isGuestResponse(x) && typeof (x as unknown as Record<string, unknown>)['created'] === 'boolean'
+  );
 }
 
 function errorCodeOf(body: unknown): ApiErrorCode {
@@ -356,6 +378,24 @@ export function createApiClient(options: ApiOptions): ApiClient {
     },
     async report(report) {
       await authed<unknown>('POST', '/reports', report);
+    },
+    myAchievements: () => authed<AchievementsResponse>('GET', '/me/achievements'),
+    myMissions: () => authed<MissionsResponse>('GET', '/me/missions'),
+    publicProfile: (userId) =>
+      authed<PublicProfileResponse>('GET', `/users/${encodeURIComponent(userId)}`),
+    async loginSocial(req) {
+      const json = await raw('POST', `/auth/${req.provider}`, req, null);
+      if (!isSocialResponse(json)) {
+        throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+      }
+      return json;
+    },
+    async linkAccount(req) {
+      const json = await authed<unknown>('POST', '/auth/link', req, { refreshOn401: false });
+      if (!isSocialResponse(json)) {
+        throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+      }
+      return json;
     },
     async deleteAccount(refreshToken) {
       await authed<undefined>('DELETE', '/me', { refreshToken }, { refreshOn401: false });

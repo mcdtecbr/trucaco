@@ -85,6 +85,8 @@ export function HomeScreen() {
         settings: () => router.push('/settings'),
         avatar: () => router.push('/avatar'),
         profile: () => router.push('/profile'),
+        missions: () => router.push('/missions'),
+        achievements: () => router.push('/achievements'),
       }}
     />
   );

@@ -9,6 +9,8 @@ import { PROVIDER_LABEL, RELATION_LABEL, hasStats, statLine } from '../profile/h
 import type { HistoryRow } from '../profile/history';
 import { ModerationPanel } from './ModerationPanel';
 import type { ModerationPanelProps, ModerationState } from './ModerationPanel';
+import { SocialAuthPanel } from './SocialAuthPanel';
+import type { SocialAuthPanelProps } from './SocialAuthPanel';
 
 export type LoadState = 'loading' | 'ready' | 'error';
 
@@ -30,6 +32,8 @@ export interface ProfileViewProps {
     error: string | null;
   };
   moderation: ModerationState | null;
+  /** Vincular conta (só aparece para convidado). Omitido = sem o cartão. */
+  social?: SocialAuthPanelProps;
   on: {
     back(): void;
     retryMe(): void;
@@ -38,6 +42,9 @@ export interface ProfileViewProps {
     block(userId: string, nickname: string, matchId: string): void;
     report(userId: string, nickname: string, matchId: string): void;
     moderation: ModerationPanelProps['on'];
+    achievements?(): void;
+    missions?(): void;
+    viewPlayer?(userId: string): void;
   };
 }
 
@@ -66,6 +73,35 @@ export function ProfileView(p: ProfileViewProps) {
           </View>
         </View>
       </Card>
+
+      {p.provider === 'guest' && p.social !== undefined ? (
+        <Card>
+          <Heading>Vincular conta</Heading>
+          <SocialAuthPanel {...p.social} />
+        </Card>
+      ) : null}
+
+      {p.on.achievements !== undefined || p.on.missions !== undefined ? (
+        <Card>
+          <Heading>Progresso</Heading>
+          {p.on.achievements !== undefined ? (
+            <Button
+              label="Conquistas"
+              variant="secondary"
+              onPress={p.on.achievements}
+              testID="profile-achievements"
+            />
+          ) : null}
+          {p.on.missions !== undefined ? (
+            <Button
+              label="Missões"
+              variant="secondary"
+              onPress={p.on.missions}
+              testID="profile-missions"
+            />
+          ) : null}
+        </Card>
+      ) : null}
 
       <Card>
         <Heading>Estatísticas</Heading>
@@ -166,6 +202,14 @@ function HistoryItem({ row, p }: { row: HistoryRow; p: ProfileViewProps }) {
           <Text style={styles.playerName}>{`${pl.name} · ${RELATION_LABEL[pl.relation]}`}</Text>
           {pl.userId !== null ? (
             <View style={styles.playerActions}>
+              {p.on.viewPlayer !== undefined ? (
+                <Button
+                  label={`Ver perfil de ${pl.name}`}
+                  variant="secondary"
+                  onPress={() => p.on.viewPlayer?.(pl.userId as string)}
+                  testID={`view-${row.id}-${pl.seat}`}
+                />
+              ) : null}
               <Button
                 label={`Bloquear ${pl.name}`}
                 variant="secondary"

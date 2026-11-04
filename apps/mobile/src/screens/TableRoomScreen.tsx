@@ -9,6 +9,8 @@ import { isE2EMode } from '../net/config';
 import { useReduceMotion } from '../platform/useReduceMotion';
 import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
+import { captureBaseline, startGainWatch } from '../room/achievementWatch';
+import { progressStore, useProgressStore } from '../store/progressStore';
 import { useRoomStore } from '../store/roomStore';
 import { selectProvider, useSessionStore } from '../store/sessionStore';
 import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
@@ -137,6 +139,14 @@ function JoinedTable() {
   const codesPanel = useCodesPanel(seats, mySeat, connection === 'connected');
   const chatUnreadTotal = useTableStore((s) => s.chatUnread.table + s.chatUnread.partner);
   const reduceMotion = useReduceMotion();
+  // Foto das conquistas ao entrar na mesa: o fim da partida compara com ela (melhor esforço).
+  useEffect(() => {
+    let stop = false;
+    void captureBaseline(getApp().session.api, progressStore, () => stop);
+    return () => {
+      stop = true;
+    };
+  }, []);
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle');
 
   // Saiu da tela (voltar, trocar de rota, fechar): sai da sala de forma consentida. Deps `[]`: a troca
@@ -196,6 +206,13 @@ function JoinedTable() {
 }
 
 function FinishedTable({ onLeave }: { onLeave(): void }) {
+  const router = useRouter();
+  const gains = useProgressStore((s) => s.gains);
+  const outcome = useTableStore((s) => finishedResult(s.vm).outcome);
+  useEffect(
+    () => startGainWatch({ api: getApp().session.api, store: progressStore, outcome }),
+    [outcome],
+  );
   const vm = useTableStore((s) => s.vm);
   const history = useTableStore((s) => s.history);
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
@@ -214,6 +231,8 @@ function FinishedTable({ onLeave }: { onLeave(): void }) {
           : null
       }
       onRematch={() => void getApp().table.voteRematch()}
+      gains={gains}
+      onOpenAchievements={() => router.push('/achievements')}
     />
   );
 }

@@ -620,17 +620,23 @@ describe('POST /auth/logout', () => {
   });
 });
 
-describe('stubs, 404 e 405', () => {
-  it('Google, Apple e link respondem 501 (link exige auth)', async () => {
+describe('login social sem credenciais, 404 e 405', () => {
+  it('sem verificador configurado: Google/Apple/link respondem SOCIAL_LOGIN_DISABLED (link exige auth)', async () => {
     const { call, guest } = await start();
     const g = await guest();
     for (const path of ['/auth/google', '/auth/apple']) {
-      const res = await call('POST', path, { body: { idToken: 'x' } });
-      expect(res.status).toBe(501);
-      expect(await code(res)).toBe('NOT_IMPLEMENTED');
+      const provider = path.slice('/auth/'.length);
+      const res = await call('POST', path, { body: { provider, idToken: 'x' } });
+      expect(res.status).toBe(503);
+      expect(await code(res)).toBe('SOCIAL_LOGIN_DISABLED');
     }
     expect((await call('POST', '/auth/link', { body: {} })).status).toBe(401);
-    expect((await call('POST', '/auth/link', { token: g.accessToken, body: {} })).status).toBe(501);
+    const link = await call('POST', '/auth/link', {
+      token: g.accessToken,
+      body: { provider: 'google', idToken: 'x' },
+    });
+    expect(link.status).toBe(503);
+    expect(await code(link)).toBe('SOCIAL_LOGIN_DISABLED');
   });
 
   it('404 e 405 genéricos, sem eco da entrada nem stack', async () => {

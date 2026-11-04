@@ -87,10 +87,22 @@ export interface UserRecord {
   readonly nickname: string;
   readonly createdAt: Date;
   readonly lastSeenAt: Date;
+  /** Quando o convidado foi vinculado a um provedor (6F). `null` = nunca vinculado (convidado ou conta social nascida social). */
+  readonly linkedAt: Date | null;
 }
 
 export interface NewGuestInput {
   /** Identificador aleatório gerado pelo servidor (não é segredo de sessão). */
+  readonly providerSubject: string;
+  readonly nickname: string;
+}
+
+/** Provedores sociais (os que não são `guest`). */
+export type SocialProviderId = Exclude<AuthProviderId, 'guest'>;
+
+export interface NewSocialUserInput {
+  readonly provider: SocialProviderId;
+  /** `sub` VERIFICADO do idToken. */
   readonly providerSubject: string;
   readonly nickname: string;
 }
@@ -130,6 +142,20 @@ export type PartnerCodesMap = { readonly [signalId: string]: string };
 export interface UserRepository {
   /** Lança `NicknameTakenError` (apelido repetido, sem diferenciar caixa) ou `InvalidInputError`. */
   createGuest(input: NewGuestInput): Promise<UserRecord>;
+  /** Conta nascida social (login social sem convidado prévio). `NicknameTakenError` ou `ProviderSubjectTakenError` (corrida). */
+  createSocialUser(input: NewSocialUserInput): Promise<UserRecord>;
+  /**
+   * Vínculo ATÔMICO do convidado: só vira `provider`/`subject` se o usuário AINDA é `guest` (um UPDATE
+   * condicional; dois vínculos concorrentes do mesmo convidado, ou do mesmo `sub` por dois convidados,
+   * nunca passam os dois). O `id` não muda: histórico, progressão, avatar e combinados ficam. Devolve o
+   * usuário atualizado, ou `null` se não existe ou já não é convidado. `ProviderSubjectTakenError` se o
+   * `sub` já pertence a outra conta.
+   */
+  linkProvider(
+    id: string,
+    provider: SocialProviderId,
+    providerSubject: string,
+  ): Promise<UserRecord | null>;
   findById(id: string): Promise<UserRecord | null>;
   findByProvider(provider: AuthProviderId, providerSubject: string): Promise<UserRecord | null>;
   touchLastSeen(id: string, at: Date): Promise<void>;
