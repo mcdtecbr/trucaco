@@ -24,7 +24,7 @@ A fatia 5 era opcional no ADR 0004: sombreado para dar volume ao rosto sem criar
 
 ## Consequências
 
-- O `.riv` tem os mesmos 16 triggers e 15 Numbers da fatia 4; o arquivo sobe para 60.606 bytes.
+- O `.riv` tem os mesmos 16 triggers e 15 Numbers da fatia 4; o arquivo sobe para 60.606 bytes. Depois da correção visual de 04/11/2026 (`fix/avatar-pendencias`), o arquivo está em 60.502 bytes; a decisão não muda (ver `docs/avatar-rive-estado.md`).
 - Combinações de cabelo e rosto precisam ser conferidas no runtime. Parte da matriz foi vista só no runtime web, não no editor (ver `docs/avatar-rive-estado.md`, fatia 5).
 - O fallback vetorial e o `.riv` podem divergir nos detalhes do recorte: o brilho do cabelo, no Rive, cobre o Solo inteiro. Visualmente aceitável no que foi testado, mas a diferença é conhecida.
 - Dependência do `react-native-svg` com `ClipPath` no nativo: não testada em aparelho.
