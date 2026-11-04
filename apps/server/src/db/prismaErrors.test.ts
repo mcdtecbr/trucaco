@@ -122,6 +122,20 @@ describe('translateDbError', () => {
     expect(everythingOf(generic)).not.toContain(SECRET);
   });
 
+  it('consulta crua (P2010): FK vira InvalidInputError, deadlock vira PersistenceError', () => {
+    const fk = translateDbError(
+      prismaError('P2010', {
+        originalCode: '23503',
+        constraint: { index: 'user_stats_user_id_fkey' },
+      }),
+    );
+    expect(fk).toBeInstanceOf(InvalidInputError);
+    expect((fk as InvalidInputError).constraint).toBe('user_stats_user_id_fkey');
+    expect(translateDbError(prismaError('P2010', { originalCode: '40P01' }))).toBeInstanceOf(
+      PersistenceError,
+    );
+  });
+
   it('erros de domínio passam como estão', () => {
     const e = new InvalidInputError('x');
     expect(translateDbError(e)).toBe(e);

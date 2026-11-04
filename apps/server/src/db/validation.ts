@@ -2,10 +2,21 @@ import {
   PARTNER_CODE_MAX_LENGTH,
   SIGNAL_IDS,
   cleanPartnerCode,
+  isAchievementId,
+  isMissionId,
   parseAvatarParts,
 } from '@trucaco/protocol';
-import type { AvatarParts } from '@trucaco/protocol';
-import { InvalidInputError, type FinishedMatchInput, type PartnerCodesMap } from './types';
+import type { AvatarParts, MissionId } from '@trucaco/protocol';
+import {
+  InvalidInputError,
+  PROGRESS_CAP,
+  PROGRESS_DELTA_MAX,
+  type AchievementDelta,
+  type FinishedMatchInput,
+  type MissionDelta,
+  type PartnerCodesMap,
+  type UserProgressDelta,
+} from './types';
 
 export const NICKNAME_MIN = 3;
 export const NICKNAME_MAX = 16;
@@ -194,4 +205,101 @@ export function decodeCursor(raw: string): MatchCursor {
     throw new InvalidInputError('Cursor inválido.');
   }
   return { endedAt, id };
+}
+
+/** `2026-11-04` (diária) ou `2026-W45` (semanal); mesma regra do CHECK `user_missions_period_key_format_check`. */
+const PERIOD_KEY_RE = /^[0-9]{4}-(W[0-9]{2}|[0-9]{2}-[0-9]{2})$/;
+
+export function assertPeriodKey(key: unknown): string {
+  if (typeof key !== 'string' || !PERIOD_KEY_RE.test(key)) {
+    throw new InvalidInputError('Chave de período inválida.');
+  }
+  return key;
+}
+
+function assertCount(value: unknown, max: number, what: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+    throw new InvalidInputError(`${what} inválido.`);
+  }
+  return value;
+}
+
+/** Meta de missão: inteiro de 1 a `PROGRESS_DELTA_MAX` (mesma regra do CHECK `target > 0`). */
+export function assertMissionTarget(target: unknown): number {
+  const n = assertCount(target, PROGRESS_DELTA_MAX, 'Meta');
+  if (n < 1) throw new InvalidInputError('Meta inválida.');
+  return n;
+}
+
+export function assertMissionId(id: unknown): MissionId {
+  if (!isMissionId(id)) throw new InvalidInputError('Missão fora do catálogo.');
+  return id;
+}
+
+/**
+ * Valida as entradas de `applyMatchProgress` (as duas implementações) e devolve cópia canônica: ids
+ * normalizados, ordem determinística (usuário, conquista, missão: a mesma ordem de bloqueio nas escritas, o
+ * que evita deadlock entre partidas simultâneas) e sem repetição. Datas inválidas viram `InvalidInputError`.
+ */
+export function assertProgressDeltas(
+  deltas: readonly UserProgressDelta[],
+): readonly UserProgressDelta[] {
+  const seenUsers = new Set<string>();
+  const out = deltas.map((d): UserProgressDelta => {
+    const userId = normalizeId(d.userId);
+    if (seenUsers.has(userId)) throw new InvalidInputError('Usuário repetido na progressão.');
+    seenUsers.add(userId);
+    if (d.variant !== 'paulista' && d.variant !== 'mineiro') {
+      throw new InvalidInputError('Variante inválida.');
+    }
+    const played = assertCount(d.played, PROGRESS_DELTA_MAX, 'played');
+    const won = assertCount(d.won, PROGRESS_DELTA_MAX, 'won');
+    if (won > played) throw new InvalidInputError('won maior que played.');
+    const seenA = new Set<string>();
+    const achievements = d.achievements.map((a): AchievementDelta => {
+      if (!isAchievementId(a.achievementId)) {
+        throw new InvalidInputError('Conquista fora do catálogo.');
+      }
+      if (seenA.has(a.achievementId)) throw new InvalidInputError('Conquista repetida.');
+      seenA.add(a.achievementId);
+      if ((a.progressDelta === undefined) === (a.progressSet === undefined)) {
+        throw new InvalidInputError('Informe progressDelta ou progressSet.');
+      }
+      if (a.progressDelta !== undefined) assertCount(a.progressDelta, PROGRESS_DELTA_MAX, 'Delta');
+      if (a.progressSet !== undefined) assertCount(a.progressSet, PROGRESS_CAP, 'Progresso');
+      if (a.unlockedAt !== undefined) assertDate(a.unlockedAt);
+      return a;
+    });
+    const seenM = new Set<string>();
+    const missions = d.missions.map((m): MissionDelta => {
+      assertMissionId(m.missionId);
+      assertPeriodKey(m.periodKey);
+      assertMissionTarget(m.target);
+      assertCount(m.progressDelta, PROGRESS_DELTA_MAX, 'Delta');
+      if (m.completedAt !== undefined) assertDate(m.completedAt);
+      const k = `${m.missionId}|${m.periodKey}`;
+      if (seenM.has(k)) throw new InvalidInputError('Missão repetida.');
+      seenM.add(k);
+      return m;
+    });
+    return {
+      ...d,
+      userId,
+      achievements: [...achievements].sort((x, y) => cmp(x.achievementId, y.achievementId)),
+      missions: [...missions].sort(
+        (x, y) => cmp(x.missionId, y.missionId) || cmp(x.periodKey, y.periodKey),
+      ),
+    };
+  });
+  return out.sort((x, y) => cmp(x.userId, y.userId));
+}
+
+function assertDate(value: unknown): void {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new InvalidInputError('Data inválida.');
+  }
+}
+
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }

@@ -52,6 +52,22 @@ const INPUT_CODES = new Set([
   'P2039',
 ]);
 
+/** SQLSTATE de violação de FK (23503), CHECK (23514), único (23505), NOT NULL (23502), texto longo (22001) e número fora da faixa (22003). */
+const RAW_INPUT_SQLSTATES: ReadonlySet<string> = new Set([
+  '23503',
+  '23514',
+  '23505',
+  '23502',
+  '22001',
+  '22003',
+]);
+
+function rawSqlState(error: unknown): string {
+  const cause = record(record(record(record(error)?.['meta'])?.['driverAdapterError'])?.['cause']);
+  const code = cause?.['originalCode'];
+  return typeof code === 'string' ? code : '';
+}
+
 /**
  * Converte QUALQUER falha de uma chamada Prisma de escrita em erro de domínio saneado: só `code`
  * e nome da constraint, sem `cause`/`meta`/`detail`/valores. O erro bruto do Prisma é descartado
@@ -76,6 +92,10 @@ export function translateDbError(error: unknown): Error {
     }
     if (error.code === 'P2003') {
       return new InvalidInputError('Usuário ou partida inexistente.', constraint);
+    }
+    if (error.code === 'P2010' && RAW_INPUT_SQLSTATES.has(rawSqlState(error))) {
+      // Consulta crua (progressão): o SQLSTATE do Postgres diz que o banco recusou a entrada.
+      return new InvalidInputError('Entrada recusada pelo banco.', constraint);
     }
     if (INPUT_CODES.has(error.code)) {
       return new InvalidInputError('Entrada recusada pelo banco.', constraint);

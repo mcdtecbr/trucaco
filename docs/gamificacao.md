@@ -63,15 +63,17 @@ Sem XP e nível, a recompensa de conquistas e missões precisa ser outra coisa. 
 
 ## 4. Dados (esboço para `dalva-dba`)
 
-| Tabela              | Conteúdo                                               | Fase |
-| ------------------- | ------------------------------------------------------ | ---- |
-| `achievements`      | Catálogo (id, níveis, condição codificada no servidor) | 6    |
-| `user_achievements` | Jogador, conquista, nível, progresso, data             | 6    |
-| `missions`          | Catálogo de missões (id, tipo diária/semanal, meta)    | 6    |
-| `user_missions`     | Jogador, missão, período, progresso, concluída         | 6    |
-| `seasons`           | Id, início, fim                                        | 9    |
-| `ratings`           | Jogador, variante, temporada, rating, partidas, liga   | 9    |
-| `rating_history`    | Partida, jogador, rating antes e depois                | 9    |
+Atualizado no bloco 6C (ADR 0009): o catálogo de conquistas e missões fica **em código** (`packages/protocol/src/gamification.ts`), sem tabelas `achievements` e `missions`. No banco entram `user_achievements`, `user_missions`, `user_stats` (partidas e vitórias por variante) e `progression_applied` (idempotência por partida); ver `docs/banco-de-dados.md`.
+
+| Tabela                | Conteúdo                                             | Fase |
+| --------------------- | ---------------------------------------------------- | ---- |
+| `user_achievements`   | Jogador, conquista, nível, progresso, data           | 6    |
+| `user_missions`       | Jogador, missão, período, progresso, concluída       | 6    |
+| `user_stats`          | Jogador, variante, partidas, vitórias                | 6    |
+| `progression_applied` | Partida já avaliada (idempotência)                   | 6    |
+| `seasons`             | Id, início, fim                                      | 9    |
+| `ratings`             | Jogador, variante, temporada, rating, partidas, liga | 9    |
+| `rating_history`      | Partida, jogador, rating antes e depois              | 9    |
 
 ## 5. Decisões em aberto
 
