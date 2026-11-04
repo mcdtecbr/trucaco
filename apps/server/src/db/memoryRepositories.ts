@@ -8,8 +8,11 @@ import {
   NicknameTakenError,
   NotPartnersError,
   ProviderSubjectTakenError,
+  type AchievementRecord,
   type AuthProviderId,
   type BlockedUserRecord,
+  type MissionRecord,
+  type StatsRecord,
   type FinishedMatchInput,
   type MatchPage,
   type MatchRepository,
@@ -34,6 +37,7 @@ import {
   orderPair,
   validateNickname,
 } from './validation';
+import { MemoryProgressionRepository } from './memoryProgression';
 
 /**
  * Implementações em memória para testes de sala (sem banco). Espelham as regras do SQL: apelido
@@ -47,6 +51,14 @@ export class MemoryStore {
   reports: ReportRecord[] = [];
   readonly partnerCodes = new Map<string, PartnerCodesMap>();
   matches: StoredMatch[] = [];
+  /** Chave `userId|achievementId`. */
+  readonly achievements = new Map<string, AchievementRecord & { readonly userId: string }>();
+  /** Chave `userId|missionId|periodKey`. */
+  readonly missions = new Map<string, MissionRecord & { readonly userId: string }>();
+  /** Chave `userId|variant`. */
+  readonly stats = new Map<string, StatsRecord & { readonly userId: string }>();
+  /** Partidas já avaliadas (`progression_applied`). */
+  readonly progressionApplied = new Set<string>();
 }
 
 interface StoredMatch {
@@ -188,6 +200,10 @@ export class MemoryUserRepository implements UserRepository {
     const id = normalizeId(rawId);
     if (!this.store.users.delete(id)) return false;
     this.store.avatars.delete(id);
+    // Progressão: cascata do banco (user_achievements, user_missions, user_stats).
+    for (const map of [this.store.achievements, this.store.missions, this.store.stats]) {
+      for (const [key, row] of [...map]) if (row.userId === id) map.delete(key);
+    }
     for (const key of [...this.store.blocks]) {
       if (key.startsWith(`${id}>`) || key.endsWith(`>${id}`)) this.store.blocks.delete(key);
     }
@@ -340,11 +356,13 @@ export function createMemoryRepositories(): {
   readonly store: MemoryStore;
   readonly users: MemoryUserRepository;
   readonly matches: MemoryMatchRepository;
+  readonly progression: MemoryProgressionRepository;
 } {
   const store = new MemoryStore();
   return {
     store,
     users: new MemoryUserRepository(store),
     matches: new MemoryMatchRepository(store),
+    progression: new MemoryProgressionRepository(store),
   };
 }

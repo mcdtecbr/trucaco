@@ -84,6 +84,8 @@ model User {
   nickname        String       @db.VarChar(16)
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   lastSeenAt      DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  // Quando o convidado foi vinculado a um provedor (Fase 6F). NULL = nunca vinculado.
+  linkedAt        DateTime?    @map("linked_at") @db.Timestamptz(3)
 
   avatar          Avatar?
   matchSeats      MatchPlayer[]
@@ -93,6 +95,9 @@ model User {
   reportsReceived Report[]       @relation("ReportReported")
   blocksMade      Block[]        @relation("BlockBlocker")
   blocksReceived  Block[]        @relation("BlockBlocked")
+  achievements    UserAchievement[]
+  missions        UserMission[]
+  stats           UserStat[]
 
   @@unique([provider, providerSubject])
   @@map("users")
@@ -135,8 +140,9 @@ model Match {
   startedAt  DateTime        @map("started_at") @db.Timestamptz(3)
   endedAt    DateTime        @map("ended_at") @db.Timestamptz(3)
 
-  players MatchPlayer[]
-  reports Report[]
+  players     MatchPlayer[]
+  reports     Report[]
+  progression ProgressionApplied?
 
   // Retenção (expurgo por ended_at) e paginação por cursor (ended_at, id).
   @@index([endedAt(sort: Desc), id(sort: Desc)])
@@ -222,4 +228,69 @@ model Block {
   // Direção inversa (matchmaking checa os dois sentidos).
   @@index([blockedId])
   @@map("blocks")
+}
+
+// Progresso de conquistas (Fase 6). O CATÁLOGO fica em código (@trucaco/protocol: ACHIEVEMENT_IDS e
+// ACHIEVEMENT_TARGETS); aqui só o estado do jogador. level 0 = ainda não desbloqueada.
+// CHECKs (progress >= 0, level >= 0, achievement_id não vazio) ficam no SQL da migração.
+model UserAchievement {
+  userId        String    @map("user_id") @db.Uuid
+  achievementId String    @map("achievement_id") @db.VarChar(40)
+  level         Int       @default(0) @db.SmallInt
+  progress      Int       @default(0)
+  // Desbloqueio do nível 1; NULL enquanto level = 0.
+  unlockedAt    DateTime? @map("unlocked_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A PK (user_id, achievement_id) atende "conquistas do usuário" por prefixo.
+  @@id([userId, achievementId])
+  @@map("user_achievements")
+}
+
+// Missão do jogador num período. period_key em America/Sao_Paulo: '2026-11-04' (diária) ou '2026-W45'
+// (semanal). Sem job: as linhas nascem na primeira leitura do período e expiram pela chave.
+// CHECKs (target > 0, 0 <= progress <= target, formato do period_key) ficam no SQL da migração.
+model UserMission {
+  userId      String    @map("user_id") @db.Uuid
+  missionId   String    @map("mission_id") @db.VarChar(40)
+  periodKey   String    @map("period_key") @db.VarChar(16)
+  target      Int
+  progress    Int       @default(0)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, missionId, periodKey])
+  // GET /me/missions: missões do usuário num (ou em dois) períodos.
+  @@index([userId, periodKey])
+  @@map("user_missions")
+}
+
+// Partidas e vitórias por variante, contadas só de partidas gravadas depois desta migração.
+// CHECK played >= won >= 0 no SQL da migração.
+model UserStat {
+  userId    String   @map("user_id") @db.Uuid
+  variant   Variant
+  played    Int      @default(0)
+  won       Int      @default(0)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, variant])
+  @@map("user_stats")
+}
+
+// Idempotência da progressão: uma linha por partida já avaliada. O INSERT (ON CONFLICT DO NOTHING)
+// na mesma transação das escritas decide quem aplica; reprocessar o matchId não faz nada.
+// Apagar a partida (expurgo) apaga a marca por cascata.
+model ProgressionApplied {
+  matchId   String   @id @map("match_id") @db.Uuid
+  appliedAt DateTime @default(now()) @map("applied_at") @db.Timestamptz(3)
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@map("progression_applied")
 }

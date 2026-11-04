@@ -219,6 +219,7 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
         'created_at',
         'id',
         'last_seen_at',
+        'linked_at',
         'nickname',
         'provider',
         'provider_subject',

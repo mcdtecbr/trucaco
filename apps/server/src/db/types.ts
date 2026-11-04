@@ -3,7 +3,7 @@
  * Só assinaturas e tipos de domínio: sem lógica de auth. Implementações: Prisma (produção) e
  * memória (testes de sala). Modelo e política de retenção: docs/banco-de-dados.md.
  */
-import type { AvatarParts } from '@trucaco/protocol';
+import type { AchievementId, AvatarParts, MissionId } from '@trucaco/protocol';
 
 export type JsonValue =
   | string
@@ -257,4 +257,136 @@ export interface MatchRepository {
   ): Promise<MatchPage>;
   /** `userId`s humanos (não nulos) da partida; `null` se não existe. Só valida denúncias (opcional: sem ele, denúncia com `matchId` é recusada). */
   participantIds?(matchId: string): Promise<readonly string[] | null>;
+}
+
+/**
+ * Progressão (Fase 6, bloco 6C): conquistas, missões e estatísticas. O catálogo (ids, metas, níveis) fica
+ * em código (`@trucaco/protocol`); aqui só o estado gravado. SEM regra de conquista: quem decide o que
+ * conta é a avaliação da partida (bloco 6D). Ver docs/adr/0009.
+ */
+export interface AchievementDelta {
+  readonly achievementId: AchievementId;
+  /** Soma ao progresso atual (inteiro 0 a `PROGRESS_DELTA_MAX`). Exclusivo com `progressSet`. */
+  readonly progressDelta?: number;
+  /** Define o progresso (ex.: sequência). Exclusivo com `progressDelta`. */
+  readonly progressSet?: number;
+  /** Instante do desbloqueio do nível 1; padrão = agora. Só vale na primeira vez. */
+  readonly unlockedAt?: Date;
+}
+
+export interface MissionDelta {
+  readonly missionId: MissionId;
+  /** `2026-11-04` ou `2026-W45`. */
+  readonly periodKey: string;
+  /** Meta do período; usada só se a linha ainda não existir (a gravada nunca muda). */
+  readonly target: number;
+  readonly progressDelta: number;
+  /** Instante da conclusão; padrão = agora. Só vale ao concluir. */
+  readonly completedAt?: Date;
+}
+
+export interface UserProgressDelta {
+  readonly userId: string;
+  readonly variant: VariantId;
+  /** Soma a `played` (normalmente 1). */
+  readonly played: number;
+  /** Soma a `won` (0 ou 1; não pode passar de `played`). */
+  readonly won: number;
+  readonly achievements: readonly AchievementDelta[];
+  readonly missions: readonly MissionDelta[];
+}
+
+export interface AchievementUnlock {
+  readonly userId: string;
+  readonly achievementId: AchievementId;
+  /** Nível antes (0 = estava bloqueada) e depois desta partida. */
+  readonly previousLevel: number;
+  readonly level: number;
+  readonly progress: number;
+}
+
+export interface MissionCompletion {
+  readonly userId: string;
+  readonly missionId: MissionId;
+  readonly periodKey: string;
+}
+
+export interface ApplyProgressResult {
+  /** `false` se o `matchId` já tinha sido aplicado (nada foi escrito). */
+  readonly applied: boolean;
+  /** Níveis novos desta aplicação (vazio se `applied` é `false`). */
+  readonly unlocked: readonly AchievementUnlock[];
+  readonly missionsCompleted: readonly MissionCompletion[];
+}
+
+export interface AchievementRecord {
+  readonly achievementId: AchievementId;
+  readonly level: number;
+  readonly progress: number;
+  readonly unlockedAt: Date | null;
+}
+
+export interface MissionRecord {
+  readonly missionId: MissionId;
+  readonly periodKey: string;
+  readonly target: number;
+  readonly progress: number;
+  readonly completedAt: Date | null;
+}
+
+export interface StatsRecord {
+  readonly variant: VariantId;
+  readonly played: number;
+  readonly won: number;
+}
+
+/** Agregados do perfil público (6E): sem progresso, datas, histórico nem provedor. */
+export interface PublicProfileRecord {
+  readonly userId: string;
+  readonly nickname: string;
+  readonly avatar: AvatarParts | null;
+  /** Só as desbloqueadas (`level > 0`). */
+  readonly achievements: readonly {
+    readonly achievementId: AchievementId;
+    readonly level: number;
+  }[];
+  readonly stats: readonly StatsRecord[];
+}
+
+/** Teto de um incremento de progresso numa só partida (barra valores absurdos). */
+export const PROGRESS_DELTA_MAX = 1000;
+/** Teto de contadores acumulados (cabe em int4 do Postgres). */
+export const PROGRESS_CAP = 2_000_000_000;
+
+export interface ProgressionRepository {
+  /**
+   * Aplica a progressão de UMA partida a todos os usuários, numa transação, e é IDEMPOTENTE por `matchId`:
+   * a primeira chamada grava e devolve `applied: true` com os desbloqueios novos; qualquer outra (inclusive
+   * simultânea) devolve `applied: false` sem escrever. O nível de cada conquista é derivado do progresso
+   * final (`achievementLevelFor`) e nunca diminui. Missão: progresso limitado à meta, conclusão marcada uma vez.
+   * `InvalidInputError` se `matchId` não existir, usuário inexistente, id fora do catálogo, `periodKey`
+   * inválido, delta negativo/fracionário ou `won > played`. Tudo ou nada.
+   */
+  applyMatchProgress(
+    matchId: string,
+    deltas: readonly UserProgressDelta[],
+  ): Promise<ApplyProgressResult>;
+  /** Linhas existentes (conquistas sem linha ainda não foram tocadas: o chamador completa pelo catálogo). */
+  listAchievements(userId: string): Promise<readonly AchievementRecord[]>;
+  /** Missões dos períodos pedidos (`GET /me/missions`). */
+  listMissions(userId: string, periodKeys: readonly string[]): Promise<readonly MissionRecord[]>;
+  /** Uma linha por variante já jogada. */
+  getStats(userId: string): Promise<readonly StatsRecord[]>;
+  /** `null` se o usuário não existe (mesmo resultado para apagado). */
+  getPublicProfile(userId: string): Promise<PublicProfileRecord | null>;
+  /**
+   * Cria as linhas do período que faltam (progresso 0) e devolve TODAS as do período. Determinístico e
+   * idempotente (chamadas simultâneas não duplicam); a meta de linha já existente não muda.
+   * `InvalidInputError` se o usuário não existe ou os argumentos são inválidos.
+   */
+  ensureMissions(
+    userId: string,
+    periodKey: string,
+    defs: readonly { readonly missionId: MissionId; readonly target: number }[],
+  ): Promise<readonly MissionRecord[]>;
 }

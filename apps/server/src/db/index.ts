@@ -1,6 +1,8 @@
 export { createPrisma } from './prisma';
 export type { PrismaHandle } from './prisma';
 export { PrismaMatchRepository, PrismaUserRepository } from './prismaRepositories';
+export { PrismaProgressionRepository } from './prismaProgression';
+export { MemoryProgressionRepository } from './memoryProgression';
 export {
   MemoryMatchRepository,
   MemoryStore,

@@ -1,6 +1,6 @@
 # Banco de dados: Postgres e Redis
 
-Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/schema.prisma` e as migrações `apps/server/prisma/migrations/20261101173134_init` (modelo) e `20261101190000_nickname_policy_json_limits` (política de apelido e tetos de tamanho, escrita à mão). Contrato de acesso: `apps/server/src/db/` (interfaces `UserRepository` e `MatchRepository`, implementação Prisma e em memória). Conquistas, missões e ranking (Fases 6 e 9, `docs/gamificacao.md`) NÃO estão modelados ainda: nada aqui os bloqueia (tabelas novas apontam para `users.id` e `matches.id`).
+Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/schema.prisma` e as migrações `apps/server/prisma/migrations/20261101173134_init` (modelo) e `20261101190000_nickname_policy_json_limits` (política de apelido e tetos de tamanho, escrita à mão). Contrato de acesso: `apps/server/src/db/` (interfaces `UserRepository` e `MatchRepository`, implementação Prisma e em memória). Conquistas, missões e estatísticas (Fase 6, bloco 6C, migração `20261105140000_fase6_progressao`, ADR 0009) estão modelados abaixo; o ranking (Fase 9) ainda não (tabelas novas apontarão para `users.id` e `matches.id`). `ProgressionRepository` fica em `src/db/` (Prisma e memória).
 
 ## 1. Postgres
 
@@ -13,15 +13,19 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 
 ### Tabelas
 
-| Tabela          | Chave                                  | Pontos de decisão                                                                                                                                                                                                                                                   |
-| --------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`         | `id`                                   | `UNIQUE(provider, provider_subject)`; `UNIQUE (lower(nickname))`; `CHECK` apelido 3..16 caracteres, NFC e só caracteres permitidos (seção Política de apelido)                                                                                                      |
-| `avatars`       | `user_id` (PK e FK)                    | Um por usuário por construção. `parts` é o `AvatarParts` (JSON, objeto) validado no servidor; o banco garante `jsonb_typeof = 'object'` e `pg_column_size < 16 KB`                                                                                                  |
-| `matches`       | `id`                                   | Só partidas terminadas ou canceladas (nada em andamento). `seed` é `BIGINT` porque a semente é uint32. `events` em visão pública; `deals` só auditoria                                                                                                              |
-| `match_players` | `(match_id, seat)`                     | A PK composta é o `UNIQUE(match, seat)`. `user_id` NULL = bot ou usuário removido; `bot_from` = `seq` em que o bot assumiu. `CHECK` assento 0..3 e `team = seat % 2`                                                                                                |
-| `partner_codes` | `id`, `UNIQUE(user_a_id, user_b_id)`   | Par ordenado: `CHECK (user_a_id < user_b_id)`. O repositório ordena (`orderPair`) por string UUID minúscula, que coincide com a ordem de bytes do tipo `uuid`. `codes` é objeto JSON, `pg_column_size < 16 KB`; só grava quem já jogou junto (`havePlayedTogether`) |
-| `reports`       | `id`                                   | `reporter_id`, `reported_id`, `match_id` anuláveis (viram NULL se a origem for apagada: a denúncia sobrevive). `text` ≤ 500. `CHECK` reporter ≠ reported                                                                                                            |
-| `blocks`        | `id`, `UNIQUE(blocker_id, blocked_id)` | `CHECK (blocker_id <> blocked_id)`                                                                                                                                                                                                                                  |
+| Tabela                | Chave                                  | Pontos de decisão                                                                                                                                                                                                                                                   |
+| --------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`               | `id`                                   | `UNIQUE(provider, provider_subject)`; `UNIQUE (lower(nickname))`; `CHECK` apelido 3..16 caracteres, NFC e só caracteres permitidos (seção Política de apelido)                                                                                                      |
+| `avatars`             | `user_id` (PK e FK)                    | Um por usuário por construção. `parts` é o `AvatarParts` (JSON, objeto) validado no servidor; o banco garante `jsonb_typeof = 'object'` e `pg_column_size < 16 KB`                                                                                                  |
+| `matches`             | `id`                                   | Só partidas terminadas ou canceladas (nada em andamento). `seed` é `BIGINT` porque a semente é uint32. `events` em visão pública; `deals` só auditoria                                                                                                              |
+| `match_players`       | `(match_id, seat)`                     | A PK composta é o `UNIQUE(match, seat)`. `user_id` NULL = bot ou usuário removido; `bot_from` = `seq` em que o bot assumiu. `CHECK` assento 0..3 e `team = seat % 2`                                                                                                |
+| `partner_codes`       | `id`, `UNIQUE(user_a_id, user_b_id)`   | Par ordenado: `CHECK (user_a_id < user_b_id)`. O repositório ordena (`orderPair`) por string UUID minúscula, que coincide com a ordem de bytes do tipo `uuid`. `codes` é objeto JSON, `pg_column_size < 16 KB`; só grava quem já jogou junto (`havePlayedTogether`) |
+| `reports`             | `id`                                   | `reporter_id`, `reported_id`, `match_id` anuláveis (viram NULL se a origem for apagada: a denúncia sobrevive). `text` ≤ 500. `CHECK` reporter ≠ reported                                                                                                            |
+| `blocks`              | `id`, `UNIQUE(blocker_id, blocked_id)` | `CHECK (blocker_id <> blocked_id)`                                                                                                                                                                                                                                  |
+| `user_achievements`   | `(user_id, achievement_id)`            | Fase 6. `level` 0 a N (0 = em andamento), `progress` >= 0, `unlocked_at` do nível 1 (CHECK: `level = 0` <=> `unlocked_at` nulo). `achievement_id` é texto do catálogo em código, validado pelo repositório                                                          |
+| `user_missions`       | `(user_id, mission_id, period_key)`    | Fase 6. `period_key` `2026-11-04` ou `2026-W45` (America/Sao_Paulo; CHECK de formato e 8 a 10 caracteres); `target` > 0; CHECK `0 <= progress <= target`; `completed_at` nulo até concluir                                                                          |
+| `user_stats`          | `(user_id, variant)`                   | Fase 6. `played`, `won` (CHECK `played >= won >= 0`); só partidas gravadas depois da migração                                                                                                                                                                       |
+| `progression_applied` | `match_id` (PK e FK, cascata)          | Fase 6. Uma linha por partida já avaliada: idempotência de `applyMatchProgress` (ADR 0009)                                                                                                                                                                          |
 
 ### Partidas: `options`, `room_code` e encerramento (2H)
 
@@ -58,13 +62,15 @@ Decisão do 2H: o `MatchRecorder` limita o próprio buffer de eventos (6000 even
 
 ### Remoção de usuário (`onDelete`)
 
-| Relação                               | Regra     | Efeito                                                                                        |
-| ------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
-| `avatars.user_id`                     | `Cascade` | Dado pessoal do usuário: some com ele                                                         |
-| `blocks.*`, `partner_codes.user_*_id` | `Cascade` | Relações pessoais: somem. O outro lado perde o bloqueio ou os códigos da dupla                |
-| `match_players.user_id`               | `SetNull` | O histórico da mesa permanece, com o assento anonimizado (a listagem mostra `nickname: null`) |
+| Relação                                                                    | Regra     | Efeito                                                                                        |
+| -------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| `avatars.user_id`                                                          | `Cascade` | Dado pessoal do usuário: some com ele                                                         |
+| `blocks.*`, `partner_codes.user_*_id`                                      | `Cascade` | Relações pessoais: somem. O outro lado perde o bloqueio ou os códigos da dupla                |
+| `user_achievements.user_id`, `user_missions.user_id`, `user_stats.user_id` | `Cascade` | Progressão do jogador: some com a conta (LGPD). `DELETE /me` não precisa de código extra      |
+| `progression_applied.match_id`                                             | `Cascade` | Expurgar a partida apaga a marca de idempotência                                              |
+| `match_players.user_id`                                                    | `SetNull` | O histórico da mesa permanece, com o assento anonimizado (a listagem mostra `nickname: null`) |
 
-Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas acima fazem o resto (sem código de limpeza no servidor). Nenhuma coluna ou tabela nova.
+Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas acima fazem o resto (sem código de limpeza no servidor). **O que `DELETE /me` apaga**: usuário, avatar, bloqueios (nos dois sentidos), combinados de dupla, conquistas, missões e estatísticas. **O que fica, anonimizado**: assentos em `match_players` (`user_id` nulo) e denúncias contra a conta. `progression_applied` é por partida, não por usuário: fica.
 | `reports.reporter_id`, `reported_id` | `SetNull` | Evidência de moderação preservada sem identificar |
 | `reports.match_id` | `SetNull` | Expurgar uma partida não apaga a denúncia |
 | `match_players.match_id` | `Cascade` | Única cascata de match: apagar a partida leva seus jogadores |
@@ -85,6 +91,11 @@ Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas
 | `reports_reported_id_created_at_idx`                     | Histórico de denúncias contra um jogador (decidir banimento)                                     |
 | `reports_reporter_id_created_at_idx`                     | Limitar denúncias por autor (abuso do recurso)                                                   |
 | `reports_match_id_idx`                                   | Denúncias de uma partida e o `SetNull` do expurgo sem varredura                                  |
+| `user_achievements_pkey` `(user_id, achievement_id)`     | `GET /me/achievements`, perfil público (prefixo `user_id`) e a soma atômica `ON CONFLICT`        |
+| `user_missions_pkey` `(user_id, mission_id, period_key)` | Soma atômica de progresso e `ensureMissions` idempotente (`ON CONFLICT DO NOTHING`)              |
+| `user_missions_user_id_period_key_idx`                   | `GET /me/missions`: missões do usuário no dia e na semana (`period_key IN (...)`)                |
+| `user_stats_pkey` `(user_id, variant)`                   | `GET /me` e perfil público: estatísticas por variante; soma atômica                              |
+| `progression_applied_pkey` `(match_id)`                  | Decide, por partida, quem aplica a progressão (inserção única; transação concorrente espera)     |
 
 `GET /matches` pagina por cursor (`endedAt`, `id`) em vez de `OFFSET`: o custo não cresce com a página e o empate de `ended_at` é resolvido pelo id. O cursor é opaco (base64url) e o servidor devolve `InvalidInputError` se vier adulterado. Tamanho de página padrão 20, máximo 50. O resumo devolvido não contém `events`, `deals` nem `seed`.
 
@@ -97,6 +108,7 @@ Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas
 | Partidas `cancelled`                  | 30 dias (não contam para missão, conquista nem rating)                                                                                                                                                                                                                                       |
 | `partner_codes`                       | Enquanto os dois usuários existirem (somem por `Cascade` com o usuário). Proposta: apagar pares sem `updated_at` há 12 meses. **O job de expurgo NÃO existe ainda: pendência antes do beta** (vale também para `deals`, `events`, `cancelled`, `reports` e convidados inativos desta tabela) |
 | `reports`                             | Fechadas (`reviewed`/`dismissed`): 12 meses após `reviewed_at`; abertas: até serem tratadas                                                                                                                                                                                                  |
+| `user_missions` de períodos antigos   | Proposta: apagar linhas com `period_key` de mais de 90 dias (pendência do job de expurgo; mudar o prazo não exige migração)                                                                                                                                                                  |
 | Convidados inativos                   | Sem partida e `last_seen_at` com mais de 90 dias: apagar o usuário (as partidas ficam anonimizadas pelo `SetNull`)                                                                                                                                                                           |
 
 Prazos são propostas para o usuário confirmar (privacidade/jurídico); mudar um prazo não exige migração.
