@@ -4,7 +4,31 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Avatar: cabelos longos 2, 12 e 14 sem cobrir olhos (2026-11-04), branch `fix/avatar-cabelos-longos`, ainda não mesclada
+### Avatar: cabelos 4, 6, 11, 12, 13 e 15 sem cobrir olhos e sobrancelhas (2026-11-04), branch `fix/avatar-cabelos-rosto`, ainda não mesclada
+
+Correção de geometria e uma peça nova (`hair_12_back`), sem decisão nova de arquitetura. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento: cabelos 4, 6, 11, 12, 13 e 15") e `docs/avatar-rig.md` (seção 3.5). `assets/rive/avatar.riv` reexportado como `avatar (23).riv` (60.833 bytes, 15 Numbers e 16 triggers). Sem input novo, sem dimensão nova e sem migração; `PROTOCOL_VERSION` continua 5. Não validado em aparelho iOS/Android.
+
+#### Corrigido
+
+- Cabelos 4 (coque alto), 6 (ondulado médio), 11 (bob de lado), 13 (ondulado curto) e 15 (bob repicado): franja e mecha lateral fora de olhos e sobrancelhas (antes até 57% de um estilo de olho; depois 0% com folga de 6 px). Rive e fallback vetorial com a mesma geometria.
+- Cabelo 12 (longo de lado) sem cobrir bochechas nos rostos redondo e quadrado, e sem faixa de fundo entre rosto e cabelo.
+
+#### Adicionado
+
+- Peça de trás do cabelo 12, `hair_12_back` (`assets/rive/source/hair_12_back.svg`, no Rive e no fallback). Visível pelo mesmo mecanismo `hair = 12`, sob o chapéu como as demais peças de trás.
+
+#### Alterado
+
+- `packages/avatar/src/art.test.ts`: o teste de franja passou a cobrir os cabelos 1 a 18 (por estilo de olho e sobrancelha), com a checagem de bochecha e faixa de fundo no 12 e o recorte do brilho. Sem exceções anotadas; as tolerâncias estão explicadas no código.
+
+#### Divergências conhecidas
+
+- Nas peças 6 e 11 do Rive, os valores digitados não somaram a diferença de origem do Rive (cerca de 0,65 px e 1 px). Sub-pixel; a comparação visual não achou diferença.
+- Silhueta da mecha traseira do 12 é escolha da rai-avatar; o usuário pode pedir outra.
+- Inputs do state machine no preview do editor não conferidos (validado por timeline, canvas e runtime web).
+- iOS e Android não testados.
+
+### Avatar: cabelos longos 2, 12 e 14 sem cobrir olhos (2026-11-04), mesclada no PR #18 (fbc552b)
 
 Correção de geometria, sem decisão nova de arquitetura. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento: cabelos longos") e `docs/avatar-rig.md` (seção 3.4). `assets/rive/avatar.riv` reexportado como `avatar (22).riv` (60.502 bytes, 15 Numbers e 16 triggers; só vértices mudaram). Sem mudança de catálogo, de inputs nem de migração; `PROTOCOL_VERSION` continua 5. Não validado em aparelho iOS/Android.
 
@@ -18,7 +42,7 @@ Correção de geometria, sem decisão nova de arquitetura. Detalhes em `docs/ava
 
 #### Divergências conhecidas
 
-- Cabelos 4, 6, 11, 13 e 15 ainda cobrem parte de olhos ou sobrancelhas (até 57% no 15). Fora deste ajuste.
+- Cabelos 4, 6, 11, 13 e 15 (até 57% no 15): fechado na entrada acima.
 - iOS e Android não testados.
 
 ### Avatar: fechamento das pendências visuais (2026-11-04), mesclada no PR #17 (3403f40)

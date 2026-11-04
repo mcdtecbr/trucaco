@@ -22,7 +22,7 @@ const base = DEFAULT_AVATAR_PARTS;
 const LIMITE_VERTICES = 1300;
 
 describe('arte do avatar (mesmos paths do rig)', () => {
-  it('tem os 182 paths do rig, com nomes únicos e orçamento de vértices', () => {
+  it('tem os 183 paths do rig, com nomes únicos e orçamento de vértices', () => {
     // Fatia 3: rostos (6) e olhos (6 estilos com branco, íris, miolo, pálpebra/cílios e brilho) refeitos
     // pela prancha de referência, mais 4 sobrancelhas e 8 narizes. O orçamento de vértices subiu de 420
     // para 760 (total atual: 725, ~7 KB a mais no .riv). Só as peças selecionadas são desenhadas, então o
@@ -30,8 +30,9 @@ describe('arte do avatar (mesmos paths do rig)', () => {
     // Fatia 4: 19 cabelos (frente e atrás), 4 barbas e 10 chapéus redesenhados pelas pranchas somam 175 paths
     // e 1210 vértices; o orçamento subiu de 760 para 1300 (cerca de 12 KB a mais no .riv). Cada avatar
     // desenha só uns 40 paths, então o custo de desenho por avatar segue parecido.
-    // Fatia 5: 7 peças de sombreado (`shade_*`) somam 182 paths e 1252 vértices; cabem no orçamento de 1300 (total atual: 1252; a fatia 4 fechou em 1210).
-    expect(PARTS).toHaveLength(182);
+    // Fatia 5: 7 peças de sombreado (`shade_*`) somam 182 paths e 1252 vértices; cabem no orçamento de 1300 (total então: 1252; a fatia 4 fechou em 1210).
+    // `fix/avatar-cabelos-rosto`: `hair_12_back` (183 paths) e as franjas abertas dos cabelos 4, 6, 11, 13 e 15 somam 1256 vértices (eram 1248 pelo `countVertices`: a peça de trás soma 8 e as frentes mantêm o número de vértices); o teto de 1300 continua.
+    expect(PARTS).toHaveLength(183);
     expect(new Set(PARTS.map((p) => p.name)).size).toBe(PARTS.length);
     expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(LIMITE_VERTICES);
   });
@@ -541,7 +542,7 @@ describe('cores como dimensão própria', () => {
       }
     });
 
-    it('franja dos cabelos 1, 2, 5, 7, 10, 12, 14 e 17 deixa sobrancelhas e olhos livres (2, 12 e 14 com folga de 6 px) e o 12 não abre faixa de fundo', () => {
+    it('franja de todos os cabelos 1..18 deixa sobrancelhas e olhos livres (a maioria com folga de 6 px); o 12 não cobre bochecha nem abre faixa de fundo', () => {
       // amostra densamente o contorno (M/L/C/Q/Z absolutos)
       const sample = (d: string): [number, number][] => {
         const pts: [number, number][] = [];
@@ -586,7 +587,7 @@ describe('cores como dimensão própria', () => {
         }
         return pts;
       };
-      // folga: os cabelos longos 2, 12 e 14 ficam a 6 px do contorno; os demais só não podem sobrepor
+      // folga: os grupos ZERO e LONGOS (abaixo) ficam a 6 px do contorno; os JUSTOS só não podem sobrepor
       // (mede a distância ao contorno amostrado)
       const inside = (poly: [number, number][], x: number, y: number): boolean => {
         let r = false;
@@ -612,40 +613,45 @@ describe('cores como dimensão própria', () => {
       // todas as peças dos 6 estilos de olho, nos dois lados (branco, íris, pupila, pálpebra e brilho)
       const eyes = PARTS.filter((p) => p.when?.key === 'eyes');
       expect(eyes.length).toBeGreaterThanOrEqual(6 * 6);
-      const eyePts = eyes.flatMap(flip);
-      // Cabelos ainda fora desta checagem (cobrem sobrancelha ou olho; pendência do catálogo): 4, 6, 11, 13 e 15.
-      const longos = [2, 12, 14];
-      for (const n of [1, 2, 5, 7, 10, 12, 14, 17]) {
-        const part = PARTS.find((p) => p.name === `hair_${n}_front`)!;
-        const poly = sample(part.d);
-        const folga = longos.includes(n) ? 6 : 0;
+      // Três níveis, sempre por estilo de olho (6) e sobre as 4 sobrancelhas:
+      //  - ZERO: folga de 6 px e nenhum ponto coberto (franja e mechas abertas);
+      //  - LONGOS: folga de 6 px, no máximo 0,5% dos pontos do estilo (2 e 14: o cílio do estilo 3 encosta);
+      //  - JUSTOS: sem folga (só não podem sobrepor): nenhuma sobrancelha e até 2% do estilo de olho
+      //    (o cílio mais comprido, estilo 5, encosta na mecha lateral de 5 e 17).
+      const ZERO = [3, 4, 6, 8, 11, 12, 13, 15];
+      const LONGOS = [2, 14];
+      const JUSTOS = [1, 5, 7, 9, 10, 16, 17, 18];
+      expect([...ZERO, ...LONGOS, ...JUSTOS].sort((x, y) => x - y)).toEqual(
+        Array.from({ length: 18 }, (_, i) => i + 1),
+      );
+      const checa = (nome: string, folga: number, tetoOlho: number): void => {
+        const poly = sample(PARTS.find((p) => p.name === nome)!.d);
         const hit = browPts.find((pt) => tocaFranja(poly, pt, folga));
-        expect(hit, `hair_${n}_front cobre sobrancelha`).toBeUndefined();
-        if (!longos.includes(n)) {
-          // demais cabelos: até 5% de todos os pontos (o cílio mais comprido, estilo 5, pode encostar)
-          const tocam = eyePts.filter((pt) => tocaFranja(poly, pt, folga)).length;
-          expect(tocam / eyePts.length, `hair_${n}_front cobre olho`).toBeLessThanOrEqual(0.05);
-          continue;
-        }
-        // cabelos longos (2, 12 e 14): por estilo de olho, com 6 px de folga, no máximo 0,5% dos
-        // pontos do estilo (o estilo 3 e o 5, de pálpebra mais aberta, são os que mais encostam)
+        expect(hit, `${nome} cobre sobrancelha`).toBeUndefined();
         for (let v = 0; v < 6; v++) {
           const estilo = eyes.filter((p) => p.when?.value === v).flatMap(flip);
           expect(estilo.length, `estilo de olho ${v}`).toBeGreaterThan(0);
           const tocam = estilo.filter((pt) => tocaFranja(poly, pt, folga)).length;
-          expect(
-            tocam / estilo.length,
-            `hair_${n}_front cobre olho do estilo ${v}`,
-          ).toBeLessThanOrEqual(0.005);
+          expect(tocam / estilo.length, `${nome} cobre olho do estilo ${v}`).toBeLessThanOrEqual(
+            tetoOlho,
+          );
         }
-      }
+      };
+      const frentes = (n: number): string[] =>
+        PARTS.filter((p) => new RegExp(`^hair_${n}_(front|cap|bun)$`).test(p.name)).map(
+          (p) => p.name,
+        );
+      for (const n of ZERO) for (const nome of frentes(n)) checa(nome, 6, 0);
+      for (const n of LONGOS) for (const nome of frentes(n)) checa(nome, 6, 0.005);
+      for (const n of JUSTOS) for (const nome of frentes(n)) checa(nome, 0, 0.02);
+      expect(frentes(16)).toEqual(['hair_16_cap', 'hair_16_bun']);
 
-      // Faixa de fundo (hair_12_front, abaixo de y 240)
-      // O 12 não tem peça de trás: entre o contorno do rosto (e das orelhas) e a borda interna do
-      // cabelo não pode aparecer o fundo. Varre, de dentro para fora, cada linha de y 240 a 300;
-      // a faixa (pixels fora do rosto antes de chegar ao cabelo) fica em até 3 px nos 6 rostos.
-      // O resto vem da abertura larga acima dos olhos (os olhos exigem folga de 6 px).
-      const poly = sample(PARTS.find((p) => p.name === 'hair_12_front')!.d);
+      // Faixa de fundo (hair_12_front + hair_12_back)
+      // Entre o contorno do rosto (e das orelhas) e o cabelo não pode aparecer o fundo. Varre, de dentro
+      // para fora, cada linha de y 240 a 300; a faixa (pixels fora do rosto antes de chegar ao cabelo da
+      // frente ou da peça de trás) fica em 0 px nos 6 rostos.
+      const front = sample(PARTS.find((p) => p.name === 'hair_12_front')!.d);
+      const back = sample(PARTS.find((p) => p.name === 'hair_12_back')!.d);
       const orelha = (x: number, y: number): boolean =>
         ((x - 142) / 13) ** 2 + ((y - 248) / 25) ** 2 <= 1 ||
         ((x - 370) / 13) ** 2 + ((y - 248) / 25) ** 2 <= 1;
@@ -658,6 +664,7 @@ describe('cores como dimensão própria', () => {
           for (const lado of [-1, 1]) {
             let viuRosto = false;
             let faixa = 0;
+            let achou = false;
             for (let k = 0; k < 150; k++) {
               const x = 256 + lado * k;
               if (inside(face, x, y) || orelha(x, y)) {
@@ -665,16 +672,33 @@ describe('cores como dimensão própria', () => {
                 continue;
               }
               if (!viuRosto) continue;
-              if (inside(poly, x, y)) {
+              if (inside(front, x, y) || inside(back, x, y)) {
                 pior = Math.max(pior, faixa);
+                achou = true;
                 break;
               }
               faixa++;
             }
+            // toda linha acha rosto e depois cabelo (nunca sobra só fundo)
+            expect(viuRosto && achou, `rosto ${shape} y ${y}`).toBe(true);
           }
         }
-        expect(pior, `faixa de fundo no rosto ${shape}`).toBeLessThanOrEqual(3);
+        expect(pior, `faixa de fundo no rosto ${shape}`).toBe(0);
+        // bochechas livres: a peça da frente não cobre os pontos da bochecha em nenhum rosto
+        for (const pt of [
+          [194, 292],
+          [318, 292],
+        ] as [number, number][]) {
+          expect(inside(front, pt[0], pt[1]), `bochecha ${pt} no rosto ${shape}`).toBe(false);
+        }
       }
+      // o 12 tem peça de trás, sob o chapéu como a dos demais longos, e o brilho segue recortado pela frente
+      const traseira = PARTS.find((p) => p.name === 'hair_12_back')!;
+      expect(traseira.layer).toBe(2);
+      expect(traseira.hideWithHat).toBeUndefined();
+      expect(
+        clipPaths(PARTS.find((p) => p.name === 'shade_hair_gloss')!, { ...base, hair: 12 }),
+      ).toEqual([PARTS.find((p) => p.name === 'hair_12_front')!.d]);
     });
 
     it('cores derivadas da pele escolhida', () => {

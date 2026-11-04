@@ -320,5 +320,32 @@ Geometria das peças `hair_2_front`, `hair_12_front` e `hair_14_front` (tabelas 
 
 ### Pendências que continuam
 
-- Cabelos 4, 6, 11, 13 e 15 ainda cobrem parte do rosto (números em `docs/avatar-rig.md`, 3.4).
+- ~~Cabelos 4, 6, 11, 13 e 15 ainda cobrem parte do rosto~~: fechado na seção seguinte.
 - iOS e Android não testados; `ClipPath` nativo não visto em aparelho.
+
+## Fechamento: cabelos 4, 6, 11, 12, 13 e 15 (04/11/2026, branch `fix/avatar-cabelos-rosto`)
+
+Geometria das frentes `hair_4_front`, `hair_6_front`, `hair_11_front`, `hair_12_front`, `hair_13_front` e `hair_15_front`, mais o nó novo `hair_12_back` (tabelas em `docs/avatar-rig.md`, seção 3.5). Cobertura de olhos e sobrancelhas de 0% com folga de 6 px (antes até 57% no 15). `assets/rive/avatar.riv` reexportado como `avatar (23).riv`: **60.833 bytes** (o `(22)` tinha 60.502), 15 Numbers e 16 triggers. Sem input novo, sem dimensão nova e sem migração; `PROTOCOL_VERSION` continua 5. O fallback vetorial (`packages/avatar/src/art.ts`) tem a mesma geometria.
+
+### Fechado nesta branch
+
+- **Cabelos 4, 6, 11, 13 e 15**: franja subida para y 176 ou menos e borda interna da mecha lateral fora da zona dos olhos. O contorno externo foi alargado para a mecha não ficar fina, sempre dentro do contorno da peça de trás, que não mudou. Silhueta e caráter mantidos.
+- **Cabelo 12 e bochechas**: a frente voltou à abertura larga e a peça de trás `hair_12_back` cobre a faixa de fundo atrás do rosto. Resultado: 0 px de faixa nos 6 rostos entre y 240 e 300, e nenhum ponto de bochecha coberto nos 6 rostos.
+- **Peça nova `hair_12_back`**: criada no Rive duplicando `hb_14` (grupo "hb_14 2", último filho do Solo de trás `cabelo4a 2`, depois de `hair_short 2`). Camada 2, sem `hideWithHat`, como as demais peças de trás. Orçamento: 183 paths e 1256 vértices (teto 1300).
+- **Teste de regressão**: `art.test.ts` cobre os cabelos 1 a 18 (franja por estilo de olho e sobrancelha, bochecha e faixa de fundo no 12, recorte do brilho).
+
+### Validação
+
+- Comparação pixel a pixel no runtime web (`@rive-app/canvas` 2.21.6) de 85 combinações, `(23)` contra `(22)`: só os cabelos 4, 6, 11, 12, 13 e 15 mudaram (de 500 a 1650 px; o ruído do piscar é de até ~330 px).
+- Render dos seis cabelos em vários rostos, e dos cabelos 4, 6, 11, 12, 13 e 15 com os chapéus 1, 4, 6, 8, 9 e 10: olhos e sobrancelhas livres; a traseira do 12 aparece sob o chapéu.
+
+### Divergências e decisões
+
+- Nas peças 6 e 11, os valores digitados no Rive não somaram a diferença de origem do Rive (cerca de 0,65 px em X no 6 e 1 px em X no 11). É sub-pixel e a comparação visual não achou diferença.
+- A silhueta da mecha traseira do 12 (diagonal à esquerda, da mandíbula ao pescoço) é escolha da rai-avatar. O usuário pode pedir outra.
+
+### Pendências que continuam
+
+- Inputs do state machine no preview do editor não conferidos: a validação foi por timeline, canvas e runtime web.
+- iOS e Android não testados; `ClipPath` nativo não visto em aparelho.
+- Silhueta da mecha traseira do 12: aprovar ou pedir outra.
