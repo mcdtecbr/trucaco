@@ -64,6 +64,11 @@ export interface RotateInput {
 export interface TokenStore {
   /** Dono e família de um refresh (sem efeito colateral). `null` = desconhecido/expirado. */
   lookup(refreshHash: string): Promise<{ userId: string; familyId: string } | null>;
+  /**
+   * Como `lookup`, mas só devolve o refresh VIVO e sem efeito colateral: desconhecido, expirado, já
+   * rotacionado (usado) ou de família revogada/expirada dão `null`. Base da prova de acesso recente.
+   */
+  peekLive(refreshHash: string): Promise<{ userId: string; familyId: string } | null>;
   createFamily(input: CreateFamilyInput): Promise<void>;
   /** ATÔMICO: dois `rotate` com o mesmo hash nunca produzem dois `rotated`. */
   rotate(input: RotateInput): Promise<RotateResult>;
@@ -125,6 +130,16 @@ export class MemoryTokenStore implements TokenStore {
   async lookup(refreshHash: string): Promise<{ userId: string; familyId: string } | null> {
     const token = this.tokens.get(refreshHash);
     if (token === undefined || token.expiresAt <= this.now()) return null;
+    return { userId: token.userId, familyId: token.familyId };
+  }
+
+  async peekLive(refreshHash: string): Promise<{ userId: string; familyId: string } | null> {
+    const token = this.tokens.get(refreshHash);
+    if (token === undefined || token.expiresAt <= this.now() || token.usedAt !== null) return null;
+    const family = this.families.get(token.familyId);
+    if (family === undefined || family.revokedAt !== null || family.expiresAt <= this.now()) {
+      return null;
+    }
     return { userId: token.userId, familyId: token.familyId };
   }
 

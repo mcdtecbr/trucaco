@@ -18,6 +18,7 @@ import { AccessTokenService } from '../auth/jwt';
 import { MemoryTokenStore, TokenStoreUnavailableError } from '../auth/tokenStore';
 import { createMemoryRepositories } from '../db';
 import { setLogSink } from '../logger';
+import { emitUserDeleted } from '../social/blockBus';
 import { buildColyseusServer } from '../server';
 import { TrucoRoom } from './TrucoRoom';
 import type { TrucoRoomConfig } from './TrucoRoom';
@@ -129,6 +130,108 @@ async function dropSeat(server: TrucoRoom, rooms: SdkRoom[], seat: number): Prom
   r.connection.close();
   await until(() => statusOf(server, seat) === 'away', `assento ${seat} away`);
 }
+
+describe('bloqueio e conta apagada na sala (Fase 6)', () => {
+  it('mesa privada: entrada direta de quem tem bloqueio (qualquer sentido) com alguém sentado é TABLE_UNAVAILABLE', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    const [a, b, c] = [
+      await auth.createGuest(),
+      await auth.createGuest(),
+      await auth.createGuest(),
+    ];
+    await joinAs(server, a);
+    // c bloqueou a; b nunca bloqueou ninguém.
+    await repos.users.addBlock(c.user.id, a.user.id);
+    await expect(joinAs(server, c)).rejects.toMatchObject({
+      code: 404,
+      message: 'TABLE_UNAVAILABLE',
+    });
+    // Sentido inverso: a bloqueou b.
+    await repos.users.addBlock(a.user.id, b.user.id);
+    await expect(joinAs(server, b)).rejects.toMatchObject({
+      code: 404,
+      message: 'TABLE_UNAVAILABLE',
+    });
+    expect(statusOf(server, 1)).toBe('empty');
+    // Sem bloqueio: entra normalmente.
+    const d = await auth.createGuest();
+    await joinAs(server, d);
+    expect(statusOf(server, 1)).toBe('connected');
+  });
+
+  it('blockEdges só guarda pares com alguém sentado (lista de bloqueios não infla a sala)', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    const [a, b, stranger] = [
+      await auth.createGuest(),
+      await auth.createGuest(),
+      await auth.createGuest(),
+    ];
+    await repos.users.addBlock(a.user.id, stranger.user.id); // stranger nunca senta
+    await repos.users.addBlock(a.user.id, b.user.id);
+    const edges = (server as unknown as { blockEdges: Set<string> }).blockEdges;
+    await joinAs(server, a);
+    // a bloqueou stranger e b, mas ninguém mais está sentado: nada é guardado
+    expect(edges.size).toBe(0);
+    // b chega com a sentado: o par a>b é guardado (e a entrada é recusada); o de stranger, não
+    await expect(joinAs(server, b)).rejects.toMatchObject({ code: 404 });
+    expect([...edges]).toEqual([`${a.user.id}>${b.user.id}`]);
+  });
+
+  it('conta apagada na espera: o socket cai e o assento é liberado', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco', OPTS);
+    const s = await auth.createGuest();
+    await joinAs(server, s);
+    expect(statusOf(server, 0)).toBe('connected');
+    emitUserDeleted(s.user.id);
+    await until(() => statusOf(server, 0) === 'empty', 'assento liberado');
+  });
+
+  it('conta apagada em partida: o bot assume na hora e a partida é gravada sem o userId', async () => {
+    const { server, sessions } = await table();
+    await until(() => server.series !== null, 'série');
+    const gone = sessions[1] as Session;
+    emitUserDeleted(gone.user.id);
+    const internal = server as unknown as {
+      botSeats: Set<number>;
+      persistableUsers(): Map<number, string>;
+    };
+    await until(() => internal.botSeats.has(1), 'bot assumiu o assento');
+    const users = internal.persistableUsers();
+    expect(users.size).toBe(3);
+    expect([...users.values()]).not.toContain(gone.user.id);
+  });
+});
+
+describe('reconexão de conta apagada', () => {
+  const reconnect = (rooms: SdkRoom[], seat: number, token: string): Promise<SdkRoom> =>
+    withBearer(
+      token,
+      () =>
+        t.sdk.reconnect((rooms[seat] as SdkRoom).reconnectionToken) as unknown as Promise<SdkRoom>,
+    );
+
+  it('conta apagada com a revogação das sessões falhando (access ainda válido): 401 na reconexão', async () => {
+    const { server, sessions, rooms } = await table();
+    await until(() => server.series !== null, 'série');
+    await dropSeat(server, rooms, 0);
+    const s = sessions[0] as Session;
+    // só o banco apaga; o access segue válido por não ter sido revogado
+    await repos.users.deleteUser(s.user.id);
+    await expect(reconnect(rooms, 0, s.pair.accessToken)).rejects.toMatchObject({ code: 401 });
+  });
+
+  it('userId em deletedUsers: authorizeReconnect recusa mesmo com assento e sessão certos', async () => {
+    const { server, sessions, rooms } = await table();
+    await until(() => server.series !== null, 'série');
+    await dropSeat(server, rooms, 2);
+    const s = sessions[2] as Session;
+    const sessionId = (rooms[2] as SdkRoom).sessionId;
+    expect(server.authorizeReconnect(sessionId, s.user.id)).toBe(true);
+    emitUserDeleted(s.user.id);
+    expect(server.authorizeReconnect(sessionId, s.user.id)).toBe(false);
+    await expect(reconnect(rooms, 2, s.pair.accessToken)).rejects.toMatchObject({ code: 403 });
+  });
+});
 
 describe('entrada na sala com JWT', () => {
   it('guest -> JWT -> senta; apelido e avatar vêm do banco, userId/nickname do payload são ignorados', async () => {

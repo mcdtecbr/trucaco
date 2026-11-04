@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Server, ServerError, matchMaker } from '@colyseus/core';
@@ -125,11 +126,26 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
   });
   directMatchmake = deps.directMatchmake === true;
   trustProxyForJoin = deps.trustProxy === true;
-  const lobby = new Lobby(tableGateway(), {
-    ...DEFAULT_LOBBY_CONFIG,
-    ...deps.lobby,
-    guard: { ...DEFAULT_LOBBY_CONFIG.guard, ...deps.lobby?.guard },
-  });
+  const users = deps.users;
+  const lobby = new Lobby(
+    tableGateway(),
+    {
+      ...DEFAULT_LOBBY_CONFIG,
+      ...deps.lobby,
+      guard: { ...DEFAULT_LOBBY_CONFIG.guard, ...deps.lobby?.guard },
+    },
+    Date.now,
+    randomInt,
+    users === undefined
+      ? null
+      : {
+          relatedIds: async (userId) =>
+            new Set([
+              ...(await users.listBlockedIds(userId)),
+              ...(await users.listBlockerIds(userId)),
+            ]),
+        },
+  );
   configureLobby(lobby);
   restrictMatchmakeCors(deps.corsOrigins ?? []);
   guardMatchmakeReconnect();
@@ -162,6 +178,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
         mountRest(app, {
           auth: deps.auth,
           users: deps.users,
+          ...(deps.matches !== undefined ? { matches: deps.matches } : {}),
           limits: { ...DEFAULT_LIMITS, ...deps.limits },
           corsOrigins: deps.corsOrigins ?? [],
           trustProxy: deps.trustProxy === true,
@@ -205,7 +222,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
  * cabeçalho `Access-Control-*` (só `Vary: Origin`). Nunca `*`, `null` nem origem refletida sem lista.
  * Estado do core, global ao processo (um servidor por processo).
  */
-export const CORS_ALLOW_METHODS = 'GET, POST, PUT, OPTIONS';
+export const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 export const CORS_ALLOW_HEADERS = 'Authorization, Content-Type';
 
 function restrictMatchmakeCors(origins: readonly string[]): void {

@@ -7,6 +7,7 @@ import {
   MATCH_PAGE_MAX,
   NotPartnersError,
   type AuthProviderId,
+  type BlockedUserRecord,
   type FinishedMatchInput,
   type JsonObject,
   type JsonValue,
@@ -159,6 +160,39 @@ export class PrismaUserRepository implements UserRepository {
     return rows.map((r) => r.blockerId);
   }
 
+  async listBlocks(userId: string): Promise<readonly BlockedUserRecord[]> {
+    const rows = await this.db.block.findMany({
+      where: { blockerId: normalizeId(userId) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { blockedId: true, blocked: { select: { nickname: true } } },
+    });
+    return rows.map((r) => ({ userId: r.blockedId, nickname: r.blocked.nickname }));
+  }
+
+  async hasReport(
+    reporterId: string,
+    reportedId: string,
+    matchId: string | null,
+  ): Promise<boolean> {
+    const since = new Date(Date.now() - 24 * 3_600_000);
+    const count = await this.db.report.count({
+      where: {
+        reporterId: normalizeId(reporterId),
+        reportedId: normalizeId(reportedId),
+        matchId: matchId === null ? null : normalizeId(matchId),
+        ...(matchId === null ? { createdAt: { gte: since } } : {}),
+      },
+      take: 1,
+    });
+    return count > 0;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    // As cascatas e os SET NULL são do banco (docs/banco-de-dados.md): um DELETE só.
+    const result = await guarded(() => this.db.user.deleteMany({ where: { id: normalizeId(id) } }));
+    return result.count > 0;
+  }
+
   async createReport(input: NewReportInput): Promise<ReportRecord> {
     assertReportText(input.text);
     const reporterId = normalizeId(input.reporterId);
@@ -251,6 +285,15 @@ export class PrismaMatchRepository implements MatchRepository {
       }),
     );
     return row.id;
+  }
+
+  async participantIds(matchId: string): Promise<readonly string[] | null> {
+    const rows = await this.db.matchPlayer.findMany({
+      where: { matchId: normalizeId(matchId) },
+      select: { userId: true },
+    });
+    if (rows.length === 0) return null;
+    return rows.flatMap((r) => (r.userId === null ? [] : [r.userId]));
   }
 
   async listForUser(

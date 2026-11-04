@@ -74,6 +74,10 @@ export async function identityFromToken(
   if (deps.auth === null) return { ok: false, reason: 'invalid' };
   try {
     const principal = await deps.auth.authenticateAccess(token);
+    // Conta apagada com access ainda válido (revogação de sessões que falhou): recusa como token inválido.
+    if (deps.users !== null && (await deps.users.findById(principal.userId)) === null) {
+      return { ok: false, reason: 'invalid' };
+    }
     return { ok: true, userId: principal.userId };
   } catch (err) {
     if (err instanceof AuthError) return { ok: false, reason: 'invalid' };

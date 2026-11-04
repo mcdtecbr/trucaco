@@ -1,4 +1,5 @@
 /** Espelho da sessão para a UI (Zustand). A fonte de verdade é `net/session.ts`; sem lógica de jogo. */
+import type { AuthProvider } from '@trucaco/protocol';
 import { createStore, useStore } from 'zustand';
 import type { SessionState, SessionStatus, SessionUser } from '../net/session';
 import type { Session } from '../net/session';
@@ -58,3 +59,5 @@ export function useSessionStore<T>(selector: (s: SessionStoreState) => T): T {
 
 export const selectNickname = (s: SessionStoreState): string | null => s.user?.nickname ?? null;
 export const selectIsReady = (s: SessionStoreState): boolean => s.status === 'authenticated';
+export const selectProvider = (s: SessionStoreState): AuthProvider | null =>
+  s.user?.provider ?? null;

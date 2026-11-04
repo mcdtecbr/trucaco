@@ -11,6 +11,11 @@ export interface QueueEntry {
   readonly seq: number;
   readonly joinedAt: number;
   readonly expiresAt: number;
+  /**
+   * `userId`s com bloqueio (em qualquer sentido) em relação a este jogador: nunca na mesma mesa. O
+   * conjunto é mutável de propósito (`addAvoid`) e sobrevive ao `requeue`.
+   */
+  readonly avoid?: Set<string>;
 }
 
 /** Duas entradas só casam se tiverem a mesma variante e a mesma opção de mão de ferro. */
@@ -44,6 +49,7 @@ export class MatchQueue {
     options: { variant: VariantId; ironHand: boolean },
     now: number,
     ttlMs: number,
+    avoid: ReadonlySet<string> = new Set(),
   ): QueueEntry | null {
     if (this.has(userId) || this.entries.length >= this.maxSize) return null;
     const entry: QueueEntry = {
@@ -53,6 +59,7 @@ export class MatchQueue {
       seq: this.nextSeq++,
       joinedAt: now,
       expiresAt: now + ttlMs,
+      avoid: new Set(avoid),
     };
     this.entries.push(entry);
     return entry;
@@ -74,6 +81,14 @@ export class MatchQueue {
     return this.entries.splice(at, 1)[0] ?? null;
   }
 
+  /** Registra o bloqueio nas entradas que já esperam (bloqueio feito com a fila andando). */
+  addAvoid(a: string, b: string): void {
+    for (const e of this.entries) {
+      if (e.userId === a) e.avoid?.add(b);
+      else if (e.userId === b) e.avoid?.add(a);
+    }
+  }
+
   /** Remove e devolve as entradas vencidas. */
   expire(now: number): QueueEntry[] {
     const gone = this.entries.filter((e) => e.expiresAt <= now);
@@ -93,8 +108,7 @@ export class MatchQueue {
     const groups: QueueEntry[][] = [];
     const taken = new Set<string>();
     for (const list of buckets.values()) {
-      for (let i = 0; i + QUEUE_GROUP_SIZE <= list.length; i += QUEUE_GROUP_SIZE) {
-        const group = list.slice(i, i + QUEUE_GROUP_SIZE);
+      for (const group of this.groupsOf(list)) {
         for (const e of group) taken.add(e.userId);
         groups.push(group);
       }
@@ -102,5 +116,43 @@ export class MatchQueue {
     if (taken.size > 0) this.entries = this.entries.filter((e) => !taken.has(e.userId));
     // Grupos cujo membro mais antigo chegou primeiro saem primeiro.
     return groups.sort((a, b) => (a[0] as QueueEntry).seq - (b[0] as QueueEntry).seq);
+  }
+
+  /**
+   * Grupos de 4 de uma chave. Sem bloqueios: os 4 mais antigos, em blocos (comportamento original). Com
+   * bloqueios: a cada rodada, o mais antigo que consegue formar um grupo (completado em ordem de chegada
+   * só com quem não tem bloqueio com ninguém já no grupo) sai; quem não encaixa segue esperando.
+   */
+  private groupsOf(list: readonly QueueEntry[]): QueueEntry[][] {
+    const out: QueueEntry[][] = [];
+    if (list.every((e) => (e.avoid?.size ?? 0) === 0)) {
+      for (let i = 0; i + QUEUE_GROUP_SIZE <= list.length; i += QUEUE_GROUP_SIZE) {
+        out.push(list.slice(i, i + QUEUE_GROUP_SIZE));
+      }
+      return out;
+    }
+    const conflict = (a: QueueEntry, b: QueueEntry): boolean =>
+      a.avoid?.has(b.userId) === true || b.avoid?.has(a.userId) === true;
+    let pool = [...list];
+    while (pool.length >= QUEUE_GROUP_SIZE) {
+      let found: QueueEntry[] | null = null;
+      for (const seed of pool) {
+        const group = [seed];
+        for (const e of pool) {
+          if (e === seed) continue;
+          if (group.every((m) => !conflict(m, e))) group.push(e);
+          if (group.length === QUEUE_GROUP_SIZE) break;
+        }
+        if (group.length === QUEUE_GROUP_SIZE) {
+          found = group.sort((x, y) => x.seq - y.seq);
+          break;
+        }
+      }
+      if (found === null) break;
+      out.push(found);
+      const gone = new Set(found.map((e) => e.userId));
+      pool = pool.filter((e) => !gone.has(e.userId));
+    }
+    return out;
   }
 }

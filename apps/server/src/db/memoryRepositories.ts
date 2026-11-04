@@ -9,6 +9,7 @@ import {
   NotPartnersError,
   ProviderSubjectTakenError,
   type AuthProviderId,
+  type BlockedUserRecord,
   type FinishedMatchInput,
   type MatchPage,
   type MatchRepository,
@@ -43,9 +44,9 @@ export class MemoryStore {
   readonly users = new Map<string, UserRecord>();
   readonly avatars = new Map<string, unknown>();
   readonly blocks = new Set<string>();
-  readonly reports: ReportRecord[] = [];
+  reports: ReportRecord[] = [];
   readonly partnerCodes = new Map<string, PartnerCodesMap>();
-  readonly matches: StoredMatch[] = [];
+  matches: StoredMatch[] = [];
 }
 
 interface StoredMatch {
@@ -156,6 +157,58 @@ export class MemoryUserRepository implements UserRepository {
       .map((k) => k.slice(0, k.length - suffix.length));
   }
 
+  async listBlocks(rawId: string): Promise<readonly BlockedUserRecord[]> {
+    const out: BlockedUserRecord[] = [];
+    for (const userId of await this.listBlockedIds(rawId)) {
+      const user = this.store.users.get(userId);
+      if (user !== undefined) out.push({ userId, nickname: user.nickname });
+    }
+    return out;
+  }
+
+  async hasReport(
+    rawReporter: string,
+    rawReported: string,
+    rawMatch: string | null,
+  ): Promise<boolean> {
+    const reporterId = normalizeId(rawReporter);
+    const reportedId = normalizeId(rawReported);
+    const matchId = rawMatch === null ? null : normalizeId(rawMatch);
+    const since = Date.now() - 24 * 3_600_000;
+    return this.store.reports.some(
+      (r) =>
+        r.reporterId === reporterId &&
+        r.reportedId === reportedId &&
+        r.matchId === matchId &&
+        (matchId !== null || r.createdAt.getTime() >= since),
+    );
+  }
+
+  async deleteUser(rawId: string): Promise<boolean> {
+    const id = normalizeId(rawId);
+    if (!this.store.users.delete(id)) return false;
+    this.store.avatars.delete(id);
+    for (const key of [...this.store.blocks]) {
+      if (key.startsWith(`${id}>`) || key.endsWith(`>${id}`)) this.store.blocks.delete(key);
+    }
+    for (const key of [...this.store.partnerCodes.keys()]) {
+      if (key.split('|').includes(id)) this.store.partnerCodes.delete(key);
+    }
+    this.store.matches = this.store.matches.map((m) => ({
+      id: m.id,
+      input: {
+        ...m.input,
+        players: m.input.players.map((p) => (p.userId === id ? { ...p, userId: null } : p)),
+      },
+    }));
+    this.store.reports = this.store.reports.map((r) => ({
+      ...r,
+      reporterId: r.reporterId === id ? null : r.reporterId,
+      reportedId: r.reportedId === id ? null : r.reportedId,
+    }));
+    return true;
+  }
+
   async createReport(input: NewReportInput): Promise<ReportRecord> {
     assertReportText(input.text);
     const reporterId = normalizeId(input.reporterId);
@@ -224,6 +277,13 @@ export class MemoryMatchRepository implements MatchRepository {
     const id = randomUUID();
     this.store.matches.push({ id, input });
     return id;
+  }
+
+  async participantIds(rawId: string): Promise<readonly string[] | null> {
+    const id = normalizeId(rawId);
+    const match = this.store.matches.find((m) => m.id === id);
+    if (match === undefined) return null;
+    return match.input.players.flatMap((p) => (p.userId === null ? [] : [p.userId]));
   }
 
   async listForUser(

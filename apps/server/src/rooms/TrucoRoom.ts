@@ -81,6 +81,7 @@ import { AuthError, bearerFromHeader } from '../auth/authService';
 import { InvalidInputError } from '../db/types';
 import type { JsonValue, MatchRepository, UserRepository } from '../db/types';
 import { GRANT_KEY, getLobby } from '../lobby/lobby';
+import { onBlockChange, onUserDeleted } from '../social/blockBus';
 import type { Grant } from '../lobby/lobby';
 import { randomRoomCode } from '../lobby/roomCode';
 import { DISPOSE_FLUSH_MS, MatchRecorder, flushWithin } from './matchRecorder';
@@ -219,6 +220,10 @@ export interface JoinAuth {
   readonly nickname: string;
   /** JSON das partes do avatar (do banco). Ausente em `devAuth`. */
   readonly avatar?: string;
+  /** `userId`s que ESTE usuário bloqueou (do banco, no `onAuth`). Ausente em `devAuth`. */
+  readonly blocked?: readonly string[];
+  /** `userId`s que bloquearam ESTE usuário. */
+  readonly blockers?: readonly string[];
 }
 
 export interface LoggedEvent {
@@ -338,6 +343,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly expelledSeats = new Set<Seat>();
   /** `userId`s expulsos desta sala: não reentram (ban por sala, só em memória). */
   private readonly bannedUsers = new Set<string>();
+  /**
+   * Bloqueios dirigidos `blocker>blocked` conhecidos desta sala (de quem entrou, e atualizados ao vivo
+   * por `blockBus`). Só em memória; nunca vai ao estado nem ao log.
+   */
+  private readonly blockEdges = new Set<string>();
+  /** Contas apagadas com assento aqui: o assento é gravado sem `userId` (a FK deixou de existir). */
+  private readonly deletedUsers = new Set<string>();
+  private readonly unsubscribers: (() => void)[] = [];
   /** Último `seq` de evento enviado ao socket do assento (base do replay na reconexão). */
   private readonly lastSeq = new Map<Seat, number>();
   /** Reconexões e retomadas por assento (teto `maxReconnects`). */
@@ -470,6 +483,15 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     lobby?.registerRoom(this.roomId, code, valid.options.visibility, grant);
     if (grant !== null) this.armGrantTimers(grant);
     if (this.config.patchRateMs !== undefined) this.setPatchRate(this.config.patchRateMs);
+    this.unsubscribers.push(
+      onBlockChange((c) => {
+        const edge = `${c.blockerId}>${c.blockedId}`;
+        const seated = new Set(this.userBySeat.values());
+        if (!c.active) this.blockEdges.delete(edge);
+        else if (seated.has(c.blockerId) || seated.has(c.blockedId)) this.blockEdges.add(edge);
+      }),
+      onUserDeleted((userId) => this.dropDeletedUser(userId)),
+    );
     // Única rota de entrada de mensagens do cliente.
     this.onMessage('*', (client, type, message) => this.handleMessage(client, type, message));
   }
@@ -510,10 +532,16 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       const user = await deps.users.findById(userId);
       if (user === null) throw new ServerError(401, 'UNAUTHORIZED');
       const avatar = await deps.users.getAvatar(user.id);
+      const [blocked, blockers] = await Promise.all([
+        deps.users.listBlockedIds(user.id),
+        deps.users.listBlockerIds(user.id),
+      ]);
       return {
         userId: user.id,
         nickname: user.nickname,
         avatar: avatar === null ? '{}' : JSON.stringify(avatar),
+        blocked,
+        blockers,
       };
     } catch (err) {
       if (err instanceof ServerError) throw err;
@@ -528,6 +556,15 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       throw new ServerError(401, 'UNAUTHORIZED');
     }
     if (this.bannedUsers.has(auth.userId)) throw new ServerError(403, 'BANNED');
+    // Só guarda o par se o outro já está sentado (ou é o próprio entrante, que sentará): o resto nunca
+    // seria consultado e o conjunto cresceria com a lista inteira de bloqueios de cada entrante.
+    const seated = new Set(this.userBySeat.values());
+    for (const other of auth.blocked ?? []) {
+      if (seated.has(other)) this.blockEdges.add(`${auth.userId}>${other}`);
+    }
+    for (const other of auth.blockers ?? []) {
+      if (seated.has(other)) this.blockEdges.add(`${other}>${auth.userId}`);
+    }
     // Quem já tem assento só volta ao PRÓPRIO assento, e só se o bot o ocupa (saída definitiva).
     for (const [owned, userId] of this.userBySeat) {
       if (userId === auth.userId) {
@@ -536,6 +573,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       }
     }
     if (this.series !== null) throw new ServerError(409, 'ROOM_FULL');
+    // Mesa privada: bloqueio (qualquer sentido) com quem já sentou = o mesmo erro de mesa inexistente (a
+    // fila pública já evitou o encontro ao formar o grupo; aqui é a barreira da entrada direta).
+    if (this.grant?.kind !== 'queue') {
+      for (const other of this.userBySeat.values()) {
+        if (this.isBlockedPair(auth.userId, other)) throw new ServerError(404, 'TABLE_UNAVAILABLE');
+      }
+    }
     const seat = this.seatFor(auth.userId);
     if (seat === null) throw new ServerError(409, 'ROOM_FULL');
     this.bindToTable(auth.userId);
@@ -684,6 +728,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.abandonTimer?.clear();
     this.waitTimer?.clear();
     this.creatorTimer?.clear();
+    for (const off of this.unsubscribers.splice(0)) off();
     getLobby()?.releaseRoom(this.roomId);
     // Sala fechada com a série em andamento (desligamento do servidor): grava como abandonada.
     const series = this.series;
@@ -736,6 +781,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   authorizeReconnect(sessionId: string, userId: string | undefined): boolean {
     const seat = this.seatBySession.get(sessionId);
     if (seat === undefined || userId === undefined) return false;
+    // Conta apagada ou assento expulso nunca retomam (o bot já assumiu ou vai assumir).
+    if (this.deletedUsers.has(userId) || this.expelledSeats.has(seat)) return false;
     return this.userBySeat.get(seat) === userId;
   }
 
@@ -1150,14 +1197,45 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   }
 
   /**
-   * Ponto de extensão para silenciar/bloquear (Fase 3/moderação): decide se o chat de `from` pode
-   * chegar a `to`. Hoje só exige humano com socket vivo (bot e assento caído nunca recebem, e nada é
-   * enfileirado para quando voltarem).
-   * PONTO DE EXTENSÃO: na Fase 3, consultar silenciar/bloquear por `userId` (de `from` e `to`) aqui.
-   * Hoje ignora `_from` de propósito.
+   * Decide se o chat de `from` pode chegar a `to`. Exige humano com socket vivo (bot e assento caído nunca
+   * recebem, e nada é enfileirado para quando voltarem). No chat da MESA, bloqueio entre os dois (em
+   * qualquer sentido) descarta a mensagem nos dois sentidos, em silêncio (o remetente não sabe). O chat da
+   * DUPLA não é filtrado: bloquear o próprio parceiro não o cala nem o expulsa da dupla (limite
+   * conhecido; quem não quer jogar com ele sai da mesa ou o silencia no aparelho).
    */
-  private canReceiveChat(_from: Seat, to: Seat): boolean {
-    return !this.botSeats.has(to) && !this.droppedSeats.has(to);
+  private canReceiveChat(from: Seat, to: Seat, scope: 'table' | 'partner'): boolean {
+    if (this.botSeats.has(to) || this.droppedSeats.has(to)) return false;
+    if (scope === 'table') {
+      const a = this.userBySeat.get(from);
+      const b = this.userBySeat.get(to);
+      if (a !== undefined && b !== undefined && this.isBlockedPair(a, b)) return false;
+    }
+    return true;
+  }
+
+  private isBlockedPair(a: string, b: string): boolean {
+    return this.blockEdges.has(`${a}>${b}`) || this.blockEdges.has(`${b}>${a}`);
+  }
+
+  /** Assentos por `userId` para gravar a partida, sem as contas apagadas (viram anônimas). */
+  private persistableUsers(): Map<Seat, string> {
+    if (this.deletedUsers.size === 0) return this.userBySeat;
+    return new Map([...this.userBySeat].filter(([, userId]) => !this.deletedUsers.has(userId)));
+  }
+
+  /**
+   * Conta apagada: se há assento aqui, o socket cai e o bot assume já (sem janela de reconexão). O
+   * `userId` sai dos dados gravados. Na espera o assento simplesmente é liberado pelo `onLeave`.
+   */
+  private dropDeletedUser(userId: string): void {
+    for (const [seat, owner] of this.userBySeat) {
+      if (owner !== userId) continue;
+      this.deletedUsers.add(userId);
+      this.expelledSeats.add(seat);
+      for (const c of this.clients) {
+        if (this.seatBySession.get(c.sessionId) === seat) c.leave(POLICY_CLOSE_CODE);
+      }
+    }
   }
 
   /** Broadcast público de um sinal (humano ou bot) aos 4 assentos, com o assento do servidor. */
@@ -1241,7 +1319,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         const to = this.seatBySession.get(c.sessionId);
         if (to === undefined) continue;
         if (!isChatRecipient(msg.scope, seat, to)) continue;
-        if (to !== seat && !this.canReceiveChat(seat, to)) continue;
+        if (to !== seat && !this.canReceiveChat(seat, to, msg.scope)) continue;
         c.send('chat', payload);
       }
       log.debug('truco: chat', {
@@ -1604,7 +1682,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       winnerTeam: finished ? series.winner : null,
       endReason: reason ?? this.endReason ?? (finished ? 'finished' : 'cancelled'),
       endedAt: new Date(),
-      users: this.userBySeat,
+      users: this.persistableUsers(),
     });
     const repo = this.config.matches;
     if (input === null || repo === undefined) return;
@@ -1847,6 +1925,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       const a = s1 === undefined ? undefined : this.userBySeat.get(s1);
       const b = s2 === undefined ? undefined : this.userBySeat.get(s2);
       if (a === undefined || b === undefined || a === b) continue;
+      if (this.deletedUsers.has(a) || this.deletedUsers.has(b)) continue;
       // A partida finalizada vincula o par no banco: edições seguintes gravam na hora.
       state.linked = true;
       if (Object.keys(state.codes).length === 0) continue;

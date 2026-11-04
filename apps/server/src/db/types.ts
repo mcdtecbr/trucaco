@@ -115,6 +115,11 @@ export interface ReportRecord {
   readonly createdAt: Date;
 }
 
+export interface BlockedUserRecord {
+  readonly userId: string;
+  readonly nickname: string;
+}
+
 /** `signalId -> significado` (até 60 caracteres cada). */
 export type PartnerCodesMap = { readonly [signalId: string]: string };
 
@@ -143,7 +148,22 @@ export interface UserRepository {
   /** Quem bloqueou `userId` (o sorteio de mesa pública checa os dois sentidos). */
   listBlockerIds(userId: string): Promise<readonly string[]>;
 
+  /** Bloqueados de `userId` com o apelido atual (mais antigos primeiro). */
+  listBlocks(userId: string): Promise<readonly BlockedUserRecord[]>;
+
   createReport(input: NewReportInput): Promise<ReportRecord>;
+  /**
+   * Denúncia equivalente já existe? Com `matchId`: qualquer denúncia do mesmo (denunciante, denunciado,
+   * partida). Sem `matchId`: uma denúncia sem partida do mesmo par nas últimas 24 h.
+   */
+  hasReport(reporterId: string, reportedId: string, matchId: string | null): Promise<boolean>;
+
+  /**
+   * Apaga o usuário. Cascatas do banco: avatar, bloqueios (nos dois sentidos) e combinados somem;
+   * `match_players.user_id` e `reports.reporter_id/reported_id` viram NULL (anonimização; denúncias contra
+   * a conta ficam). `true` se existia. Sessões (Redis) são revogadas por quem chama.
+   */
+  deleteUser(id: string): Promise<boolean>;
 
   /** Existe partida `finished` em que os dois foram jogadores da MESMA dupla (`team`). */
   havePlayedTogether(userA: string, userB: string): Promise<boolean>;
@@ -235,4 +255,6 @@ export interface MatchRepository {
     userId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
   ): Promise<MatchPage>;
+  /** `userId`s humanos (não nulos) da partida; `null` se não existe. Só valida denúncias (opcional: sem ele, denúncia com `matchId` é recusada). */
+  participantIds?(matchId: string): Promise<readonly string[] | null>;
 }

@@ -12,7 +12,7 @@ import { getServerUrl } from './config';
 import { webRefreshLock } from './refreshLock';
 import type { RefreshLock } from './refreshLock';
 import type { StoredSession, TokenStorage } from './tokenStorageCore';
-import type { TokenPairResponse } from '@trucaco/protocol';
+import type { AuthProvider, TokenPairResponse } from '@trucaco/protocol';
 
 /** Renova o access se faltar menos que isto para expirar. */
 export const REFRESH_AHEAD_MS = 60_000;
@@ -37,6 +37,8 @@ export type SessionStatus =
 export interface SessionUser {
   readonly id: string;
   readonly nickname: string;
+  /** Tipo de conta (`GET /me`). Ausente até `loadProvider()` terminar (ou depois de restaurar a sessão). */
+  readonly provider?: AuthProvider;
 }
 
 export interface SessionState {
@@ -73,6 +75,13 @@ export interface Session {
   /** Encerra no servidor (melhor esforço) e SEMPRE limpa o armazenamento local. */
   logout(): Promise<void>;
   setNickname(nickname: string): Promise<void>;
+  /** Lê o tipo de conta (`GET /me`) e o guarda no usuário da sessão. Melhor esforço, idempotente. */
+  loadProvider(): Promise<void>;
+  /**
+   * Apaga a conta (`DELETE /me`) com o refresh atual como prova. Em sucesso limpa tudo local e vira
+   * `signedOut`; em erro a sessão continua como estava e o erro sobe.
+   */
+  deleteAccount(): Promise<void>;
   /** Cancela a escuta do armazenamento (outras abas). */
   dispose(): void;
 }
@@ -88,6 +97,9 @@ export function createSession(options: SessionOptions): Session {
   let accessExpiresAt = 0;
   let refreshToken: string | null = null;
   let starting: Promise<SessionState> | null = null;
+  /** Leitura de `GET /me` em voo (no máximo uma) e se já falhou desde o último evento explícito. */
+  let providerLoad: Promise<void> | null = null;
+  let providerTried = false;
   /** Sobe a cada logout: o resultado de um `start()` anterior ao logout é descartado. */
   let generation = 0;
   let unsubscribeStorage: (() => void) | null = null;
@@ -115,7 +127,15 @@ export function createSession(options: SessionOptions): Session {
     refreshToken = stored.refreshToken;
     const u = state.user;
     if (u === null || u.id !== stored.userId || u.nickname !== stored.nickname) {
-      setState({ status: state.status, user: { id: stored.userId, nickname: stored.nickname } });
+      const keep = u !== null && u.id === stored.userId && u.provider !== undefined;
+      setState({
+        status: state.status,
+        user: {
+          id: stored.userId,
+          nickname: stored.nickname,
+          ...(keep ? { provider: u.provider } : {}),
+        },
+      });
     }
   }
 
@@ -183,7 +203,7 @@ export function createSession(options: SessionOptions): Session {
   async function createGuest(gen: number): Promise<void> {
     const res = await api.guest();
     if (gen !== generation) return; // logout durante a criação: não grava nada
-    const user = { id: res.user.id, nickname: res.user.nickname };
+    const user: SessionUser = { id: res.user.id, nickname: res.user.nickname, provider: 'guest' };
     // `state.user` precisa existir antes de qualquer refresh futuro; adopt grava o par.
     state = { ...state, user };
     await adopt(res, user);
@@ -197,6 +217,7 @@ export function createSession(options: SessionOptions): Session {
 
   async function run(gen: number): Promise<SessionState> {
     const stale = (): boolean => gen !== generation;
+    providerTried = false; // restauração/login é evento explícito: libera uma nova leitura de /me
     setState({ status: 'restoring', user: state.user });
     try {
       const stored = await storage.load();
@@ -295,11 +316,49 @@ export function createSession(options: SessionOptions): Session {
         }
       }
     },
+    loadProvider() {
+      const u = state.user;
+      if (u === null || u.provider !== undefined || state.status !== 'authenticated') {
+        return Promise.resolve();
+      }
+      // Uma chamada por vez e sem laço: falhou, só tenta de novo em `start()` (login ou restauração).
+      if (providerLoad !== null) return providerLoad;
+      if (providerTried) return Promise.resolve();
+      providerTried = true;
+      const p = (async () => {
+        try {
+          const me = await api.me();
+          const cur = state.user;
+          if (cur === null || cur.id !== u.id) return;
+          setState({ status: state.status, user: { ...cur, provider: me.provider } });
+        } catch {
+          // Sem o tipo de conta a UI só esconde avisos que dependem dele.
+        }
+      })().finally(() => {
+        if (providerLoad === p) providerLoad = null;
+      });
+      providerLoad = p;
+      return p;
+    },
+    async deleteAccount() {
+      await ensureAccessToken(); // renova antes: lê o refresh JÁ rotacionado
+      const toRevoke = refreshToken;
+      if (toRevoke === null) throw new SessionRequiredError();
+      await api.deleteAccount(toRevoke);
+      generation += 1;
+      starting = null;
+      dropSession();
+      try {
+        await storage.clear();
+      } finally {
+        setState({ status: 'signedOut', user: null });
+      }
+    },
     async setNickname(nickname) {
       const res = await api.updateNickname(nickname);
       const user = state.user;
       if (user === null) return;
-      const next = { id: user.id, nickname: res.nickname };
+      const next: SessionUser = { ...user, nickname: res.nickname };
       if (refreshToken !== null) {
         await storage.save({ refreshToken, userId: next.id, nickname: next.nickname });
       }

@@ -1,4 +1,4 @@
-**Handoff para continuar em outra máquina ou ambiente** (atualizado em 2026-11-04, depois da Fase 5b). Último commit de código: `debe97b` (correções da Fase 5). Os docs da Fase 5 (`docs/sinais.md`, `apps/mobile/README.md`, `docs/plano-desenvolvimento.md`, `CHANGELOG.md`, relatório e este handoff) estavam **sem commit** ao fim da sessão de documentação: o orquestrador commita. Leia este arquivo, depois `CLAUDE.md`, `docs/plano-desenvolvimento.md`, `docs/specs/2026-11-03-fase-5-relatorio.md`, `docs/adr/` e `docs/protocolo-servidor.md`.
+**Handoff para continuar em outra máquina ou ambiente** (atualizado em 2026-11-04, depois da Fase 5b). Último commit de código: `d1dcbc7` (6A, contrato da Fase 6); o 6B está sem commit (ver "Fase 6: 6A e 6B"). Os docs da Fase 5 (`docs/sinais.md`, `apps/mobile/README.md`, `docs/plano-desenvolvimento.md`, `CHANGELOG.md`, relatório e este handoff) estavam **sem commit** ao fim da sessão de documentação: o orquestrador commita. Leia este arquivo, depois `CLAUDE.md`, `docs/plano-desenvolvimento.md`, `docs/specs/2026-11-03-fase-5-relatorio.md`, `docs/adr/` e `docs/protocolo-servidor.md`.
 
 ## Como retomar
 
@@ -16,10 +16,10 @@
 - **Fase 4** (avatar e sinais): concluída com ressalvas em 2026-11-02. Relatório: `docs/specs/2026-11-02-fase-4-relatorio.md`. Pendências: 4G (Rive web) e 4H (Rive nativo) sem `assets/rive/avatar.riv`; bot de vaga não existe; FPS no web não medido em aparelho.
 - **Fase 5** (chat da dupla e combinado de sinais): **concluída com ressalvas em 2026-11-03**. Relatório: `docs/specs/2026-11-03-fase-5-relatorio.md`. Plano: `docs/specs/2026-11-02-fase-5-chat-dupla-plano.md`. Commits: `6bd8e6a` (plano), `edd6f93` (5A e 5B: protocolo e servidor), `c0db943` (5C, 5D e testes de cliente), `296741d` (testes de sala e `mutedStore`), `738b363` (limite de `ready`), `278afb6` e `debe97b` (correções da revisão e da auditoria).
   - **Feito**: sala de espera é a "preparação" (sem fase nova, sem timer); chat das abas Mesa e Dupla na espera; painel "Combinar sinais" na espera e na mesa, com até 60 caracteres por sinal; combinado sob o sinal no painel de sinais; aviso do sinal do parceiro por 5 s; combinado gravado em `partner_codes` (par que já jogou junto a cada edição; par novo ao fim da 1ª partida `finished`); `CODE_NOT_SAVED` quando a leitura ou a gravação falha; silenciar um jogador só neste aparelho. Balões de 4 s e frases rápidas já existiam (Fase 3).
-  - **Divergências conhecidas** (documentadas, não corrigidas): (1) o aviso de convidado aparece para **todos**, porque `TableRoomScreen.tsx` passa `guest: true` fixo; (2) o comentário de `CODE_NOT_SAVED` em `packages/protocol/src/errors.ts` diz "gravação desligada", mas o servidor não emite o erro quando não há banco; (3) a rota REST `GET /me/partners/:partnerId/codes` não reaplica a limpeza (valor legado de até 140 caracteres volta inteiro).
+  - **Divergências conhecidas** (documentadas, não corrigidas): (1) [resolvido no 6B: `guest` agora vem do provider da sessão]; (2) o comentário de `CODE_NOT_SAVED` em `packages/protocol/src/errors.ts` diz "gravação desligada", mas o servidor não emite o erro quando não há banco; (3) a rota REST `GET /me/partners/:partnerId/codes` não reaplica a limpeza (valor legado de até 140 caracteres volta inteiro).
   - **Não feito**: P3-5 da Rita (significado tradicional em cinza no painel de sinais da mesa; aviso "combinado salvo para esta dupla"); retomada da mesa da fila pública depois de 60 s (não há rota).
 - **Contagens** (`pnpm exec turbo run test --force`, 2026-11-03): rules 174 (12 arquivos), protocol 61 (9), avatar 26 (3), ui 75 (9), mobile 546 (37), server 456 (28). Total 1338 testes unitários. `test:e2e` e `test:int` não foram rodados nesta sessão de documentação. Fase 4 tinha `test:e2e` com 11 cenários (`table.spec.ts`, `avatar.spec.ts`); a Fase 5 acrescentou `codes.spec.ts` (2 cenários). `test:int` do mobile: `codes.int.test.ts` (3 casos) além dos da Fase 4.
-- **Fase 5b** (áudio, vozes e efeitos): **concluída com ressalvas em 2026-11-04**, branch `feat/audio-5b` (sem merge; o orquestrador commita). Status por etapa em `docs/plano-desenvolvimento.md`; uso em `apps/mobile/README.md` (seção Áudio) e `docs/audio.md`.
+- **Fase 5b** (áudio, vozes e efeitos): **concluída com ressalvas em 2026-11-04**, branch `feat/audio-5b`, mesclada (PR #20). Status por etapa em `docs/plano-desenvolvimento.md`; uso em `apps/mobile/README.md` (seção Áudio) e `docs/audio.md`.
   - **Feito**: catálogos de vozes e efeitos em `packages/avatar` (com manifesto gerado); `AvatarParts.voice` usado no criador e salvo; `AudioService` com `expo-audio` (pré-carga de 1 take por evento + LRU de 12); diretor de fala e legenda; soundboard (cliente trata `sfx`; servidor sem mudança); configurações de som; silenciar jogador (reuso do `mutedStore`).
   - **Não é áudio real**: todos os arquivos são placeholders silenciosos. Serviço de voz e fonte dos efeitos seguem **A DEFINIR** (decisão do usuário; licença comercial antes de qualquer arquivo real).
   - **Não feito**: vozes `masc_2`, `masc_3`, `fem_2`, `fem_3` sem arquivo (tocam a do mesmo grupo); `trig_shout` não existe no `avatar.riv` e não é disparado (ponto de extensão `store.speech[seat].event`; pedir ao `rai-avatar`); E2E de soundboard e voz não escrito; validação em iOS, Android e Safari; latência e memória no Android; mesas de 6 (fase 8).
@@ -32,9 +32,17 @@
 
 ## Próximo passo
 
-Pela ordem de `docs/plano-desenvolvimento.md`, vem a **Fase 6** (contas, perfil, conquistas e missões). A Fase 5b não bloqueia: o áudio real depende só de decisões do usuário (serviço de voz e fonte dos efeitos, com licença comercial), e o código já aceita os arquivos trocando nomes (`assets/audio/README.md`).
+## Fase 6: 6A e 6B (2026-11-04)
 
-A Fase 6 tem decisão aberta (recompensas das conquistas e missões, proposta: itens cosméticos) e o login Google e Apple provavelmente depende de credenciais que o usuário precisa fornecer (confirmar). Dentro da Fase 6, o `POST /auth/link` resolve o vínculo do convidado e o combinado de sinais; o aviso de convidado precisa passar a ler o provedor real da sessão. Confirmar com o usuário antes de começar.
+- **6A** (contrato, `d1dcbc7`) e **6B** (bloqueio, denúncia, histórico, apagar conta) feitos na branch `feat/fase-6b-social`. O 6B estava sem commit no fechamento da documentação; o orquestrador commita.
+- Fora do 6B: bloquear e denunciar pelo menu do assento (o `PublicPlayer` não tem `userId`; decisão pendente), estatísticas (6E), `UNIQUE` em `reports` e checagem atômica de bloqueios (`dalva-dba`), E2E novo (6H).
+- Status, contagens e limites: `docs/specs/2026-11-04-fase-6-plano.md` (seção 7), `docs/protocolo-servidor.md` e `apps/server/README.md`.
+
+## Próximo passo
+
+**6C** (banco, `dalva-dba`): `user_achievements`, `user_missions`, `user_stats` e `users.linked_at`; o catálogo fica em código (ADR 0009, previsto no plano). Depois, **6D** (avaliação, `caio-colyseus`) e **6E** (rotas de perfil) em paralelo. **6F** (login social) e **6G** (cliente) podem andar juntos; as credenciais do Google e da Apple são do usuário (decisão 1 do plano), e sem elas o login social fica desligado (`SOCIAL_LOGIN_DISABLED`).
+
+A Fase 5b já foi mesclada (PR #20); o áudio real continua dependendo de decisões do usuário (serviço de voz e fonte dos efeitos, com licença comercial, `assets/audio/README.md`).
 
 Sempre que começar uma fase, um plano curto do `artur-arquiteto` em `docs/specs/` (como nas fases 2, 3, 4 e 5).
 
@@ -42,7 +50,7 @@ Sempre que começar uma fase, um plano curto do `artur-arquiteto` em `docs/specs
 
 - **P3 da revisão da Fase 5**: P3-5 (significado em cinza no painel de sinais da mesa e aviso "combinado salvo para esta dupla"). A Rita-C reportou 5 P3 e corrigiu 3, o que deixa 2 abertos, mas só o P3-5 foi nomeado. Confirmar o outro com a Rita.
 - **Retomada da mesa da fila pública depois de 60 s**: não há rota no servidor. `POST /tables/join` serve só mesa privada. Decidir se a fila pública ganha uma rota de retomada.
-- **Aviso de convidado fixo**: `guest: true` em `TableRoomScreen.tsx`. Ligar ao provedor real da sessão (Fase 6).
+- **Aviso de convidado**: resolvido no 6B (`guest` lê o provedor da sessão).
 - **Comentário de `CODE_NOT_SAVED`** em `packages/protocol/src/errors.ts`: corrigir o texto (sem mudança de comportamento).
 - **Arte do `.riv`** (4G e 4H): quem produz é o usuário ou um ilustrador, a partir de `docs/avatar-rig.md`. Nenhum agente consegue produzir ou validar o arquivo.
 - **Dev build para Rive nativo** (4H): sem decisão do usuário. O plano recomenda a Fase 7, junto do EAS.

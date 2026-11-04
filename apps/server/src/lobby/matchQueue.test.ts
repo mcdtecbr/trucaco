@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MatchQueue, QUEUE_GROUP_SIZE } from './matchQueue';
+import type { QueueEntry } from './matchQueue';
 
 const P = { variant: 'paulista', ironHand: true } as const;
 const M = { variant: 'mineiro', ironHand: true } as const;
@@ -83,5 +84,51 @@ describe('MatchQueue', () => {
     expect(q.enqueue('a', P, 1, TTL)).not.toBeNull();
     expect(q.enqueue('b', P, 1, TTL)).not.toBeNull();
     expect(q.enqueue('c', P, 1, TTL)).toBeNull();
+  });
+
+  describe('bloqueios', () => {
+    const avoid = (...ids: string[]): Set<string> => new Set(ids);
+
+    it('não casa dois usuários com bloqueio, em qualquer sentido, e deixa o resto formar mesa', () => {
+      const q = new MatchQueue();
+      // a bloqueou b (só `a` carrega o conjunto): ficam em mesas diferentes quando há alternativa.
+      q.enqueue('a', P, 1, TTL, avoid('b'));
+      q.enqueue('b', P, 2, TTL);
+      q.enqueue('c', P, 3, TTL);
+      q.enqueue('d', P, 4, TTL);
+      expect(q.takeGroups()).toEqual([]);
+      q.enqueue('e', P, 5, TTL);
+      const [g] = q.takeGroups();
+      expect(g?.map((e) => e.userId)).toEqual(['a', 'c', 'd', 'e']);
+      expect(q.size).toBe(1);
+      expect(q.has('b')).toBe(true);
+    });
+
+    it('o sentido inverso (b carrega o conjunto) também separa', () => {
+      const q = new MatchQueue();
+      q.enqueue('a', P, 1, TTL);
+      q.enqueue('b', P, 2, TTL, avoid('a'));
+      q.enqueue('c', P, 3, TTL);
+      q.enqueue('d', P, 4, TTL);
+      expect(q.takeGroups()).toEqual([]);
+    });
+
+    it('addAvoid com a fila andando separa quem já espera', () => {
+      const q = new MatchQueue();
+      for (const u of ['a', 'b', 'c', 'd']) q.enqueue(u, P, 1, TTL);
+      q.addAvoid('a', 'd');
+      expect(q.takeGroups()).toEqual([]);
+      q.enqueue('e', P, 2, TTL);
+      expect(q.takeGroups()[0]?.map((e) => e.userId)).toEqual(['a', 'b', 'c', 'e']);
+    });
+
+    it('sem bloqueios o comportamento FIFO original não muda; o conjunto sobrevive ao requeue', () => {
+      const q = new MatchQueue();
+      const a = q.enqueue('a', P, 1, TTL, avoid('b')) as QueueEntry;
+      q.remove('a');
+      expect(q.requeue(a, 5, TTL)).toBe(true);
+      for (const u of ['b', 'c', 'd']) q.enqueue(u, P, 6, TTL);
+      expect(q.takeGroups()).toEqual([]);
+    });
   });
 });

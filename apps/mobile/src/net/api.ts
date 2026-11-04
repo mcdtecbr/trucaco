@@ -10,6 +10,7 @@
  */
 import { isHttpErrorCode } from '@trucaco/protocol';
 import type {
+  BlocksResponse,
   CreateTableRequest,
   CreateTableResponse,
   GuestAuthResponse,
@@ -17,9 +18,11 @@ import type {
   HttpErrorCode,
   JoinTableResponse,
   LogoutRequest,
+  MatchesPageResponse,
   MeResponse,
   QueueRequest,
   QueueStatusResponse,
+  ReportRequest,
   TokenPairResponse,
   UpdateAvatarResponse,
   UpdateNicknameResponse,
@@ -118,6 +121,15 @@ export interface ApiClient {
   joinQueue(options: QueueRequest): Promise<QueueStatusResponse>;
   queueStatus(): Promise<QueueStatusResponse>;
   leaveQueue(): Promise<QueueStatusResponse>;
+  /** Histórico do próprio usuário. `cursor` é opaco (vem de `nextCursor`). */
+  matches(cursor?: string, limit?: number): Promise<MatchesPageResponse>;
+  blocks(): Promise<BlocksResponse>;
+  /** Idempotente. Vale na fila e nas próximas mesas, não na partida em andamento. */
+  block(userId: string): Promise<void>;
+  unblock(userId: string): Promise<void>;
+  report(report: ReportRequest): Promise<void>;
+  /** `DELETE /me`: o refresh token é a prova de acesso recente. Sem repetição por 401. */
+  deleteAccount(refreshToken: string): Promise<void>;
 }
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -328,5 +340,25 @@ export function createApiClient(options: ApiOptions): ApiClient {
     joinQueue: (opts) => authed<QueueStatusResponse>('POST', '/queue', opts),
     queueStatus: () => authed<QueueStatusResponse>('GET', '/queue'),
     leaveQueue: () => authed<QueueStatusResponse>('POST', '/queue/leave'),
+    matches(cursor, limit) {
+      const q = new URLSearchParams();
+      if (limit !== undefined) q.set('limit', String(limit));
+      if (cursor !== undefined) q.set('cursor', cursor);
+      const qs = q.toString();
+      return authed<MatchesPageResponse>('GET', qs === '' ? '/matches' : `/matches?${qs}`);
+    },
+    blocks: () => authed<BlocksResponse>('GET', '/me/blocks'),
+    async block(userId) {
+      await authed<undefined>('POST', '/me/blocks', { userId });
+    },
+    async unblock(userId) {
+      await authed<undefined>('DELETE', `/me/blocks/${encodeURIComponent(userId)}`);
+    },
+    async report(report) {
+      await authed<unknown>('POST', '/reports', report);
+    },
+    async deleteAccount(refreshToken) {
+      await authed<undefined>('DELETE', '/me', { refreshToken }, { refreshOn401: false });
+    },
   };
 }

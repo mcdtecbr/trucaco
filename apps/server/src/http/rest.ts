@@ -9,8 +9,21 @@ import express from 'express';
 import type { Application, NextFunction, Request, RequestHandler, Response } from 'express';
 import { AuthError, bearerFromHeader, type AuthService } from '../auth/authService';
 import type { RestLimits } from '../auth/config';
-import { parseAvatarParts } from '@trucaco/protocol';
-import type { MeResponse } from '@trucaco/protocol';
+import {
+  MATCHES_PAGE_MAX,
+  REPORT_RATE_LIMIT_PER_HOUR,
+  normalizeUuid,
+  parseAvatarParts,
+  parseBlockRequest,
+  parseDeleteAccountRequest,
+  parseReportRequest,
+} from '@trucaco/protocol';
+import type {
+  BlocksResponse,
+  MatchSummaryResponse,
+  MatchesPageResponse,
+  MeResponse,
+} from '@trucaco/protocol';
 import { log } from '../logger';
 import { SlidingWindowLimiter, clientKey } from '../rateLimit';
 import {
@@ -18,18 +31,48 @@ import {
   NicknameTakenError,
   NotPartnersError,
   PersistenceError,
+  type MatchRepository,
+  type MatchSummary,
   type PartnerCodesMap,
   type UserRecord,
   type UserRepository,
 } from '../db/types';
 import { assertPartnerCodes, normalizeId, validateNickname } from '../db/validation';
 import { TokenStoreUnavailableError } from '../auth/tokenStore';
+import { emitBlockChange, emitUserDeleted } from '../social/blockBus';
 
 export const BODY_LIMIT = '8kb';
+/** Teto de bloqueios por usuário (memória e consultas do lobby/sala limitadas). */
+export const MAX_BLOCKS_PER_USER = 200;
+const CURSOR_MAX_LENGTH = 256;
+
+function toMatchResponse(m: MatchSummary): MatchSummaryResponse {
+  return {
+    id: m.id,
+    variant: m.variant,
+    format: m.format,
+    ironHand: m.ironHand,
+    visibility: m.visibility,
+    status: m.status,
+    winnerTeam: m.winnerTeam,
+    games: m.games,
+    startedAt: m.startedAt.toISOString(),
+    endedAt: m.endedAt.toISOString(),
+    players: m.players.map((p) => ({
+      seat: p.seat,
+      team: p.team,
+      userId: p.userId,
+      nickname: p.nickname,
+      botFrom: p.botFrom,
+    })),
+  };
+}
 
 export interface RestOptions {
   readonly auth: AuthService;
   readonly users: UserRepository;
+  /** Histórico (`GET /matches`) e validação de `matchId` das denúncias. Ausente: histórico vazio. */
+  readonly matches?: MatchRepository;
   readonly limits: RestLimits;
   readonly corsOrigins: readonly string[];
   readonly trustProxy: boolean;
@@ -76,7 +119,7 @@ export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOpti
           fail(res, 403, 'CORS_FORBIDDEN');
           return;
         }
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
         res.setHeader('Access-Control-Max-Age', '600');
         res.status(204).end();
@@ -88,7 +131,7 @@ export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOpti
 }
 
 export function mountRest(app: Application, opts: RestOptions): void {
-  const { auth, users, limits } = opts;
+  const { auth, users, limits, matches } = opts;
   const ipKey = (req: Request): string => clientKey(req, opts.trustProxy);
 
   const ipLimiter = new SlidingWindowLimiter(limits.perIpPerMin, 60_000);
@@ -160,6 +203,12 @@ export function mountRest(app: Application, opts: RestOptions): void {
     }
     res.locals['user'] = user;
     next();
+  };
+  // Denúncias: 5 por hora por usuário (conta toda tentativa, também as inválidas).
+  const reportLimiter = new SlidingWindowLimiter(REPORT_RATE_LIMIT_PER_HOUR, 3_600_000);
+  const reportLimit: RequestHandler = (_req, res, next) => {
+    if (reportLimiter.allow(locals(res).user.id)) next();
+    else tooMany(res, 3600);
   };
   const writeLimit: RequestHandler = (_req, res, next) => {
     if (writeLimiter.allow(locals(res).user.id)) next();
@@ -251,7 +300,30 @@ export function mountRest(app: Application, opts: RestOptions): void {
   route('/auth/apple', ['POST'], (r) => r.post(byIp(ipLimiter, 60), notImplemented));
 
   // --------------------------------------------------------------------------------- /me
-  route('/me', ['GET', 'PUT'], (r) => {
+  /**
+   * Apagar conta (LGPD, exigência 5.1.1 da Apple). Corpo `{ refreshToken }`: prova de acesso recente (o
+   * refresh tem de estar vivo e ser do usuário do JWT; um access roubado sozinho não basta). Ordem: apaga
+   * o usuário (cascatas no banco), derruba os sockets e revoga TODAS as sessões. Se a revogação falhar
+   * (Redis fora), o usuário já não existe: o access restante (até 15 min) cai em 401, porque toda rota
+   * autenticada e o `onAuth` das salas conferem que o usuário existe. 204 sem corpo.
+   */
+  const deleteAccount: RequestHandler = async (req, res) => {
+    const parsed = parseDeleteAccountRequest(req.body);
+    if (parsed === null) {
+      fail(res, 400, 'INVALID_BODY');
+      return;
+    }
+    const user = locals(res).user;
+    const jti = res.locals['jti'] as string;
+    await auth.assertRecentRefresh(user.id, parsed.refreshToken);
+    await users.deleteUser(user.id);
+    emitUserDeleted(user.id);
+    log.info('me: conta apagada');
+    await auth.logout({ userId: user.id, jti }, { all: true });
+    res.status(204).end();
+  };
+
+  route('/me', ['GET', 'PUT', 'DELETE'], (r) => {
     r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
       const user = locals(res).user;
       const avatar = await users.getAvatar(user.id);
@@ -297,7 +369,167 @@ export function mountRest(app: Application, opts: RestOptions): void {
       }
       res.json({ nickname });
     });
+    r.delete(byIp(ipLimiter, 60), authenticate, writeLimit, contentType, json, deleteAccount);
   });
+
+  // ----------------------------------------------------------------------------- /matches
+  /** Histórico do PRÓPRIO usuário, paginado por cursor (`?limit=&cursor=`). Sem `events`, `deals` nem `seed`. */
+  route('/matches', ['GET'], (r) =>
+    r.get(byIp(ipLimiter, 60), authenticate, async (req, res) => {
+      const { limit: rawLimit, cursor: rawCursor } = req.query;
+      let limit: number | undefined;
+      if (rawLimit !== undefined) {
+        if (typeof rawLimit !== 'string' || !/^\d{1,3}$/.test(rawLimit)) {
+          fail(res, 400, 'INVALID_INPUT');
+          return;
+        }
+        limit = Number(rawLimit);
+        if (limit < 1 || limit > MATCHES_PAGE_MAX) {
+          fail(res, 400, 'INVALID_INPUT');
+          return;
+        }
+      }
+      if (
+        rawCursor !== undefined &&
+        (typeof rawCursor !== 'string' ||
+          rawCursor.length === 0 ||
+          rawCursor.length > CURSOR_MAX_LENGTH)
+      ) {
+        fail(res, 400, 'INVALID_INPUT');
+        return;
+      }
+      const page =
+        matches === undefined
+          ? { items: [], nextCursor: null }
+          : await matches.listForUser(locals(res).user.id, {
+              ...(limit === undefined ? {} : { limit }),
+              ...(rawCursor === undefined ? {} : { cursor: rawCursor }),
+            });
+      const body: MatchesPageResponse = {
+        items: page.items.map(toMatchResponse),
+        nextCursor: page.nextCursor,
+      };
+      res.json(body);
+    }),
+  );
+
+  // ------------------------------------------------------------------------------- bloqueio
+  /**
+   * Bloqueio persistente (decisão 5 do plano da Fase 6). Efeitos: a fila pública não casa os dois (qualquer
+   * sentido), a mesa privada de quem bloqueia (ou do bloqueado) fica indisponível por código e o chat da
+   * MESA entre os dois é descartado. Alvo inexistente ou apagado: o mesmo `USER_NOT_FOUND`.
+   */
+  route('/me/blocks', ['GET', 'POST'], (r) => {
+    r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
+      const list = await users.listBlocks(locals(res).user.id);
+      const body: BlocksResponse = {
+        blocks: list.map((b) => ({ userId: b.userId, nickname: b.nickname })),
+      };
+      res.json(body);
+    });
+    r.post(byIp(ipLimiter, 60), authenticate, writeLimit, contentType, json, async (req, res) => {
+      const parsed = parseBlockRequest(req.body);
+      if (parsed === null) {
+        fail(res, 400, 'INVALID_BODY');
+        return;
+      }
+      const me = locals(res).user.id;
+      if (parsed.userId === me) {
+        fail(res, 400, 'INVALID_BLOCK');
+        return;
+      }
+      const target = await users.findById(parsed.userId);
+      if (target === null) {
+        fail(res, 404, 'USER_NOT_FOUND');
+        return;
+      }
+      const current = await users.listBlockedIds(me);
+      if (!current.includes(target.id) && current.length >= MAX_BLOCKS_PER_USER) {
+        fail(res, 400, 'INVALID_BLOCK');
+        return;
+      }
+      try {
+        await users.addBlock(me, target.id);
+      } catch (err) {
+        if (err instanceof InvalidInputError) {
+          // Apagado entre a leitura e a gravação: o mesmo erro do alvo inexistente.
+          fail(res, 404, 'USER_NOT_FOUND');
+          return;
+        }
+        throw err;
+      }
+      emitBlockChange({ blockerId: me, blockedId: target.id, active: true });
+      res.status(204).end();
+    });
+  });
+
+  /** Desbloquear: idempotente (204 também se não havia bloqueio). */
+  route('/me/blocks/:userId', ['DELETE'], (r) =>
+    r.delete(byIp(ipLimiter, 60), authenticate, writeLimit, async (req, res) => {
+      const target = normalizeUuid(req.params['userId']);
+      if (target === null) {
+        fail(res, 400, 'INVALID_BLOCK');
+        return;
+      }
+      const me = locals(res).user.id;
+      await users.removeBlock(me, target);
+      emitBlockChange({ blockerId: me, blockedId: target, active: false });
+      res.status(204).end();
+    }),
+  );
+
+  // ------------------------------------------------------------------------------ denúncia
+  /**
+   * Denúncia (moderação humana na Fase 8). 5 por hora por usuário. Sem oráculo: denunciado inexistente
+   * ou apagado responde 201 como se tivesse gravado; denúncia repetida (mesmo denunciante, denunciado e
+   * partida) também é 201 e não grava de novo. Contra si mesmo e `matchId` em que o denunciante ou o
+   * denunciado não jogaram: `INVALID_REPORT`. Resposta 201 `{}` (sem eco).
+   */
+  route('/reports', ['POST'], (r) =>
+    r.post(byIp(ipLimiter, 60), authenticate, reportLimit, contentType, json, async (req, res) => {
+      const parsed = parseReportRequest(req.body);
+      if (parsed === null) {
+        fail(res, 400, 'INVALID_BODY');
+        return;
+      }
+      const me = locals(res).user.id;
+      if (parsed.userId === me) {
+        fail(res, 400, 'INVALID_REPORT');
+        return;
+      }
+      // Com `matchId` a participação vem ANTES de consultar o usuário: inexistente, apagado (some de
+      // `match_players`) e existente que não jogou dão o MESMO `INVALID_REPORT` (sem oráculo de existência).
+      if (parsed.matchId !== undefined) {
+        const players = (await matches?.participantIds?.(parsed.matchId)) ?? null;
+        if (players === null || !players.includes(me) || !players.includes(parsed.userId)) {
+          fail(res, 400, 'INVALID_REPORT');
+          return;
+        }
+      }
+      if ((await users.findById(parsed.userId)) === null) {
+        res.status(201).json({});
+        return;
+      }
+      if (await users.hasReport(me, parsed.userId, parsed.matchId ?? null)) {
+        res.status(201).json({});
+        return;
+      }
+      try {
+        await users.createReport({
+          reporterId: me,
+          reportedId: parsed.userId,
+          ...(parsed.matchId === undefined ? {} : { matchId: parsed.matchId }),
+          reason: parsed.reason,
+          ...(parsed.text === undefined ? {} : { text: parsed.text }),
+        });
+      } catch (err) {
+        if (!(err instanceof InvalidInputError)) throw err;
+        // Denunciado ou partida apagados entre a leitura e a gravação: segue como se tivesse gravado.
+      }
+      log.info('reports: denúncia registrada', { reason: parsed.reason });
+      res.status(201).json({});
+    }),
+  );
 
   route('/me/avatar', ['PUT'], (r) =>
     r.put(byIp(ipLimiter, 60), authenticate, writeLimit, contentType, json, async (req, res) => {

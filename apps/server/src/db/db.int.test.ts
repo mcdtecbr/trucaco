@@ -275,6 +275,54 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
     });
   });
 
+  describe('Fase 6B: listBlocks, hasReport, participantIds e deleteUser', () => {
+    it('listBlocks traz apelido; hasReport e participantIds', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const c = await guest('Caio');
+      await users.addBlock(a.id, c.id);
+      await users.addBlock(a.id, b.id);
+      expect((await users.listBlocks(a.id)).map((x) => x.nickname)).toEqual(['Caio', 'Beto']);
+      const matchId = await matches.saveMatch(matchInput([a.id, b.id, null, null], new Date()));
+      expect(await users.hasReport(a.id, b.id, null)).toBe(false);
+      await users.createReport({ reporterId: a.id, reportedId: b.id, reason: 'cheating' });
+      expect(await users.hasReport(a.id, b.id, null)).toBe(true);
+      expect(await users.hasReport(a.id, b.id, matchId)).toBe(false);
+      await users.createReport({ reporterId: a.id, reportedId: b.id, matchId, reason: 'other' });
+      expect(await users.hasReport(a.id, b.id, matchId)).toBe(true);
+      expect([...((await matches.participantIds(matchId)) ?? [])].sort()).toEqual(
+        [a.id, b.id].sort(),
+      );
+      expect(await matches.participantIds('00000000-0000-4000-8000-000000000000')).toBeNull();
+    });
+
+    it('deleteUser: cascatas do banco, partidas anonimizadas e denúncias mantidas', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const c = await guest('Caio');
+      await users.saveAvatar(a.id, DEFAULT_AVATAR_PARTS);
+      await users.addBlock(a.id, b.id);
+      await users.addBlock(c.id, a.id);
+      const matchId = await matches.saveMatch(matchInput([a.id, b.id, c.id, null], new Date()));
+      await users.savePartnerCodes(a.id, c.id, { wink: 'x' });
+      await users.createReport({ reporterId: b.id, reportedId: a.id, matchId, reason: 'cheating' });
+
+      expect(await users.deleteUser(a.id)).toBe(true);
+      expect(await users.deleteUser(a.id)).toBe(false);
+      expect(await users.findById(a.id)).toBeNull();
+      expect(await users.getAvatar(a.id)).toBeNull();
+      expect(await users.listBlockerIds(b.id)).toEqual([]);
+      expect(await users.listBlockedIds(c.id)).toEqual([]);
+      expect(await users.getPartnerCodes(a.id, c.id)).toBeNull();
+      const reports = await db().report.findMany();
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({ reporterId: b.id, reportedId: null, matchId });
+      const page = await matches.listForUser(b.id);
+      expect(page.items[0]?.players.map((p) => p.userId)).toEqual([null, b.id, c.id, null]);
+      expect(page.items[0]?.players.map((p) => p.nickname)).toEqual([null, 'Beto', 'Caio', null]);
+    });
+  });
+
   describe('partner_codes', () => {
     it('par é ordenado: (a,b) e (b,a) são o mesmo registro (com vínculo de dupla)', async () => {
       const a = await guest('Ana');

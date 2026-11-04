@@ -84,6 +84,7 @@ export function HomeScreen() {
         queueCancel: () => void controller.cancelQueue(),
         settings: () => router.push('/settings'),
         avatar: () => router.push('/avatar'),
+        profile: () => router.push('/profile'),
       }}
     />
   );

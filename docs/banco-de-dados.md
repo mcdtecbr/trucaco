@@ -63,9 +63,11 @@ Decisão do 2H: o `MatchRecorder` limita o próprio buffer de eventos (6000 even
 | `avatars.user_id`                     | `Cascade` | Dado pessoal do usuário: some com ele                                                         |
 | `blocks.*`, `partner_codes.user_*_id` | `Cascade` | Relações pessoais: somem. O outro lado perde o bloqueio ou os códigos da dupla                |
 | `match_players.user_id`               | `SetNull` | O histórico da mesa permanece, com o assento anonimizado (a listagem mostra `nickname: null`) |
-| `reports.reporter_id`, `reported_id`  | `SetNull` | Evidência de moderação preservada sem identificar                                             |
-| `reports.match_id`                    | `SetNull` | Expurgar uma partida não apaga a denúncia                                                     |
-| `match_players.match_id`              | `Cascade` | Única cascata de match: apagar a partida leva seus jogadores                                  |
+
+Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas acima fazem o resto (sem código de limpeza no servidor). Nenhuma coluna ou tabela nova.
+| `reports.reporter_id`, `reported_id` | `SetNull` | Evidência de moderação preservada sem identificar |
+| `reports.match_id` | `SetNull` | Expurgar uma partida não apaga a denúncia |
+| `match_players.match_id` | `Cascade` | Única cascata de match: apagar a partida leva seus jogadores |
 
 ### Índices e a consulta que cada um atende
 
