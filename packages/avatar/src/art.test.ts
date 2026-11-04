@@ -12,15 +12,17 @@ import {
   countVertices,
   effectiveCfg,
   groupParts,
+  clipPaths,
   isShown,
   resolveFill,
   selectParts,
 } from './art';
 
 const base = DEFAULT_AVATAR_PARTS;
+const LIMITE_VERTICES = 1300;
 
 describe('arte do avatar (mesmos paths do rig)', () => {
-  it('tem os 175 paths do rig, com nomes únicos e orçamento de vértices', () => {
+  it('tem os 182 paths do rig, com nomes únicos e orçamento de vértices', () => {
     // Fatia 3: rostos (6) e olhos (6 estilos com branco, íris, miolo, pálpebra/cílios e brilho) refeitos
     // pela prancha de referência, mais 4 sobrancelhas e 8 narizes. O orçamento de vértices subiu de 420
     // para 760 (total atual: 725, ~7 KB a mais no .riv). Só as peças selecionadas são desenhadas, então o
@@ -28,9 +30,10 @@ describe('arte do avatar (mesmos paths do rig)', () => {
     // Fatia 4: 19 cabelos (frente e atrás), 4 barbas e 10 chapéus redesenhados pelas pranchas somam 175 paths
     // e 1210 vértices; o orçamento subiu de 760 para 1300 (cerca de 12 KB a mais no .riv). Cada avatar
     // desenha só uns 40 paths, então o custo de desenho por avatar segue parecido.
-    expect(PARTS).toHaveLength(175);
+    // Fatia 5: 7 peças de sombreado (`shade_*`) somam 182 paths e 1252 vértices; cabem no orçamento de 1300 (total atual: 1252; a fatia 4 fechou em 1210).
+    expect(PARTS).toHaveLength(182);
     expect(new Set(PARTS.map((p) => p.name)).size).toBe(PARTS.length);
-    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(1300);
+    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(LIMITE_VERTICES);
   });
 
   it('todo `when` aponta para parte e valor dentro do catálogo', () => {
@@ -279,7 +282,10 @@ describe('cabelo, barba e chapéu (Fatia 4)', () => {
   });
 
   it('o cabelo da frente e o chapéu caem no grupo da frente (acompanham a cabeça)', () => {
-    expect(groupParts('front', { ...base, hair: 8 }).map((p) => p.name)).toEqual(['hair_8_front']);
+    expect(groupParts('front', { ...base, hair: 8 }).map((p) => p.name)).toEqual([
+      'hair_8_front',
+      'shade_hair_gloss', // brilho por cima do cabelo
+    ]);
     const c = { ...base, hair: 8, hat: 1 };
     expect(groupParts('front', c).map((p) => p.name)).toEqual([
       'hat_1_crown',
@@ -397,5 +403,151 @@ describe('cores como dimensão própria', () => {
     }
     const names = (c: typeof base) => selectParts(c).map((p) => p.name);
     expect(names({ ...base, hair_color: 7, eye_color: 2, outfit_color: 10 })).toEqual(names(base));
+  });
+
+  describe('sombreado (fatia 5)', () => {
+    const SHADE_NAMES = [
+      'shade_jaw_soft',
+      'shade_jaw',
+      'shade_cheek_l',
+      'shade_cheek_r',
+      'shade_beard_neck',
+      'shade_bald_gloss',
+      'shade_hair_gloss',
+    ];
+    const shadeNames = (c: typeof base) =>
+      selectParts(c)
+        .filter((p) => p.name.startsWith('shade_'))
+        .map((p) => p.name);
+
+    it('as 7 peças existem, com nomes únicos, translúcidas e sem mudar os inputs', () => {
+      const shades = PARTS.filter((p) => p.name.startsWith('shade_'));
+      expect(shades.map((p) => p.name).sort()).toEqual([...SHADE_NAMES].sort());
+      for (const p of shades) {
+        expect(p.opacity, p.name).toBeGreaterThan(0);
+        expect(p.opacity, p.name).toBeLessThan(0.4);
+        expect(artGroup(p), p.name).toBe(p.layer === 4 ? 'head' : 'front');
+      }
+    });
+
+    it('mandíbula e bochechas sempre; brilho e sombra de barba seguem as regras', () => {
+      const always = ['shade_jaw_soft', 'shade_jaw', 'shade_cheek_l', 'shade_cheek_r'];
+      for (const hair of [0, 1, 3, 8, 16, 18]) {
+        for (const hat of [0, 1]) {
+          const c = effectiveCfg({ ...base, hair, hat });
+          expect(shadeNames(c)).toEqual(expect.arrayContaining(always));
+        }
+      }
+      // careca sem chapéu: brilho da testa, nunca o do cabelo
+      expect(shadeNames({ ...base, hair: 0, hat: 0, beard: 0 })).toEqual([
+        ...always,
+        'shade_bald_gloss',
+      ]);
+      // cabelo comum: brilho do cabelo
+      expect(shadeNames({ ...base, hair: 4, hat: 0, beard: 0 })).toEqual([
+        ...always,
+        'shade_hair_gloss',
+      ]);
+      // coque: sem brilho nenhum
+      expect(shadeNames({ ...base, hair: 16, hat: 0, beard: 0 })).toEqual(always);
+      // com chapéu (cabelo que aceita): sem brilho
+      expect(shadeNames({ ...base, hair: 0, hat: 3, beard: 0 })).toEqual(always);
+      expect(shadeNames({ ...base, hair: 4, hat: 3, beard: 0 })).toEqual(always);
+      // cabelo que não aceita chapéu volta a hat 0 (effectiveCfg) e mantém o brilho
+      expect(HAIR_WITHOUT_HAT).toContain(2);
+      expect(shadeNames({ ...base, hair: 2, hat: 3, beard: 0 })).toContain('shade_hair_gloss');
+    });
+
+    it('sombra sob a barba só nas barbas 1, 3 e 4', () => {
+      for (let beard = 0; beard < AVATAR_PART_COUNTS.beard; beard++) {
+        const has = shadeNames({ ...base, beard }).includes('shade_beard_neck');
+        expect(has, `beard ${beard}`).toBe([1, 3, 4].includes(beard));
+      }
+    });
+
+    it('o recorte existe: rosto escolhido e silhueta do cabelo da frente', () => {
+      const jaw = PARTS.find((p) => p.name === 'shade_jaw')!;
+      const gloss = PARTS.find((p) => p.name === 'shade_hair_gloss')!;
+      for (let face = 0; face < AVATAR_PART_COUNTS.face_shape; face++) {
+        const c = { ...base, face_shape: face };
+        const paths = clipPaths(jaw, c);
+        expect(paths).toHaveLength(1);
+        expect(paths[0]).toBe(PARTS.find((p) => p.name.startsWith('face_') && p.when?.(c))!.d);
+      }
+      for (let hair = 1; hair < AVATAR_PART_COUNTS.hair; hair++) {
+        const n = clipPaths(gloss, { ...base, hair }).length;
+        expect(n, `hair ${hair}`).toBe(hair === 16 ? 0 : 1);
+      }
+      expect(isShown(gloss, { ...base, hair: 16 })).toBe(false);
+    });
+
+    it('mandíbula: só o anel abaixo de y=226, fora da meia-elipse inferior (nada na testa)', () => {
+      type P = [number, number];
+      // achata um path com M/L/C/Z em polígono (cúbicas em 24 passos)
+      const flatten = (d: string): P[] => {
+        const pts: P[] = [];
+        const toks = d.match(/[MLCZ]|-?\d+(?:\.\d+)?/g) ?? [];
+        let i = 0;
+        let cur: P = [0, 0];
+        while (i < toks.length) {
+          const cmd = toks[i++];
+          if (cmd === 'Z') continue;
+          const n = cmd === 'C' ? 3 : 1;
+          const ps: P[] = [];
+          for (let j = 0; j < n; j++) ps.push([Number(toks[i++]), Number(toks[i++])]);
+          if (cmd === 'C') {
+            const [p1, p2, p3] = ps as [P, P, P];
+            for (let s = 1; s <= 24; s++) {
+              const t = s / 24;
+              const m = 1 - t;
+              const w = [m * m * m, 3 * m * m * t, 3 * m * t * t, t * t * t];
+              pts.push([
+                w[0]! * cur[0] + w[1]! * p1[0] + w[2]! * p2[0] + w[3]! * p3[0],
+                w[0]! * cur[1] + w[1]! * p1[1] + w[2]! * p2[1] + w[3]! * p3[1],
+              ]);
+            }
+            cur = p3;
+          } else {
+            cur = ps[0]!;
+            pts.push(cur);
+          }
+        }
+        return pts;
+      };
+      const inside = (poly: P[], x: number, y: number): boolean => {
+        let r = false;
+        for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+          const [xa, ya] = poly[a]!;
+          const [xb, yb] = poly[b]!;
+          if (ya > y !== yb > y && x < ((xb - xa) * (y - ya)) / (yb - ya) + xa) r = !r;
+        }
+        return r;
+      };
+      for (const name of ['shade_jaw_soft', 'shade_jaw']) {
+        const part = PARTS.find((p) => p.name === name)!;
+        expect(part.evenodd, name).toBeUndefined();
+        const poly = flatten(part.d);
+        for (const [x, y] of [
+          [256, 150],
+          [200, 180],
+          [140, 200],
+          [256, 230],
+          [256, 300],
+        ] as P[]) {
+          expect(inside(poly, x, y), `${name} (${x},${y})`).toBe(false);
+        }
+        expect(inside(poly, 140, 300), `${name} anel`).toBe(true);
+        expect(inside(poly, 256, 400), `${name} abaixo`).toBe(true);
+      }
+    });
+
+    it('cores derivadas da pele escolhida', () => {
+      for (let skin = 0; skin < AVATAR_PART_COUNTS.skin; skin++) {
+        const c = { ...base, skin };
+        expect(resolveFill('deep', c)).toMatch(/^#[0-9a-f]{6}$/);
+        expect(resolveFill('blush', c)).toMatch(/^#[0-9a-f]{6}$/);
+        expect(resolveFill('deep', c)).not.toBe(resolveFill('shade', c));
+      }
+    });
   });
 });

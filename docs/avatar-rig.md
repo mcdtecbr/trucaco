@@ -94,7 +94,7 @@ O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma 
 - **`accessory` (3)**: 0 nenhum; 1 bigode (cor do cabelo); 2 brinco dourado (#F5B301). Óculos e boné de acessório **não existem**: os óculos escondem o piscar de olho, base dos sinais (ADR 0003).
 - **`bg_color` (8)**: 0 verde (#1E5631); 1 azul (#1D4ED8); 2 vermelho (#991B1B); 3 laranja (#D97706); 4 cinza (#4B5563); 5 roxo (#581C87); 6 laranja escuro (#C2410C); 7 turquesa (#0F766E). Cor chapada, sem degradê.
 
-A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (175 paths e 1210 vértices, orçamento de 1300; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
+A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (182 paths e 1252 vértices, orçamento de 1300; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
 
 Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam livremente (com chapéu o cabelo da frente some; o cabelo longo e o afro ficam atrás do rosto). Camadas, de trás para a frente: fundo, cabelo de trás, pescoço e ombros/roupa, rosto, barba, sobrancelhas, olhos, nariz, bochechas de sinal, boca, sinais de boca (dentes, língua, sorriso), acessório, cabelo da frente, chapéu.
 
@@ -111,6 +111,36 @@ O `.riv` exportado tem as peças de cabelo, barba e chapéu: 58.135 bytes, 15 Nu
 - **Cor:** `hair_color_0` a `hair_color_7` recolorem o cabelo da frente, o de trás, as sobrancelhas e as barbas.
 
 Validado no runtime web (`@rive-app/canvas` 2.21.6, 05/11/2026): `hair` 0 a 18 com `hair_color` 0 a 7; `beard` 0 a 4 com a cor do cabelo; `hat` 0 a 10 com o cabelo da frente sumindo e o de trás permanecendo. Aparelho iOS/Android não testado. Diário e lições em `docs/avatar-rive-estado.md`.
+
+### 3.2 Sombreado (fatia 5, sem input novo)
+
+Sete formas translúcidas por cima da arte, sem input, sem migração e sem mudar o protocolo. Nós novos (nomes são contrato; fonte em `art.ts`, SVGs em `assets/rive/source/shade_*.svg`). Cores derivadas da pele escolhida (`skin`): `shade` é a cor de sombra da pele (já existe em `SKIN_COLORS`); `deep` = `shade` misturado 40% com `#2A1208`; `blush` = `shade` misturado 50% com `#D2475A`. Mistura linear em RGB. Cada nó recebe a cor da pele como o `neck_shadow` já recebe.
+
+| Nó                 | Camada (posição)                           | Forma                                                                                                          | Recorte                              | Cor       | Opacidade | Visível quando                            |
+| ------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------ | --------- | --------- | ----------------------------------------- |
+| `shade_jaw_soft`   | 4, logo depois de `neck_shadow`            | retângulo (100,226 a 412,420) menos a meia-elipse INFERIOR, centro (256,226), raios 124 x 112 (contorno único) | rosto escolhido (`face_*`)           | `shade`   | 0,12      | sempre                                    |
+| `shade_jaw`        | 4, depois do anterior                      | retângulo (100,226 a 412,420) menos a meia-elipse INFERIOR, centro (256,226), raios 124 x 124 (contorno único) | rosto escolhido                      | `shade`   | 0,16      | sempre                                    |
+| `shade_cheek_l`    | 4                                          | elipse centro (194,292) raios 24 x 14                                                                          | nenhum                               | `blush`   | 0,28      | sempre                                    |
+| `shade_cheek_r`    | 4                                          | elipse centro (318,292) raios 24 x 14                                                                          | nenhum                               | `blush`   | 0,28      | sempre                                    |
+| `shade_beard_neck` | 4, antes das barbas (a barba cobre o alto) | `M222,386L290,386L289,414Q256,434 223,414Z`                                                                    | nenhum                               | `deep`    | 0,35      | `beard` 1, 3 ou 4                         |
+| `shade_bald_gloss` | 7, depois de tudo                          | `M214,134Q246,118 282,128Q250,128 220,148Q208,146 214,134Z`                                                    | rosto escolhido                      | `#FFFFFF` | 0,28      | `hair` = 0 e `hat` = 0                    |
+| `shade_hair_gloss` | 7, depois de tudo                          | `M188,142Q204,108 252,96Q282,92 306,100Q262,104 232,122Q210,134 200,160Q184,160 188,142Z`                      | `hair_<n>_front` do cabelo escolhido | `#FFFFFF` | 0,20      | `hair` fora de 0 e 16 (coque) e `hat` = 0 |
+
+Mandíbula em dois degraus (soft 0,12 e core 0,16, soma 0,28 no fundo): o retângulo começa no centro da elipse (y = 226), não em y = 300, para não deixar borda reta horizontal fora do rosto. As elipses são largas o bastante (rx 124) para nenhum dos 6 rostos passar delas nessa altura.
+
+Montado no Rive (fatia 5, 04/11/2026; `avatar.riv` de 60.606 bytes, 15 Numbers, 16 triggers, validado no runtime web):
+
+- **Recorte pelo rosto:** `shade_jaw_soft`, `shade_jaw` e `shade_bald_gloss` recortam (as bochechas não têm recorte; os polígonos exatos das mandíbulas a reimportar no Rive são `assets/rive/source/shade_jaw_soft.svg` e `shade_jaw.svg`: só o anel abaixo de y=226, nada na testa) pelo Solo de rostos (`faces3`). Clipping Shape aceita Solo como fonte.
+- **Recorte pelo cabelo:** `shade_hair_gloss` recorta pelo Solo `cabelo4a` (`hf_*`), dentro do wrapper `hair_front`. Com chapéu, o wrapper some pelas timelines `hat_*`, então a regra `hat` = 0 vale.
+- **Posição:** `shade_bald_gloss` dentro de `hf_0`. Mandíbulas, bochechas e `shade_beard_neck` logo acima do Solo `faces3`, em `Bone 1`.
+- **Cor por pele:** `shade`, `blush` e `deep` chaveadas nas timelines `skin_0` a `skin_7` (`skin_0` chaveado explicitamente).
+- **Visibilidade:** `shade_beard_neck` pela opacidade do grupo nas timelines `beard_0` a `beard_4` (0% em 0 e 2, 100% nas outras). `shade_hair_gloss` nas timelines `hair_n` (0% em `hair_0` e `hair_16`, 100% nas outras 17).
+
+**Divergência (conhecida):** no fallback o recorte do brilho do cabelo é o `hair_<n>_front` do cabelo escolhido. No Rive é o Solo inteiro, que serve a qualquer `hair`. Nas combinações testadas no runtime não apareceu vazamento. Se o Solo abranger mais que o cabelo escolhido, o brilho pode cair sobre a pele fora dele; isso precisa ser conferido combinação a combinação no editor.
+
+No fallback, o `AvatarFallback` usa `ClipPath` do `react-native-svg` com os mesmos paths (`clipPaths` em `art.ts`); id do recorte único por instância (`useId`), emitido uma vez por Svg. Só testado no web; `ClipPath` nativo não foi visto em aparelho. Referência visual do estado final: `assets/rive/test_matrix/` (todos os 10 PNGs regenerados com o sombreado). Em `_composto.svg` o recorte aparece como atributo `data-clip` (não é renderizado por visualizadores comuns).
+
+Pendências: a matriz de combinações não foi toda conferida no editor (hair 8, 12 e 16, entre outros, foram vistos só no runtime); assets duplicados no painel Assets do Rive; iOS e Android não testados. Lições e receitas em `docs/avatar-rive-estado.md` (fatia 5).
 
 ## 4. Teste de aceitação
 

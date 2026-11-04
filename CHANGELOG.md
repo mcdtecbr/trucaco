@@ -4,7 +4,25 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Avatar: ampliação do catálogo, fatia 4 (cabelo, barba e chapéu) (2026-11-05), sem commit
+### Avatar: ampliação do catálogo, fatia 5 (sombreado) (2026-11-04), sem commit
+
+Decisão em `docs/adr/0008-sombreado-fixo-sem-sombra-projetada-e-recorte-por-solo.md`. O `assets/rive/avatar.riv` foi reexportado (60.606 bytes, 15 Numbers, 16 triggers) e validado no runtime web (`@rive-app/canvas` 2.21.6). Não validado em aparelho iOS/Android.
+
+#### Adicionado
+
+- Sombreado fixo com 7 formas translúcidas (`shade_jaw_soft`, `shade_jaw`, `shade_cheek_l`, `shade_cheek_r`, `shade_beard_neck`, `shade_bald_gloss`, `shade_hair_gloss`) em `packages/avatar/src/art.ts`, com fontes em `assets/rive/source/shade_*.svg`. Cor derivada da pele (`shade`, `blush` e `deep`).
+- Recorte da sombra pelo rosto escolhido e pelo cabelo escolhido, no fallback vetorial (`ClipPath` do `react-native-svg`, ids `trucaco_clip_face_<face_shape>` e `trucaco_clip_hair_<hair>`).
+
+#### Alterado
+
+- Sem input novo, sem dimensão nova, sem migração, `PROTOCOL_VERSION` continua 5. Orçamento de vértices: 182 paths e 1252 vértices (teto 1300).
+- `avatar.riv` com o sombreado montado no Rive; recorte por Solo (`faces3` e `cabelo4a`). Estrutura em `docs/avatar-rig.md` (seção 3.2).
+
+#### Divergências conhecidas
+
+- O brilho do cabelo no Rive recorta pelo Solo inteiro; no fallback, pelo `hair_<n>_front` do cabelo escolhido. Se o Solo abranger mais que o cabelo, o brilho pode cair sobre a pele. A conferir no editor.
+
+### Avatar: ampliação do catálogo, fatia 4 (cabelo, barba e chapéu) (2026-11-05), mesclada no PR #15
 
 Decisão em `docs/adr/0007-cabelo-barba-e-chapeu-seguem-as-pranchas.md`. O `assets/rive/avatar.riv` foi reexportado (58.135 bytes, 15 Numbers, 16 triggers) e validado no runtime web (`@rive-app/canvas` 2.21.6); o catálogo e o fallback vetorial seguem o mesmo desenho. Não validado em aparelho iOS/Android.
 

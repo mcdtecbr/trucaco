@@ -232,3 +232,25 @@ Pendências:
 - Cabelo 18 (raspado, opacidade 50%) parece cinza claro no `.riv`.
 - Chapéu 6 passa um pouco do topo do artboard.
 - Aparelho iOS/Android não testado. O Rive não é o renderizador de produção (ADR 0002).
+
+## Fatia 5: sombreado (04/11/2026)
+
+Ampliação do catálogo, fatia 5 de 5 (ADR 0008). Sete formas de sombreado fixo, sem input novo, sem dimensão nova e sem migração; `PROTOCOL_VERSION` continua 5. `avatar.riv` de 60.606 bytes (antes 58.135), só o artboard `Avatar`, state machine `Main`, **15 Numbers e 16 triggers**. A montagem está em `docs/avatar-rig.md` (seção 3.2). Validado no runtime web (`@rive-app/canvas` 2.21.6): faces 0 a 5 com peles 0, 3 e 7; `hair` 0 a 18; barba 0 a 4; chapéus 0, 4, 6 e 8; peles 0 a 7. A sombra fica recortada pelo rosto escolhido, as cores variam por pele, e não apareceu vazamento visível nas combinações testadas. Não validado em iOS/Android.
+
+Receitas e lições do editor aprendidas:
+
+- **Clipping Shape aceita Solo como fonte**, não só um path. Os recortes do rosto e do cabelo usam o Solo (`faces3` e `cabelo4a`).
+- **Position só edita com duplo clique no valor**: Ctrl+A, digitar, Return, um campo por vez.
+- **Conferir que o campo está em edição ANTES do Ctrl+A.** Um Ctrl+A com o foco fora do campo selecionou 501 objetos e abriu "Convert to custom path". Cancelar e Ctrl+Z.
+- **O primeiro clique numa linha depois de Return em um campo é engolido.** Clicar de novo.
+- **Alt+P** adiciona o nó no fim da lista de filhos. Ctrl+] sobe o nó na lista.
+- **Layout do editor mudou**: Hierarchy, Assets, Animations e o painel Agent ficam empilhados na esquerda. As coordenadas das receitas das fatias anteriores mudaram.
+- Drop de SVG sintético no editor continua funcionando.
+
+Pendências:
+
+- **Matriz de combinações não toda conferida no editor.** Hair 8, 12 e 16, entre outros, foram vistos só no runtime web.
+- **Divergência do recorte do cabelo**: no fallback o brilho usa o `hair_<n>_front` do cabelo escolhido; no Rive usa o Solo inteiro. Se o Solo abranger mais que o cabelo escolhido, o brilho pode cair sobre a pele. Conferir combinação a combinação no editor.
+- **Assets duplicados** no painel Assets do Rive: limpar antes de exportar a próxima versão.
+- **ClipPath nativo** (react-native-svg, iOS e Android) não visto em aparelho.
+- Aparelho iOS/Android não testado. O Rive não é o renderizador de produção (ADR 0002).

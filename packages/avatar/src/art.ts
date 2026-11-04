@@ -12,7 +12,7 @@ const LIP_DARK = '#9A3430';
 const TONGUE = '#E36B7C';
 const K = 0.5523;
 
-export type Fill = string | 'skin' | 'shade' | 'bg' | 'hair' | 'outfit' | 'iris';
+export type Fill = string | 'skin' | 'shade' | 'deep' | 'blush' | 'bg' | 'hair' | 'outfit' | 'iris';
 export type Cfg = Readonly<Pick<AvatarParts, AvatarPartKey>>;
 
 export interface Part {
@@ -27,6 +27,11 @@ export interface Part {
   opacity?: number;
   /** Some quando há chapéu (`hat !== 0`): o chapéu assenta direto na cabeça, sem o cabelo da frente. */
   hideWithHat?: boolean;
+  /**
+   * Sombreado: a forma é recortada (ClipPath) pelo rosto escolhido (`face`) ou pela silhueta do cabelo da
+   * frente escolhido (`hair`; sem cabelo da frente, ou coque, a peça não aparece).
+   */
+  clip?: 'face' | 'hair';
   hidden?: boolean; // existe no rig mas fica oculto em repouso (boca aberta e línguas dos sinais)
 }
 
@@ -41,11 +46,35 @@ function ell(cx: number, cy: number, rx: number, ry: number): string {
     `C${f(cx + kx)},${f(cy - ry)} ${f(cx + rx)},${f(cy - ky)} ${f(cx + rx)},${f(cy)}Z`
   );
 }
+/** Mistura `a` e `b` (#RRGGBB) na proporção `t` de `b`. */
+function mixHex(a: string, b: string, t: number): string {
+  const ch = (s: string, i: number) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16);
+  const hx = (n: number) => Math.round(n).toString(16).padStart(2, '0');
+  return `#${[0, 1, 2].map((i) => hx(ch(a, i) * (1 - t) + ch(b, i) * t)).join('')}`;
+}
 const rect = (x1: number, y1: number, x2: number, y2: number) =>
   `M${x1},${y1}L${x2},${y1}L${x2},${y2}L${x1},${y2}Z`;
+/**
+ * Anel da mandíbula: retângulo de x 100..412 e y `cy`..420 menos a meia-elipse INFERIOR (centro `cx,cy`),
+ * num único contorno (sem evenodd). Nada acima de `cy`.
+ */
+function jawRing(cx: number, cy: number, rx: number, ry: number): string {
+  const kx = rx * K,
+    ky = ry * K;
+  return (
+    `M100,${cy}L${f(cx - rx)},${cy}` +
+    `C${f(cx - rx)},${f(cy + ky)} ${f(cx - kx)},${f(cy + ry)} ${f(cx)},${f(cy + ry)}` +
+    `C${f(cx + kx)},${f(cy + ry)} ${f(cx + rx)},${f(cy + ky)} ${f(cx + rx)},${cy}` +
+    `L412,${cy}L412,420L100,420Z`
+  );
+}
 export type Selector = ((c: Cfg) => boolean) & { key: AvatarPartKey; value: number };
 const is = (k: AvatarPartKey, v: number): Selector =>
   Object.assign((c: Cfg) => c[k] === v, { key: k, value: v });
+
+/** Vale para qualquer um dos `values` (a chave/valor do seletor apontam para o primeiro, para a checagem do catálogo). */
+const oneOf = (k: AvatarPartKey, values: readonly number[]): Selector =>
+  Object.assign((c: Cfg) => values.includes(c[k]), { key: k, value: values[0] ?? 0 });
 
 type Pt = readonly [number, number];
 type Seg =
@@ -532,6 +561,35 @@ export const PARTS: readonly Part[] = [
     d: 'M256,88C318,88 356,134 356,210C356,290 330,382 256,382C182,382 156,290 156,210C156,134 194,88 256,88Z',
   },
   { name: 'neck_shadow', layer: 4, d: 'M224,366Q256,402 288,366L292,396L220,396Z', fill: 'shade' },
+
+  // Sombreado (fatia 5): formas translúcidas sem input novo. Ver `docs/avatar-rig.md`, seção 'Sombreado'.
+  // Mandíbula em dois degraus (borda suave): fora de uma elipse, a partir do centro dela (sem borda reta).
+  {
+    name: 'shade_jaw_soft',
+    layer: 4,
+    fill: 'shade',
+    opacity: 0.12,
+    clip: 'face',
+    d: jawRing(256, 226, 124, 112),
+  },
+  {
+    name: 'shade_jaw',
+    layer: 4,
+    fill: 'shade',
+    opacity: 0.16,
+    clip: 'face',
+    d: jawRing(256, 226, 124, 124),
+  },
+  { name: 'shade_cheek_l', layer: 4, fill: 'blush', opacity: 0.28, d: ell(194, 292, 24, 14) },
+  { name: 'shade_cheek_r', layer: 4, fill: 'blush', opacity: 0.28, d: ell(318, 292, 24, 14) },
+  {
+    name: 'shade_beard_neck', // sombra no pescoço sob a barba cheia, bigode+cavanhaque e cavanhaque
+    layer: 4,
+    fill: 'deep',
+    opacity: 0.35,
+    when: oneOf('beard', [1, 3, 4]),
+    d: 'M222,386L290,386L289,414Q256,434 223,414Z',
+  },
   // Barbas (camada 4, logo depois do rosto: boca, nariz e bigode vêm por cima). Cor = `hair_color`.
   {
     name: 'beard_1', // barba cheia com bigode e furo da boca
@@ -1078,11 +1136,43 @@ export const PARTS: readonly Part[] = [
   hatPart(10, 'panel', '#2D2D31', 'M300,70C340,80 366,110 366,172Q330,160 300,158Z'),
   hatPart(10, 'brim', '#C23030', 'M214,166Q330,144 436,176L430,192Q330,180 216,186Z'),
   hatPart(10, 'button', '#C23030', ell(256, 68, 7, 6)),
+
+  // 7. Brilhos (por cima do cabelo e dos chapéus; somem com chapéu)
+  {
+    name: 'shade_bald_gloss', // careca: brilho curvo no alto da testa
+    layer: 7,
+    fill: '#FFFFFF',
+    opacity: 0.28,
+    clip: 'face',
+    when: is('hair', 0),
+    hideWithHat: true,
+    d: 'M214,134Q246,118 282,128Q250,128 220,148Q208,146 214,134Z',
+  },
+  {
+    name: 'shade_hair_gloss', // cabelo (menos coque e careca): brilho curvo no alto, recortado pelo cabelo
+    layer: 7,
+    fill: '#FFFFFF',
+    opacity: 0.2,
+    clip: 'hair',
+    hideWithHat: true,
+    d: 'M188,142Q204,108 252,96Q282,92 306,100Q262,104 232,122Q210,134 200,160Q184,160 188,142Z',
+  },
 ];
 
 /** Peça escolhida pela config (`when`) e não escondida pelo chapéu (`hideWithHat`). */
 export const isShown = (p: Part, c: Cfg): boolean =>
-  (!p.when || p.when(c)) && !(p.hideWithHat === true && c.hat !== 0);
+  (!p.when || p.when(c)) &&
+  !(p.hideWithHat === true && c.hat !== 0) &&
+  (p.clip !== 'hair' || clipPaths(p, c).length > 0);
+
+/** Paths do recorte de uma peça de sombreado: o rosto escolhido ou os `hair_<n>_front` do cabelo escolhido. */
+export function clipPaths(p: Part, c: Cfg): string[] {
+  if (p.clip === 'face')
+    return PARTS.filter((x) => x.name.startsWith('face_') && x.when?.(c)).map((x) => x.d);
+  if (p.clip === 'hair')
+    return PARTS.filter((x) => x.name === `hair_${c.hair}_front`).map((x) => x.d);
+  return [];
+}
 
 /** Defensivo: cabelo que não combina com chapéu (dado antigo) é desenhado como `hat` 0. */
 export const effectiveCfg = (c: Cfg): Cfg => (isHatAllowed(c.hair, c.hat) ? c : { ...c, hat: 0 });
@@ -1100,6 +1190,9 @@ export function selectParts(cfg: Cfg): Part[] {
 export function resolveFill(fill: Fill, c: Cfg): string {
   if (fill === 'skin') return (SKIN_COLORS[c.skin] ?? SKIN_COLORS[0]!).base;
   if (fill === 'shade') return (SKIN_COLORS[c.skin] ?? SKIN_COLORS[0]!).shade;
+  const skin = SKIN_COLORS[c.skin] ?? SKIN_COLORS[0]!;
+  if (fill === 'deep') return mixHex(skin.shade, '#2A1208', 0.4);
+  if (fill === 'blush') return mixHex(skin.shade, '#D2475A', 0.5);
   if (fill === 'bg') return BG_COLORS[c.bg_color] ?? BG_COLORS[0]!;
   if (fill === 'hair') return HAIR_COLORS[c.hair_color] ?? HAIR_COLORS[0]!;
   if (fill === 'iris') return EYE_COLORS[c.eye_color] ?? EYE_COLORS[0]!;
