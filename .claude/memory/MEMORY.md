@@ -9,3 +9,4 @@
 - [Receitas do editor Rive](rive-editor-receitas.md) — como operar o editor Rive por automação: receitas validadas, coordenadas, armadilhas
 - [PR e revisão](feedback_pr_e_revisao.md) — gh instalado, abrir o link do PR, Codex só com o diff no prompt (erro 740), worktree curto, pedir autorização para downloads
 - [Autonomia no Rive](feedback_autonomia_rive.md) — o agente faz o trabalho no editor Rive; nunca gerar o .riv por código
+- [Monetização](decisao_monetizacao.md) — decidido 2026-11-04: gratuito + cosméticos + Trucaço Plus R$ 9,90/mês; sem doação; anúncio nunca na mesa, banner discreto; IMPLANTAR SÓ NO FINAL DO PROJETO; plano em docs/monetizacao.md
