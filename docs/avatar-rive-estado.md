@@ -250,8 +250,8 @@ Receitas e lições do editor aprendidas:
 Pendências:
 
 - **Matriz de combinações não toda conferida no editor.** Hair 8, 12 e 16, entre outros, foram vistos só no runtime web.
-- **Divergência do recorte do cabelo**: no fallback o brilho usa o `hair_<n>_front` do cabelo escolhido; no Rive usa o Solo inteiro. Se o Solo abranger mais que o cabelo escolhido, o brilho pode cair sobre a pele. Conferir combinação a combinação no editor.
-- **Assets duplicados** no painel Assets do Rive: limpar antes de exportar a próxima versão.
+- ~~**Divergência do recorte do cabelo**~~: fechada em 04/11/2026 como falso alarme. Um Solo renderiza só o filho ativo, então o recorte no Rive equivale ao cabelo escolhido. Verificado no runtime com todos os formatos de `hair` (ver `docs/avatar-rig.md`, seção 3.2).
+- ~~**Assets duplicados** no painel Assets do Rive~~: não são duplicados nem sobras. Os nomes de importação aparecem como nós em uso na hierarquia; nada a apagar (ver "Fechamento: cabelos longos").
 - **ClipPath nativo** (react-native-svg, iOS e Android) não visto em aparelho.
 - Aparelho iOS/Android não testado. O Rive não é o renderizador de produção (ADR 0002).
 
@@ -285,9 +285,11 @@ Geometria por peça: `docs/avatar-rig.md`, seção 3.3.
 
 ### Pendências que continuam
 
-1. Cabelos 2, 12 e 14 cobrem de 5% a 40% dos olhos e das sobrancelhas (medido; fora do escopo desta correção).
-2. Brilho do cabelo: no Rive recorta pelo Solo inteiro (`cabelo4a`); no fallback, pelo cabelo escolhido (divergência da fatia 5).
-3. Assets de importação ainda no painel Assets do Rive: `shade_*`, `fatia2`, `fatia3a`, `fatia3b`, `fatia4b`, `cabelo4a`, `boca2`, `avatar_partes`, `hair_short`, `face_oval`. Não está provado que estão sem uso: conferir antes de apagar.
+(Estado atualizado em 04/11/2026; detalhes na seção "Fechamento: cabelos longos".)
+
+1. ~~Cabelos 2, 12 e 14 cobrem olhos e sobrancelhas~~: fechado na branch `fix/avatar-cabelos-longos`. Continuam cobrindo parte do rosto os cabelos 4, 6, 11, 13 e 15 (fora do escopo).
+2. ~~Brilho do cabelo recorta pelo Solo inteiro~~: falso alarme, fechado (o Solo renderiza só o filho ativo).
+3. ~~Assets de importação no painel Assets~~: não são sobras; nada a apagar.
 4. Opacidade do cabelo 18 com `hair_color` 3 não lida depois da correção.
 5. Matriz de combinações da fatia 5 ainda não conferida toda no editor.
 6. iOS e Android não testados; `ClipPath` nativo não visto em aparelho.
@@ -299,3 +301,24 @@ Geometria por peça: `docs/avatar-rig.md`, seção 3.3.
 - Digitar X/Y e ângulo/distância das alças no inspetor do Edit Vertices reproduz um SVG com exatidão.
 - As exportações vão para `D:\Downloads` (não `C:\Users\marce\Downloads`).
 - A sessão do Chrome pode cair e o Rive pedir login. Nunca digitar credenciais: o usuário refaz o login.
+
+## Fechamento: cabelos longos (04/11/2026, branch `fix/avatar-cabelos-longos`)
+
+Geometria das peças `hair_2_front`, `hair_12_front` e `hair_14_front` (tabelas vértice a vértice em `docs/avatar-rig.md`, seção 3.4). Cobertura de olhos e sobrancelhas de 0% com folga de 6 px. `assets/rive/avatar.riv` com 60.502 bytes (`avatar (22).riv`); só vértices mudaram, sem nome, camada, hierarquia ou input novo. O fallback vetorial tem a mesma geometria, salvo o `hair_12_front`: sem peça de trás, ele ganhou borda interna recuada abaixo de y 240 (faixa de fundo de no máximo 3 px nos 6 rostos); o `.riv` (22) recebeu esses vértices e foi validado no runtime web (6 rostos).
+
+### Fechado nesta branch
+
+- **Cabelos 2, 12 e 14** sem cobrir olhos e sobrancelhas (ver acima).
+- **Brilho do cabelo: falso alarme.** A suspeita era que o recorte pelo Solo `cabelo4a` inteiro vazaria para a pele. Um Solo renderiza só o filho ativo, então o recorte no Rive equivale ao cabelo escolhido. Verificado no runtime web com todos os formatos de `hair` (0 a 18): o brilho não vazou. A divergência saiu de `docs/avatar-rig.md` (3.2), `docs/adr/0008-sombreado-fixo-sem-sombra-projetada-e-recorte-por-solo.md` e `CHANGELOG.md`.
+- **Assets de importação não são sobras.** `shade_*`, `fatia2`, `fatia3a`, `fatia3b`, `fatia4b`, `cabelo4a`, `boca2`, `avatar_partes`, `hair_short` e `face_oval` aparecem como nós em uso na hierarquia. Nada a apagar. Os nós vazios `jawsoftnew_new` e `jawnew_new` já tinham sido removidos.
+
+### Incidente no editor e lições
+
+- **Incidente:** um clique errado deixou nada selecionado, e os valores digitados viraram atalhos de opacidade em centenas de paths. Foi desfeito com Ctrl+Z. Depois, o `.riv` foi comparado com a versão anterior (`avatar (20).riv`) pixel a pixel em 85 combinações (lista em `docs/avatar-rig.md`, 3.4): só os cabelos 2, 12 e 14 mudaram.
+- **Conferir o campo antes de digitar.** Com nada selecionado, dígitos viram atalhos de opacidade. Confirmar que o campo está em edição antes de digitar número.
+- **Comparação por pixels como teste de regressão do `.riv`:** renderizar cada combinação no runtime web num canvas de 160 px (`drawImage` + `getImageData`) e comparar com a versão anterior. Canvas com CSS de 1 px dá superfície 1x1 e leitura em branco, então o tamanho do canvas precisa ser o real. O piscar do idle gera diferença de 90 a 330 px mesmo sem mudança; comparar a versão anterior com ela mesma dá o mesmo ruído, que serve de linha de base.
+
+### Pendências que continuam
+
+- Cabelos 4, 6, 11, 13 e 15 ainda cobrem parte do rosto (números em `docs/avatar-rig.md`, 3.4).
+- iOS e Android não testados; `ClipPath` nativo não visto em aparelho.

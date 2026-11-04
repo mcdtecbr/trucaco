@@ -4,7 +4,24 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Avatar: fechamento das pendências visuais (2026-11-04), sem commit
+### Avatar: cabelos longos 2, 12 e 14 sem cobrir olhos (2026-11-04), branch `fix/avatar-cabelos-longos`, ainda não mesclada
+
+Correção de geometria, sem decisão nova de arquitetura. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento: cabelos longos") e `docs/avatar-rig.md` (seção 3.4). `assets/rive/avatar.riv` reexportado como `avatar (22).riv` (60.502 bytes, 15 Numbers e 16 triggers; só vértices mudaram). Sem mudança de catálogo, de inputs nem de migração; `PROTOCOL_VERSION` continua 5. Não validado em aparelho iOS/Android.
+
+#### Corrigido
+
+- Cabelos 2 (longo ondulado), 12 (longo de lado) e 14 (longo liso): a abertura do rosto na peça da frente foi alargada e a linha do cabelo subiu, então a franja deixou de cobrir olhos e sobrancelhas (antes 13% a 53%; depois 0% com folga de 6 px). Rive e fallback vetorial (`packages/avatar/src/art.ts`) com a mesma geometria. Silhueta de trás mantida.
+
+#### Alterado
+
+- `packages/avatar/src/art.test.ts` ganhou o teste "franja dos cabelos 1, 2, 5, 7, 10, 12, 14 e 17 deixa sobrancelhas e olhos livres". Para sobrancelhas, zero toque; para olhos, até 5% dos pontos (o cílio do estilo 5 pode encostar).
+
+#### Divergências conhecidas
+
+- Cabelos 4, 6, 11, 13 e 15 ainda cobrem parte de olhos ou sobrancelhas (até 57% no 15). Fora deste ajuste.
+- iOS e Android não testados.
+
+### Avatar: fechamento das pendências visuais (2026-11-04), mesclada no PR #17 (3403f40)
 
 Branch `fix/avatar-pendencias`. Detalhes em `docs/avatar-rive-estado.md` (seção "Fechamento das pendências visuais") e `docs/avatar-rig.md` (seção 3.3). `assets/rive/avatar.riv` reexportado (60.502 bytes, 15 Numbers, 16 triggers). Sem mudança de catálogo, de inputs nem de migração. Não validado em aparelho iOS/Android.
 
@@ -22,7 +39,10 @@ Branch `fix/avatar-pendencias`. Detalhes em `docs/avatar-rive-estado.md` (seçã
 
 #### Divergências conhecidas
 
-- Continuam: cabelos 2, 12 e 14 cobrem de 5% a 40% dos olhos e das sobrancelhas; brilho do cabelo no Rive recorta pelo Solo inteiro (no fallback, pelo cabelo escolhido); assets de importação ainda no painel Assets do Rive. Lista completa em `docs/avatar-rive-estado.md`.
+- Cabelos 2, 12 e 14 (cobertura de olhos e sobrancelhas): fechado na branch `fix/avatar-cabelos-longos`, ver a entrada acima.
+- Brilho do cabelo: falso alarme, fechado. Um Solo renderiza só o filho ativo, então o recorte no Rive equivale ao do fallback.
+- Assets de importação no painel Assets do Rive: não são sobras; nada a apagar.
+- Lista atual em `docs/avatar-rive-estado.md`.
 
 ### Avatar: ampliação do catálogo, fatia 5 (sombreado) (2026-11-04), mesclada no PR #16 (7fdca9e)
 
@@ -40,7 +60,7 @@ Decisão em `docs/adr/0008-sombreado-fixo-sem-sombra-projetada-e-recorte-por-sol
 
 #### Divergências conhecidas
 
-- O brilho do cabelo no Rive recorta pelo Solo inteiro; no fallback, pelo `hair_<n>_front` do cabelo escolhido. Se o Solo abranger mais que o cabelo, o brilho pode cair sobre a pele. A conferir no editor.
+- ~~O brilho do cabelo no Rive recorta pelo Solo inteiro~~: falso alarme, fechado em 04/11/2026. Um Solo renderiza só o filho ativo, então o recorte no Rive equivale ao `hair_<n>_front` do fallback. Verificado com todos os formatos de `hair`.
 
 ### Avatar: ampliação do catálogo, fatia 4 (cabelo, barba e chapéu) (2026-11-05), mesclada no PR #15
 
