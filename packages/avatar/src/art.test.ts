@@ -1,19 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { AVATAR_PART_COUNTS, AVATAR_PART_KEYS, DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
+import {
+  AVATAR_PART_COUNTS,
+  AVATAR_PART_KEYS,
+  DEFAULT_AVATAR_PARTS,
+  HAIR_WITHOUT_HAT,
+} from '@trucaco/protocol';
 import { BG_COLORS, EYE_COLORS, HAIR_COLORS, OUTFIT_COLORS, SKIN_COLORS } from './parts';
-import { PARTS, artGroup, countVertices, groupParts, resolveFill, selectParts } from './art';
+import {
+  PARTS,
+  artGroup,
+  countVertices,
+  effectiveCfg,
+  groupParts,
+  isShown,
+  resolveFill,
+  selectParts,
+} from './art';
 
 const base = DEFAULT_AVATAR_PARTS;
 
 describe('arte do avatar (mesmos paths do rig)', () => {
-  it('tem os 122 paths do rig, com nomes únicos e orçamento de vértices', () => {
+  it('tem os 175 paths do rig, com nomes únicos e orçamento de vértices', () => {
     // Fatia 3: rostos (6) e olhos (6 estilos com branco, íris, miolo, pálpebra/cílios e brilho) refeitos
     // pela prancha de referência, mais 4 sobrancelhas e 8 narizes. O orçamento de vértices subiu de 420
     // para 760 (total atual: 725, ~7 KB a mais no .riv). Só as peças selecionadas são desenhadas, então o
-    // custo por avatar não cresce; o teto segue valendo para a fatia 4 não estourar o arquivo sem aviso.
-    expect(PARTS).toHaveLength(122);
+    // custo por avatar não cresce; o teto segue valendo para a fatia 5 não estourar o arquivo sem aviso.
+    // Fatia 4: 19 cabelos (frente e atrás), 4 barbas e 10 chapéus redesenhados pelas pranchas somam 175 paths
+    // e 1210 vértices; o orçamento subiu de 760 para 1300 (cerca de 12 KB a mais no .riv). Cada avatar
+    // desenha só uns 40 paths, então o custo de desenho por avatar segue parecido.
+    expect(PARTS).toHaveLength(175);
     expect(new Set(PARTS.map((p) => p.name)).size).toBe(PARTS.length);
-    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(760);
+    expect(PARTS.reduce((s, p) => s + countVertices(p.d), 0)).toBeLessThanOrEqual(1300);
   });
 
   it('todo `when` aponta para parte e valor dentro do catálogo', () => {
@@ -50,7 +67,7 @@ describe('arte do avatar (mesmos paths do rig)', () => {
       ) as unknown as typeof base;
       // cada parte com `when` é escolhida exatamente quando sua condição vale
       for (const p of PARTS.filter((q) => q.when && !q.hidden)) {
-        expect(selectParts(parts).includes(p), p.name).toBe(p.when!(parts));
+        expect(selectParts(parts).includes(p), p.name).toBe(isShown(p, effectiveCfg(parts)));
       }
       // exatamente um rosto, um olho de cada lado por estilo, uma boca (2 lábios + interior/dentes)
       const names = selectParts(parts).map((p) => p.name);
@@ -178,6 +195,150 @@ describe('arte do avatar (mesmos paths do rig)', () => {
   });
 });
 
+describe('cabelo, barba e chapéu (Fatia 4)', () => {
+  const names = (c: typeof base) => selectParts(c).map((p) => p.name);
+
+  it('hair: 19 formatos; 0 só a sombra da careca; cada um de 1..18 desenha frente e/ou atrás', () => {
+    expect(AVATAR_PART_COUNTS.hair).toBe(19);
+    expect(names(base).filter((n) => n.startsWith('hair_'))).toEqual(['hair_bald_shade']);
+    for (let hair = 1; hair < 19; hair++) {
+      const own = names({ ...base, hair }).filter((n) => n.startsWith('hair_'));
+      expect(own.length, `hair ${hair}`).toBeGreaterThan(0);
+      // só nós do próprio índice; nunca boné nem chapéu dentro de hair
+      for (const n of own) {
+        expect(n, `hair ${hair}`).toMatch(new RegExp(`^hair_${hair}_(front|back|cap|bun)$`));
+      }
+    }
+    // o rig não tem mais boné nem chapéu dentro de hair
+    expect(PARTS.some((p) => /^(cap|hat)_(crown|brim)$/.test(p.name))).toBe(false);
+  });
+
+  it('cabelo de trás fica na camada 2 (grupo headBack) e o da frente na 7', () => {
+    for (const p of PARTS.filter((x) => /^hair_\d+_back$/.test(x.name))) {
+      expect(p.layer, p.name).toBe(2);
+      expect(artGroup(p), p.name).toBe('headBack');
+    }
+    for (const p of PARTS.filter((x) => /^hair_\d+_(front|cap|bun)$/.test(x.name))) {
+      expect(p.layer, p.name).toBe(7);
+      expect(artGroup(p), p.name).toBe('front');
+    }
+  });
+
+  it('nenhum formato de cabelo repete outro (o desenho muda, não só a cor)', () => {
+    const shapes = new Set<string>();
+    for (let hair = 0; hair < 19; hair++) {
+      shapes.add(
+        selectParts({ ...base, hair })
+          .filter((p) => p.name.startsWith('hair_'))
+          .map((p) => p.d)
+          .join('|'),
+      );
+    }
+    expect(shapes.size).toBe(19);
+  });
+
+  it('beard: 0 sem peça; 1..4 uma peça cada, na camada 4, com a cor do cabelo', () => {
+    expect(names(base).some((n) => n.startsWith('beard_'))).toBe(false);
+    for (let beard = 1; beard < 5; beard++) {
+      const c = { ...base, beard, hair_color: 5 };
+      const parts = selectParts(c).filter((p) => p.name.startsWith('beard_'));
+      expect(parts.map((p) => p.name)).toEqual([`beard_${beard}`]);
+      expect(parts[0]!.layer).toBe(4);
+      expect(artGroup(parts[0]!)).toBe('head');
+      expect(resolveFill(parts[0]!.fill, c)).toBe(HAIR_COLORS[5]);
+    }
+  });
+
+  it('a barba vem depois do rosto e antes da boca na ordem de desenho', () => {
+    const order = selectParts({ ...base, beard: 1 }).map((p) => p.name);
+    expect(order.indexOf('face_oval')).toBeLessThan(order.indexOf('beard_1'));
+    expect(order.indexOf('beard_1')).toBeLessThan(order.indexOf('mouth_0_upper'));
+  });
+
+  it('hat: 0 sem peça; 1..10 peças próprias na camada 7 e sem cabelo da frente', () => {
+    expect(names(base).some((n) => n.startsWith('hat_'))).toBe(false);
+    for (let hat = 1; hat < 11; hat++) {
+      const c = { ...base, hat, hair: 1 };
+      const order = selectParts(c).map((p) => p.name);
+      const own = order.filter((n) => n.startsWith('hat_'));
+      expect(own.length, `hat ${hat}`).toBeGreaterThanOrEqual(3);
+      for (const n of own) expect(n).toMatch(new RegExp(`^hat_${hat}_`));
+      // com chapéu o cabelo da frente some: o chapéu assenta direto na cabeça
+      expect(order.some((n) => n === 'hair_1_front')).toBe(false);
+    }
+  });
+
+  it('mudar hair_color recolore cabelo e barba, mas não o chapéu', () => {
+    const c0 = { ...base, hair: 1, beard: 1, hat: 3, hair_color: 0 };
+    const c1 = { ...c0, hair_color: 6 };
+    const color = (c: typeof c0, name: string) =>
+      resolveFill(PARTS.find((p) => p.name === name)!.fill, c);
+    expect(color(c0, 'hair_1_front')).not.toBe(color(c1, 'hair_1_front'));
+    expect(color(c0, 'beard_1')).not.toBe(color(c1, 'beard_1'));
+    expect(color(c0, 'hat_3_crown')).toBe(color(c1, 'hat_3_crown'));
+  });
+
+  it('o cabelo da frente e o chapéu caem no grupo da frente (acompanham a cabeça)', () => {
+    expect(groupParts('front', { ...base, hair: 8 }).map((p) => p.name)).toEqual(['hair_8_front']);
+    const c = { ...base, hair: 8, hat: 1 };
+    expect(groupParts('front', c).map((p) => p.name)).toEqual([
+      'hat_1_crown',
+      'hat_1_brim',
+      'hat_1_button',
+    ]);
+  });
+});
+
+describe('chapéu esconde o cabelo da frente e do topo', () => {
+  it('hat != 0: nenhuma peça de frente do cabelo (nem a sombra da careca) e nenhum volume acima da cabeça', () => {
+    const front = PARTS.filter((p) => p.layer === 7 && p.name.startsWith('hair_'));
+    expect(front.length).toBeGreaterThan(19);
+    for (const p of front) expect(p.hideWithHat, p.name).toBe(true);
+    for (let hat = 1; hat < AVATAR_PART_COUNTS.hat; hat++) {
+      for (let hair = 0; hair < AVATAR_PART_COUNTS.hair; hair++) {
+        if (HAIR_WITHOUT_HAT.includes(hair)) continue; // combinação inválida (testada abaixo)
+        const names = selectParts({ ...base, hat, hair }).map((p) => p.name);
+        expect(
+          names.filter((n) => /^hair_(\d+_(front|cap|bun)|bald_shade)$/.test(n)),
+          `hat ${hat} hair ${hair}`,
+        ).toEqual([]);
+        // cacheado e afro (volume acima da cabeça) também somem; os longos ficam atrás
+        const back = names.filter((n) => /^hair_\d+_back$/.test(n));
+        expect(back.length > 0, `hat ${hat} hair ${hair}`).toBe(
+          ![3, 8].includes(hair) && PARTS.some((p) => p.name === `hair_${hair}_back`),
+        );
+      }
+    }
+  });
+
+  it('cabelo 2 e 14 com chapéu (dado antigo) desenham como hat 0, sem quebrar', () => {
+    for (const hair of HAIR_WITHOUT_HAT) {
+      for (let hat = 1; hat < AVATAR_PART_COUNTS.hat; hat++) {
+        const a = selectParts({ ...base, hair, hat }).map((p) => p.name);
+        expect(a, `hair ${hair} hat ${hat}`).toEqual(
+          selectParts({ ...base, hair }).map((p) => p.name),
+        );
+        expect(a.some((n) => n.startsWith('hat_'))).toBe(false);
+        expect(
+          groupParts('front', { ...base, hair, hat }).some((p) => p.name.startsWith('hat_')),
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('hat 0: o cabelo da frente volta', () => {
+    expect(selectParts({ ...base, hair: 1 }).map((p) => p.name)).toContain('hair_1_front');
+    expect(selectParts({ ...base, hair: 0 }).map((p) => p.name)).toContain('hair_bald_shade');
+  });
+
+  it('o cabelo de trás começa abaixo do topo da copa (y >= 90) quando fica com chapéu', () => {
+    for (const p of PARTS.filter((x) => /^hair_\d+_back$/.test(x.name) && x.hideWithHat !== true)) {
+      const m = /^M256,(\d+(?:\.\d+)?)/.exec(p.d);
+      expect(Number(m![1]), p.name).toBeGreaterThanOrEqual(90);
+    }
+  });
+});
+
 describe('cores como dimensão própria', () => {
   it('resolveFill de hair/iris por índice, todo índice válido', () => {
     for (let i = 0; i < AVATAR_PART_COUNTS.hair_color; i++) {
@@ -209,7 +370,7 @@ describe('cores como dimensão própria', () => {
       outfit_tee_crew: '#E5E7EB',
       eye_pupil_0: '#1B1B1F',
       brow_l: '#2B1B12',
-      hair_short: '#2B1B12',
+      hair_1_front: '#2B1B12',
       acc_mustache: '#2B1B12',
     };
     for (const [name, color] of Object.entries(legacy)) {
@@ -230,9 +391,9 @@ describe('cores como dimensão própria', () => {
     }
   });
 
-  it('chapéus e bonés não mudam e as cores não alteram a seleção de peças', () => {
-    for (const name of ['cap_crown', 'cap_brim', 'hat_crown', 'hat_brim']) {
-      expect(PARTS.find((x) => x.name === name)!.fill).toMatch(/^#/);
+  it('chapéus e bonés têm cor própria (não há hat_color) e as cores não alteram a seleção de peças', () => {
+    for (const p of PARTS.filter((x) => x.name.startsWith('hat_'))) {
+      expect(p.fill, p.name).toMatch(/^#[0-9A-F]{6}$/i);
     }
     const names = (c: typeof base) => selectParts(c).map((p) => p.name);
     expect(names({ ...base, hair_color: 7, eye_color: 2, outfit_color: 10 })).toEqual(names(base));

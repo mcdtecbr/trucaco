@@ -4,6 +4,24 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Avatar: ampliação do catálogo, fatia 4 (cabelo, barba e chapéu) (2026-11-05), sem commit
+
+Decisão em `docs/adr/0007-cabelo-barba-e-chapeu-seguem-as-pranchas.md`. O `assets/rive/avatar.riv` foi reexportado (58.135 bytes, 15 Numbers, 16 triggers) e validado no runtime web (`@rive-app/canvas` 2.21.6); o catálogo e o fallback vetorial seguem o mesmo desenho. Não validado em aparelho iOS/Android.
+
+#### Alterado
+
+- `avatar.riv` reexportado com cabelo (19), barba (5) e chapéu (11) montados no Rive; estrutura em `docs/avatar-rig.md` (seção 3.1) e diário em `docs/avatar-rive-estado.md`.
+- `hair` 19 formatos na ordem das pranchas (sem repetições só de cor; 0 = careca); boné e chapéu saíram de `hair`. Cabelo de trás (camada 2) e da frente (camada 7) em nós `hair_<n>_back` / `hair_<n>_front`.
+- `PROTOCOL_VERSION` 5. Migração `20261105130000_avatar_cabelo`: **apaga todos os avatares** (`DELETE FROM "avatars"`); testada em Postgres 16 descartável.
+- Orçamento de vértices do `art.ts` de 760 para 1300 (175 paths, 1210 vértices). Removido o campo `tilt` das peças (os chapéus são simétricos).
+- Com `hat != 0` o cabelo da frente e do topo (e `hair_3_back`, `hair_8_back`) some (`Part.hideWithHat`); chapéus redimensionados por `HAT_SCALE`, copa de palha, fedora e pescador cobrindo a cabeça.
+- `HAIR_WITHOUT_HAT = [2, 14]` e `isHatAllowed` no protocolo: cabelo longo ondulado e longo liso não aceitam chapéu (`parseAvatarParts` rejeita; editor zera e desabilita o chapéu; desenho ignora o chapéu se a combinação chegar).
+- `rivFile.test.ts` confere os 15 Numbers, os 16 triggers e as animações `hair_18`, `beard_4` e `hat_10` do `.riv` (sem `it.todo`).
+
+#### Adicionado
+
+- `beard` (5: sem barba, cheia, sombra, cavanhaque com bigode, cavanhaque; cor = `hair_color`) e `hat` (11: nenhum e 10 chapéus e bonés, cada um com a cor da prancha) ao fim de `AVATAR_PART_KEYS` (15 Numbers). Criador de avatar com "Barba" e "Chapéu" depois do cabelo.
+
 ### Avatar: ampliação do catálogo, fatia 3 (rosto) (2026-11-05), sem commit
 
 Decisão em `docs/adr/0006-rosto-segue-as-pranchas-e-avatares-recomecam.md`. `.riv` reexportado (38,5 KB, 13 Numbers, 16 triggers), validado no runtime web; não validado em aparelho iOS/Android.

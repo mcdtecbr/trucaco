@@ -23,7 +23,7 @@ describe('avatarPartsOf', () => {
       undefined,
       null,
       42,
-      JSON.stringify({ ...custom, hat: 1 }),
+      JSON.stringify({ ...custom, glasses: 1 }),
       JSON.stringify({ ...custom, hair: 99 }),
       JSON.stringify({ ...custom, hair: '1' }),
       'null',

@@ -5,7 +5,7 @@
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Avatar, PART_VARIANT_NAMES } from '@trucaco/avatar';
-import { AVATAR_PART_COUNTS } from '@trucaco/protocol';
+import { AVATAR_PART_COUNTS, HAIR_WITHOUT_HAT, isHatAllowed } from '@trucaco/protocol';
 import type { AvatarPartKey, AvatarParts } from '@trucaco/protocol';
 import { MIN_TOUCH, colors, fontSize, radius, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
@@ -30,6 +30,8 @@ export const PART_TITLES: Readonly<Record<AvatarPartKey, string>> = {
   outfit_color: 'Cor da roupa',
   brows: 'Sobrancelhas',
   nose: 'Nariz',
+  beard: 'Barba',
+  hat: 'Chapéu',
 };
 
 /** Ordem de exibição no editor: cada cor logo depois da sua forma (a ordem do contrato é outra). */
@@ -38,6 +40,8 @@ export const EDITOR_PART_ORDER: readonly AvatarPartKey[] = [
   'skin',
   'hair',
   'hair_color',
+  'beard',
+  'hat',
   'eyes',
   'eye_color',
   'brows',
@@ -48,6 +52,19 @@ export const EDITOR_PART_ORDER: readonly AvatarPartKey[] = [
   'accessory',
   'bg_color',
 ];
+
+/** Dica mostrada junto do chapéu quando o cabelo escolhido não combina com chapéu. */
+export const HAT_BLOCKED_HINT = 'Este cabelo não combina com chapéu';
+
+/**
+ * Escolha de uma opção no editor, com a regra cabelo/chapéu (`HAIR_WITHOUT_HAT`): escolher um desses cabelos
+ * zera o chapéu, e escolher chapéu com um deles já ativo não muda nada.
+ */
+export function applyPick(cur: AvatarParts, key: AvatarPartKey, index: number): AvatarParts {
+  if (key === 'hat' && !isHatAllowed(cur.hair, index)) return cur;
+  if (key === 'hair' && HAIR_WITHOUT_HAT.includes(index)) return { ...cur, hair: index, hat: 0 };
+  return { ...cur, [key]: index };
+}
 
 /** Texto da variante `index` da parte `key` (cai em "Opção N" se o catálogo do avatar for menor). */
 export function variantLabel(key: AvatarPartKey, index: number): string {
@@ -82,11 +99,16 @@ function PartPicker({
   value,
   disabled,
   onPick,
+  blocked,
+  hint,
 }: {
   partKey: AvatarPartKey;
   value: number;
   disabled: boolean;
   onPick(key: AvatarPartKey, index: number): void;
+  /** Opções que não podem ser escolhidas agora (ficam desabilitadas). */
+  blocked?: (index: number) => boolean;
+  hint?: string | undefined;
 }) {
   const count = AVATAR_PART_COUNTS[partKey];
   const title = PART_TITLES[partKey];
@@ -97,17 +119,18 @@ function PartPicker({
         {Array.from({ length: count }, (_, i) => {
           const checked = i === value;
           const label = variantLabel(partKey, i);
+          const off = disabled || blocked?.(i) === true;
           return (
             <Pressable
               key={i}
               accessibilityRole="radio"
               accessibilityLabel={`${title}: ${label}`}
               aria-checked={checked}
-              accessibilityState={{ checked, disabled }}
-              aria-disabled={disabled}
-              disabled={disabled}
+              accessibilityState={{ checked, disabled: off }}
+              aria-disabled={off}
+              disabled={off}
               onPress={() => onPick(partKey, i)}
-              style={[styles.option, checked && styles.optionChecked, disabled && styles.off]}
+              style={[styles.option, checked && styles.optionChecked, off && styles.off]}
               testID={`avatar-part-${partKey}-${i}`}
             >
               <Text style={[styles.optionText, checked && styles.optionTextChecked]}>{label}</Text>
@@ -115,6 +138,7 @@ function PartPicker({
           );
         })}
       </View>
+      {hint !== undefined ? <Body testID={`avatar-part-${partKey}-hint`}>{hint}</Body> : null}
     </Card>
   );
 }
@@ -155,6 +179,9 @@ export function AvatarEditorView(p: AvatarEditorViewProps) {
           value={p.parts[key]}
           disabled={p.busy}
           onPick={p.on.pick}
+          {...(key === 'hat' && !isHatAllowed(p.parts.hair, 1)
+            ? { blocked: (i: number) => i !== 0, hint: HAT_BLOCKED_HINT }
+            : {})}
         />
       ))}
       {p.error !== null ? <ErrorText testID="avatar-error">{p.error}</ErrorText> : null}

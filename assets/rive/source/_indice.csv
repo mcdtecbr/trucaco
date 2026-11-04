@@ -1,7 +1,15 @@
 arquivo;camada;controlado_por;cor
 BG.svg;1;sempre;bg
-hair_afro_back.svg;2;hair=2;#2B1B12
-hair_long_back.svg;2;hair=3;#2B1B12
+hair_2_back.svg;2;hair=2;#2B1B12
+hair_3_back.svg;2;hair=3;#2B1B12 (some com hat!=0)
+hair_5_back.svg;2;hair=5;#2B1B12
+hair_6_back.svg;2;hair=6;#2B1B12
+hair_8_back.svg;2;hair=8;#2B1B12 (some com hat!=0)
+hair_11_back.svg;2;hair=11;#2B1B12
+hair_13_back.svg;2;hair=13;#2B1B12
+hair_14_back.svg;2;hair=14;#2B1B12
+hair_15_back.svg;2;hair=15;#2B1B12
+hair_17_back.svg;2;hair=17;#2B1B12
 ears.svg;3;sempre;skin
 neck.svg;3;sempre;skin
 outfit_tee_crew.svg;3;outfit=0;#E5E7EB
@@ -24,6 +32,10 @@ face_heart.svg;4;face_shape=3;skin
 face_triangle.svg;4;face_shape=4;skin
 face_long.svg;4;face_shape=5;skin
 neck_shadow.svg;4;sempre;shade
+beard_1.svg;4;beard=1;#2B1B12
+beard_2.svg;4;beard=2;#2B1B12 (opacidade 0.35)
+beard_3.svg;4;beard=3;#2B1B12
+beard_4.svg;4;beard=4;#2B1B12
 eye_white_0.svg;5;eyes=0;#FFFFFF
 eye_white_0_r.svg;5;eyes=0;#FFFFFF
 eye_pupil_0.svg;5;eyes=0;#1B1B1F
@@ -110,14 +122,55 @@ tongue_center.svg;5;sempre;#E36B7C (oculto)
 tongue.svg;5;sempre;#E36B7C (oculto)
 acc_mustache.svg;6;accessory=1;#2B1B12
 acc_earring.svg;6;accessory=2;#F5B301
-hair_bald_shade.svg;7;hair=0;shade
-hair_short.svg;7;hair=1;#2B1B12
-hair_afro_front.svg;7;hair=2;#2B1B12
-hair_long_front.svg;7;hair=3;#2B1B12
-hair_bun_cap.svg;7;hair=4;#2B1B12
-hair_bun.svg;7;hair=4;#2B1B12
-cap_crown.svg;7;hair=5;#1F2937
-cap_brim.svg;7;hair=5;#111827
-hat_crown.svg;7;hair=6;#D6B982
-hat_brim.svg;7;hair=6;#BE9B5F
-hair_pompadour.svg;7;hair=7;#2B1B12
+hair_bald_shade.svg;7;hair=0;shade (some com hat!=0) (opacidade 0.55)
+hair_1_front.svg;7;hair=1;#2B1B12 (some com hat!=0)
+hair_2_front.svg;7;hair=2;#2B1B12 (some com hat!=0)
+hair_3_front.svg;7;hair=3;#2B1B12 (some com hat!=0)
+hair_4_front.svg;7;hair=4;#2B1B12 (some com hat!=0)
+hair_5_front.svg;7;hair=5;#2B1B12 (some com hat!=0)
+hair_6_front.svg;7;hair=6;#2B1B12 (some com hat!=0)
+hair_7_front.svg;7;hair=7;#2B1B12 (some com hat!=0)
+hair_8_front.svg;7;hair=8;#2B1B12 (some com hat!=0)
+hair_9_front.svg;7;hair=9;#2B1B12 (some com hat!=0)
+hair_10_front.svg;7;hair=10;#2B1B12 (some com hat!=0)
+hair_11_front.svg;7;hair=11;#2B1B12 (some com hat!=0)
+hair_12_front.svg;7;hair=12;#2B1B12 (some com hat!=0)
+hair_13_front.svg;7;hair=13;#2B1B12 (some com hat!=0)
+hair_14_front.svg;7;hair=14;#2B1B12 (some com hat!=0)
+hair_15_front.svg;7;hair=15;#2B1B12 (some com hat!=0)
+hair_16_cap.svg;7;hair=16;#2B1B12 (some com hat!=0)
+hair_16_bun.svg;7;hair=16;#2B1B12 (some com hat!=0)
+hair_17_front.svg;7;hair=17;#2B1B12 (some com hat!=0)
+hair_18_front.svg;7;hair=18;#2B1B12 (some com hat!=0) (opacidade 0.5)
+hat_1_crown.svg;7;hat=1;#2F6FB5
+hat_1_brim.svg;7;hat=1;#1F4F8A
+hat_1_button.svg;7;hat=1;#2F6FB5
+hat_2_crown.svg;7;hat=2;#C23030
+hat_2_brim.svg;7;hat=2;#8F1F23
+hat_2_button.svg;7;hat=2;#C23030
+hat_3_crown.svg;7;hat=3;#1C1C1F
+hat_3_brim.svg;7;hat=3;#0E0E10
+hat_3_button.svg;7;hat=3;#1C1C1F
+hat_4_brim.svg;7;hat=4;#E3BE5B
+hat_4_crown.svg;7;hat=4;#EBCB74
+hat_4_band.svg;7;hat=4;#C8453B
+hat_5_crown.svg;7;hat=5;#C93030
+hat_5_panel.svg;7;hat=5;#A52428
+hat_5_brim.svg;7;hat=5;#A52428
+hat_5_button.svg;7;hat=5;#A52428
+hat_6_dome.svg;7;hat=6;#2F7FC4
+hat_6_cuff.svg;7;hat=6;#2A6DAE
+hat_6_pompom.svg;7;hat=6;#2A6DAE
+hat_7_dome.svg;7;hat=7;#C32B2E
+hat_7_cuff.svg;7;hat=7;#A32024
+hat_7_ribs.svg;7;hat=7;#8E1A1F
+hat_8_brim.svg;7;hat=8;#D9B36A
+hat_8_crown.svg;7;hat=8;#E4C27E
+hat_8_band.svg;7;hat=8;#1B1B1B
+hat_9_brim.svg;7;hat=9;#5F7FA3
+hat_9_crown.svg;7;hat=9;#6E8FB0
+hat_9_eyelets.svg;7;hat=9;#4A6585
+hat_10_crown.svg;7;hat=10;#1A1A1C
+hat_10_panel.svg;7;hat=10;#2D2D31
+hat_10_brim.svg;7;hat=10;#C23030
+hat_10_button.svg;7;hat=10;#C23030

@@ -208,3 +208,27 @@ Lacunas e pendências:
 - `sig_eyebrow` pouco nítido.
 - Layer dos rostos chamada "Layer 2"; grupos e objetos do Rive com nomes genéricos ("Group").
 - Nada testado em iOS/Android. O Rive não é o renderizador de produção (ADR 0002).
+
+## Fatia 4: cabelo, barba e chapéu (05/11/2026)
+
+Ampliação do catálogo, fatia 4 de 5 (ADR 0007). `avatar.riv` de 58.135 bytes (antes 38,5 KB), só o artboard `Avatar`, state machine `Main`, **15 Numbers e 16 triggers**. Dimensões novas: `beard` (5) e `hat` (11); `hair` passa a 19 formatos. A estrutura de cada peça está em `docs/avatar-rig.md` (seção 3.1). Validado no runtime web (`@rive-app/canvas` 2.21.6): `hair` 0 a 18 com `hair_color` 0 a 7; `beard` 0 a 4 com a cor do cabelo; `hat` 0 a 10 com o cabelo da frente sumindo e o de trás permanecendo. Não validado em iOS/Android.
+
+Receitas do editor aprendidas:
+
+- **SVG importado deslocado:** a peça chega fora da origem (+3, +77 no cabelo 4a; (7, 79) no 4b). O Solo foi ajustado para a origem (1, 2) antes de receber os filhos.
+- **Renomear não funciona** para nós e layers desta fatia: ficam os nomes do editor. Identificar pela ordem e pela estrutura (seção 3.1 do rig).
+- **Filho 0 de um Solo** é o de cima da lista do painel.
+- **Reverse no menu de um grupo** inverte a ordem de desenho do artboard inteiro: não usar.
+- **Modo Animate:** clicar no rádio de um filho de Solo grava chave; Ctrl+D e as setas também criam chaves.
+- **Condição de transição:** o dropdown de condição só abre de forma confiável com duas linhas de condição. Por isso as transições de `beard_*` e `hat_*` têm uma segunda linha vazia ("and -"); validado no runtime, as transições funcionam.
+- **Cor de volta ao 0:** a layer `hair_color` não tinha transição Any State → `hair_color_0`, então voltar a 0 mantinha a cor anterior. Corrigido com chaves próprias em `hair_color_0` e a transição. Ao criar outra cor, conferir a transição de volta ao valor 0. A mesma falha pode existir em `eye_color` (ver pendências).
+- **Nome de timeline nova:** esperar 4 s antes de digitar.
+- **Exportação:** no modal "Run Rive anywhere", clicar em "Export your Rive file".
+
+Pendências:
+
+- `eye_color` pode ter o mesmo defeito de `hair_color` (sem transição Any State → `eye_color_0`): não verificado.
+- Franjas dos cabelos 1, 5, 7, 10 e 17 cobrem parte das sobrancelhas (geometria do SVG de origem).
+- Cabelo 18 (raspado, opacidade 50%) parece cinza claro no `.riv`.
+- Chapéu 6 passa um pouco do topo do artboard.
+- Aparelho iOS/Android não testado. O Rive não é o renderizador de produção (ADR 0002).

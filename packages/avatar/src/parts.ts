@@ -9,7 +9,29 @@ export const PART_VARIANT_NAMES: Readonly<Record<AvatarPartKey, readonly string[
   // Fatia 3: os 6 formatos da 1ª linha da prancha de referência, da esquerda para a direita.
   face_shape: ['oval alto', 'redondo', 'quadrado', 'coração', 'queixo em V', 'longo'],
   skin: ['clara', 'dourada', 'morena', 'marrom', 'marrom escura', 'terrosa', 'oliva', 'rosada'],
-  hair: ['careca', 'curto', 'afro', 'longo', 'coque', 'boné', 'chapéu', 'topete'],
+  // Fatia 4: 19 formatos na ordem das pranchas (esquerda para a direita, cima para baixo), sem as
+  // repetições que só mudam de cor (a cor vem de `hair_color`). Boné e chapéu saíram de `hair` (ver `hat`).
+  hair: [
+    'careca',
+    'espetado',
+    'longo ondulado',
+    'cacheado',
+    'coque alto',
+    'longo com franja',
+    'ondulado médio',
+    'topete lateral',
+    'afro',
+    'pixie',
+    'repicado',
+    'bob de lado',
+    'longo de lado',
+    'ondulado curto',
+    'longo liso',
+    'bob repicado',
+    'coque',
+    'bob com franja',
+    'raspado',
+  ],
   // Fatia 3: estilos da prancha de referência, de cima para baixo.
   eyes: [
     'amendoado com delineador',
@@ -48,6 +70,21 @@ export const PART_VARIANT_NAMES: Readonly<Record<AvatarPartKey, readonly string[
     'regata branca',
   ],
   accessory: ['nenhum', 'bigode', 'brinco'],
+  // Fatia 4: barbas (cor = `hair_color`) e chapéus (cada um com a cor da prancha; não há `hat_color`).
+  beard: ['sem barba', 'barba cheia', 'sombra de barba', 'cavanhaque com bigode', 'cavanhaque'],
+  hat: [
+    'sem chapéu',
+    'boné azul',
+    'boné vermelho',
+    'boné preto',
+    'chapéu de palha',
+    'boné vermelho de lado',
+    'gorro azul com pompom',
+    'gorro vermelho canelado',
+    'chapéu fedora',
+    'chapéu de pescador',
+    'boné preto e vermelho',
+  ],
   bg_color: ['verde', 'azul', 'vermelho', 'laranja', 'cinza', 'roxo', 'laranja escuro', 'turquesa'],
   hair_color: [
     'castanho escuro',
@@ -93,7 +130,7 @@ export const SKIN_COLORS: readonly SkinColor[] = [
   { base: '#F1C2AE', shade: '#D49A84' },
 ];
 
-/** Cores de cabelo, sobrancelha e bigode (input `hair_color`). Boné e chapéu não mudam. */
+/** Cores de cabelo, sobrancelha e bigode (input `hair_color`). A barba usa a mesma cor. */
 export const HAIR_COLORS: readonly string[] = [
   '#2B1B12',
   '#14110F',

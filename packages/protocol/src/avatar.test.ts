@@ -3,6 +3,8 @@ import {
   AVATAR_PART_COUNTS,
   AVATAR_PART_KEYS,
   DEFAULT_AVATAR_PARTS,
+  HAIR_WITHOUT_HAT,
+  isHatAllowed,
   VOICE_IDS,
   parseAvatarParts,
 } from './avatar';
@@ -12,14 +14,16 @@ const valid = { ...DEFAULT_AVATAR_PARTS };
 describe('catálogo de partes do avatar', () => {
   it('contagens combinadas', () => {
     expect(AVATAR_PART_KEYS.map((k) => AVATAR_PART_COUNTS[k])).toEqual([
-      6, 8, 8, 6, 5, 6, 3, 8, 8, 3, 11, 4, 8,
+      6, 8, 19, 6, 5, 6, 3, 8, 8, 3, 11, 4, 8, 5, 11,
     ]);
-    expect(AVATAR_PART_KEYS.slice(-5)).toEqual([
+    expect(AVATAR_PART_KEYS.slice(-7)).toEqual([
       'hair_color',
       'eye_color',
       'outfit_color',
       'brows',
       'nose',
+      'beard',
+      'hat',
     ]);
   });
 
@@ -30,6 +34,8 @@ describe('catálogo de partes do avatar', () => {
       outfit_color: 0,
       brows: 0,
       nose: 0,
+      beard: 0,
+      hat: 0,
     });
   });
 
@@ -39,7 +45,7 @@ describe('catálogo de partes do avatar', () => {
 });
 
 describe('parseAvatarParts', () => {
-  it.each(['hair_color', 'eye_color', 'outfit_color', 'brows', 'nose'] as const)(
+  it.each(['hair_color', 'eye_color', 'outfit_color', 'brows', 'nose', 'beard', 'hat'] as const)(
     'rejeita avatar sem %s e índice fora do intervalo',
     (key) => {
       const without = Object.fromEntries(Object.entries(valid).filter(([k]) => k !== key));
@@ -58,13 +64,27 @@ describe('parseAvatarParts', () => {
     expect(parseAvatarParts(max)).toEqual(max);
   });
 
+  it('cabelo 2 (longo ondulado) e 14 (longo liso) não aceitam chapéu', () => {
+    expect(HAIR_WITHOUT_HAT).toEqual([2, 14]);
+    for (const hair of HAIR_WITHOUT_HAT) {
+      expect(parseAvatarParts({ ...valid, hair, hat: 0 })).not.toBeNull();
+      for (let hat = 1; hat < AVATAR_PART_COUNTS.hat; hat++) {
+        expect(parseAvatarParts({ ...valid, hair, hat }), `hair ${hair} hat ${hat}`).toBeNull();
+        expect(isHatAllowed(hair, hat)).toBe(false);
+      }
+    }
+    expect(parseAvatarParts({ ...valid, hair: 3, hat: 4 })).not.toBeNull();
+    expect(isHatAllowed(3, 4)).toBe(true);
+    expect(isHatAllowed(2, 0)).toBe(true);
+  });
+
   it('devolve cópia canônica (sem aliasing)', () => {
     const out = parseAvatarParts(valid);
     expect(out).not.toBe(valid);
   });
 
   it('rejeita chave extra, inclusive __proto__ vindo de JSON', () => {
-    expect(parseAvatarParts({ ...valid, hat: 1 })).toBeNull();
+    expect(parseAvatarParts({ ...valid, glasses: 1 })).toBeNull();
     expect(parseAvatarParts(JSON.parse(`{"__proto__":{"a":1},"face_shape":0}`))).toBeNull();
     expect(
       parseAvatarParts(JSON.parse(JSON.stringify(valid).replace('{', '{"__proto__":{},'))),

@@ -37,10 +37,18 @@ describe('assets/rive/avatar.riv', () => {
     }
   });
 
-  it('tem um input Number para cada parte do avatar (13)', () => {
-    expect(AVATAR_PART_KEYS).toHaveLength(13);
+  // Fatia 4: 15 Numbers (com `beard` e `hat`), 19 cabelos, 5 barbas e 11 chapéus. O .riv guarda o nome das
+  // animações (não o dos objetos): confere a última timeline de cada dimensão.
+  it('tem um input Number para cada parte do avatar (15)', () => {
+    expect(AVATAR_PART_KEYS).toHaveLength(15);
     for (const key of AVATAR_PART_KEYS) {
       expect(text.includes(key), `input ausente no .riv: ${key}`).toBe(true);
+    }
+  });
+
+  it('tem as animações dos cabelos, barbas e chapéus da Fatia 4', () => {
+    for (const name of ['hair_18', 'beard_4', 'hat_10']) {
+      expect(text.includes(name), `animação ausente no .riv: ${name}`).toBe(true);
     }
   });
 });

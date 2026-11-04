@@ -1,9 +1,9 @@
 /**
- * Arte vetorial do avatar: os mesmos 104 paths do rig `assets/rive/avatar.riv` (viewBox 512x512). É o que
+ * Arte vetorial do avatar: os mesmos paths do rig `assets/rive/avatar.riv` (viewBox 512x512). É o que
  * o `AvatarFallback` desenha com react-native-svg, então fallback e Rive mostram o mesmo avatar (ADR 0003).
  * Só caminhos absolutos M/L/C/Q/Z (contagem de vértices confiável). Sem bitmaps.
  */
-import { type AvatarPartKey, type AvatarParts } from '@trucaco/protocol';
+import { type AvatarPartKey, type AvatarParts, isHatAllowed } from '@trucaco/protocol';
 import { BG_COLORS, EYE_COLORS, HAIR_COLORS, OUTFIT_COLORS, SKIN_COLORS } from './parts';
 
 const HAIR = 'hair';
@@ -25,7 +25,8 @@ export interface Part {
   mirror?: boolean; // espelha no eixo vertical central (olho/sobrancelha direitos)
   evenodd?: boolean;
   opacity?: number;
-  tilt?: string; // transform de rotação (boné/chapéu levemente inclinados)
+  /** Some quando há chapéu (`hat !== 0`): o chapéu assenta direto na cabeça, sem o cabelo da frente. */
+  hideWithHat?: boolean;
   hidden?: boolean; // existe no rig mas fica oculto em repouso (boca aberta e línguas dos sinais)
 }
 
@@ -46,6 +47,68 @@ export type Selector = ((c: Cfg) => boolean) & { key: AvatarPartKey; value: numb
 const is = (k: AvatarPartKey, v: number): Selector =>
   Object.assign((c: Cfg) => c[k] === v, { key: k, value: v });
 
+type Pt = readonly [number, number];
+type Seg =
+  | readonly ['L', number, number]
+  | readonly ['Q', number, number, number, number]
+  | readonly ['C', number, number, number, number, number, number];
+const pt = (x: number, y: number) => `${f(x)},${f(y)}`;
+const mx = (x: number) => 512 - x;
+const segEnd = (s: Seg): Pt => [s[s.length - 2] as number, s[s.length - 1] as number];
+function segsToD(segs: readonly Seg[]): string {
+  return segs
+    .map((s) => {
+      const n = s.slice(1) as number[];
+      const pairs: string[] = [];
+      for (let i = 0; i < n.length; i += 2) pairs.push(pt(n[i]!, n[i + 1]!));
+      return s[0] + pairs.join(' ');
+    })
+    .join('');
+}
+/**
+ * Contorno simétrico em torno do eixo x=256: `start` e o último ponto de `segs` ficam no eixo; o desenho
+ * vai pelo lado direito e volta espelhado. Devolve um `d` fechado (só M/L/C/Q/Z).
+ */
+function sym(start: Pt, segs: readonly Seg[]): string {
+  const anchors: Pt[] = [start, ...segs.map(segEnd)];
+  const back: Seg[] = [];
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const s = segs[i]!;
+    const to = anchors[i]!;
+    if (s[0] === 'L') back.push(['L', mx(to[0]), to[1]]);
+    else if (s[0] === 'Q') back.push(['Q', mx(s[1]), s[2], mx(to[0]), to[1]]);
+    else back.push(['C', mx(s[3]), s[4], mx(s[1]), s[2], mx(to[0]), to[1]]);
+  }
+  return `M${pt(...start)}${segsToD(segs)}${segsToD(back)}Z`;
+}
+/**
+ * Arco "de pelúcia" (cacheado, afro): `n` curvas Q sobre a elipse (cx,cy,rx,ry) entre os ângulos `a0` e `a1`
+ * (graus, 0 = direita, crescendo no sentido horário da tela), com a barriga de cada curva `amp` para fora.
+ * Devolve o ponto inicial e os segmentos.
+ */
+function scallop(
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  a0: number,
+  a1: number,
+  n: number,
+  amp: number,
+): { start: Pt; segs: Seg[] } {
+  const at = (deg: number, k = 1): Pt => [
+    cx + rx * k * Math.cos((deg * Math.PI) / 180),
+    cy + ry * k * Math.sin((deg * Math.PI) / 180),
+  ];
+  const segs: Seg[] = [];
+  for (let i = 0; i < n; i++) {
+    const c = at(a0 + ((a1 - a0) * (i + 0.5)) / n, 1 + amp);
+    const p = at(a0 + ((a1 - a0) * (i + 1)) / n);
+    segs.push(['Q', c[0], c[1], p[0], p[1]]);
+  }
+  return { start: at(a0), segs };
+}
+
 /** Par de peças de olho (esquerdo da tela e direito, espelhado): `<name>` e `<name>_r`. */
 const eyePair = (name: string, eyes: number, fill: Fill, d: string): Part[] => [
   { name, layer: 5, fill, when: is('eyes', eyes), d },
@@ -56,9 +119,6 @@ const browPair = (names: readonly [string, string], brows: number, d: string): P
   { name: names[0], layer: 5, fill: HAIR, when: is('brows', brows), d },
   { name: names[1], layer: 5, fill: HAIR, when: is('brows', brows), mirror: true, d },
 ];
-
-const TILT_CAP = 'rotate(-5 256 150)';
-const TILT_HAT = 'rotate(-4 256 150)';
 
 /** Sobrancelha esquerda (da tela) de cada estilo; a direita é a mesma espelhada. */
 const BROWS: readonly string[] = [
@@ -100,19 +160,237 @@ const NOSES: readonly string[] = [
   nose(242, 7, 20, 276, 288), // 7 pequeno e estreito
 ];
 
+/** Cabelo: ${n} = índice de `hair`. Nós `hair_<n>_back` (camada 2) e `hair_<n>_front` (camada 7).
+ * `hideWithHat`: o volume acima da cabeça (cacheado e afro) some com chapéu; os longos começam abaixo da copa. */
+const hairBack = (n: number, d: string, hideWithHat = false): Part => ({
+  name: `hair_${n}_back`,
+  layer: 2,
+  fill: HAIR,
+  when: is('hair', n),
+  ...(hideWithHat ? { hideWithHat: true } : {}),
+  d,
+});
+const hairFront = (n: number, d: string, extra: Partial<Part> = {}, suffix = 'front'): Part => ({
+  name: `hair_${n}_${suffix}`,
+  layer: 7,
+  fill: HAIR,
+  when: is('hair', n),
+  hideWithHat: true,
+  d,
+  ...extra,
+});
+/** Cacheado/afro: anel recortado em curvas. Fechado (`Z`) quando `a1 - a0 = 360`. */
+const curlRing = (cx: number, cy: number, rx: number, ry: number, n: number, amp: number) => {
+  const r = scallop(cx, cy, rx, ry, 0, 360, n, amp);
+  return `M${pt(...r.start)}${segsToD(r.segs)}Z`;
+};
+/** Topo recortado em curvas do `a0` ao `a1`, seguido de `rest` (descida lateral e linha do cabelo). */
+const curlTop = (
+  c: readonly [number, number, number, number],
+  a0: number,
+  a1: number,
+  n: number,
+  amp: number,
+  rest: string,
+) => {
+  const r = scallop(c[0], c[1], c[2], c[3], a0, a1, n, amp);
+  return `M${pt(...r.start)}${segsToD(r.segs)}${rest}Z`;
+};
+const HAIR_BACK: readonly Part[] = [
+  hairBack(
+    2,
+    sym(
+      [256, 92],
+      [
+        ['C', 344, 92, 402, 116, 400, 228],
+        ['Q', 412, 262, 396, 296],
+        ['Q', 380, 330, 398, 364],
+        ['Q', 414, 396, 396, 428],
+        ['Q', 384, 448, 398, 468],
+        ['L', 256, 468],
+      ],
+    ),
+  ),
+  hairBack(3, curlRing(256, 206, 148, 130, 11, 0.16), true),
+  hairBack(
+    5,
+    sym(
+      [256, 92],
+      [
+        ['C', 336, 92, 382, 124, 380, 232],
+        ['L', 388, 424],
+        ['L', 372, 462],
+        ['L', 256, 462],
+      ],
+    ),
+  ),
+  hairBack(
+    6,
+    sym(
+      [256, 92],
+      [
+        ['C', 346, 92, 398, 118, 396, 226],
+        ['Q', 408, 262, 394, 298],
+        ['Q', 382, 334, 402, 372],
+        ['Q', 384, 392, 360, 384],
+        ['L', 256, 384],
+      ],
+    ),
+  ),
+  hairBack(8, curlRing(256, 170, 152, 132, 12, 0.12), true),
+  hairBack(
+    11,
+    sym(
+      [256, 92],
+      [
+        ['C', 346, 92, 392, 128, 390, 232],
+        ['L', 392, 322],
+        ['Q', 390, 356, 366, 358],
+        ['L', 256, 358],
+      ],
+    ),
+  ),
+  hairBack(
+    13,
+    sym(
+      [256, 92],
+      [
+        ['C', 336, 92, 386, 126, 386, 222],
+        ['Q', 402, 262, 388, 292],
+        ['Q', 380, 318, 400, 336],
+        ['Q', 372, 346, 346, 332],
+        ['L', 256, 332],
+      ],
+    ),
+  ),
+  hairBack(
+    14,
+    sym(
+      [256, 92],
+      [
+        ['C', 338, 92, 390, 124, 388, 232],
+        ['L', 398, 432],
+        ['L', 380, 468],
+        ['L', 256, 468],
+      ],
+    ),
+  ),
+  hairBack(
+    15,
+    sym(
+      [256, 92],
+      [
+        ['C', 344, 92, 390, 128, 388, 226],
+        ['L', 392, 306],
+        ['L', 372, 332],
+        ['L', 256, 332],
+      ],
+    ),
+  ),
+  hairBack(
+    17,
+    sym(
+      [256, 92],
+      [
+        ['C', 340, 92, 386, 128, 384, 230],
+        ['L', 384, 330],
+        ['Q', 376, 356, 350, 354],
+        ['L', 256, 354],
+      ],
+    ),
+  ),
+];
+
+/** Escala (sx, sy) de um chapéu em torno do ponto (ax, ay): ajusta o tamanho à cabeça sem refazer o desenho. */
+type HatScale = readonly [sx: number, sy: number, ax: number, ay: number];
+/**
+ * Escala por chapéu (`<n>`) ou por peça (`<n>_<papel>`, vale mais). Com o cabelo da frente escondido
+ * (`hideWithHat`) o chapéu assenta direto na cabeça nua: o topo do crânio fica entre y 88 e 108 conforme o
+ * rosto, a meia-largura em y 150 vai de 100 a 120 e as orelhas ficam em ±127. A copa fecha em y ~166 e a aba
+ * passa pouco da cabeça.
+ */
+const HAT_SCALE: Readonly<Record<string, HatScale>> = {
+  '1': [1, 0.8, 256, 166],
+  '1_brim': [0.95, 0.9, 256, 176],
+  '2': [1, 0.8, 256, 166],
+  '2_brim': [0.95, 0.9, 256, 176],
+  '3': [1, 0.8, 256, 166],
+  '3_brim': [0.95, 0.9, 256, 176],
+  '4_brim': [0.77, 0.75, 256, 148],
+  '4_crown': [1.4, 0.9, 256, 142],
+  '4_band': [1.4, 0.9, 256, 142],
+  '5': [1, 0.8, 256, 172],
+  '5_brim': [0.78, 0.8, 214, 176],
+  '6': [1, 0.9, 256, 178],
+  '7': [1, 0.9, 256, 178],
+  '8_brim': [0.8, 0.8, 256, 148],
+  '8_crown': [1.35, 0.95, 256, 144],
+  '8_band': [1.35, 0.95, 256, 144],
+  '9_brim': [0.95, 0.85, 256, 150],
+  '9_crown': [1.4, 0.95, 256, 152],
+  '9_eyelets': [1.4, 0.95, 256, 152],
+  '10': [1, 0.8, 256, 172],
+  '10_brim': [0.78, 0.8, 214, 176],
+};
+function scaleD(d: string, [sx, sy, ax, ay]: HatScale): string {
+  return d.replace(/([MLCQ])([^MLCQZ]*)/g, (_m, cmd: string, args: string) => {
+    const n = args
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map(Number);
+    const out: string[] = [];
+    for (let i = 0; i < n.length; i += 2)
+      out.push(pt(ax + (n[i]! - ax) * sx, ay + (n[i + 1]! - ay) * sy));
+    return cmd + out.join(' ');
+  });
+}
+/** Peça de chapéu: nó `hat_<n>_<papel>`, camada 7, cor própria. */
+const hatPart = (n: number, role: string, fill: string, d: string): Part => {
+  const s = HAT_SCALE[`${n}_${role}`] ?? HAT_SCALE[String(n)];
+  return {
+    name: `hat_${n}_${role}`,
+    layer: 7,
+    fill,
+    when: is('hat', n),
+    d: s === undefined ? d : scaleD(d, s),
+  };
+};
+/** Boné de frente: copa, aba curva e botão. */
+const cap = (n: number, crown: string, brim: string, button = crown): Part[] => [
+  hatPart(
+    n,
+    'crown',
+    crown,
+    sym(
+      [256, 66],
+      [
+        ['C', 312, 66, 366, 96, 366, 166],
+        ['Q', 312, 152, 256, 152],
+      ],
+    ),
+  ),
+  hatPart(
+    n,
+    'brim',
+    brim,
+    sym(
+      [256, 150],
+      [
+        ['Q', 330, 148, 372, 168],
+        ['Q', 386, 192, 364, 202],
+        ['Q', 310, 178, 256, 176],
+      ],
+    ),
+  ),
+  hatPart(n, 'button', button, ell(256, 66, 7, 6)),
+];
+
 export const PARTS: readonly Part[] = [
   // 1. Fundo
   { name: 'BG', layer: 1, d: rect(0, 0, 512, 512), fill: 'bg' },
 
-  // 2. Cabelo posterior
-  { name: 'hair_afro_back', layer: 2, d: ell(256, 170, 152, 132), fill: HAIR, when: is('hair', 2) },
-  {
-    name: 'hair_long_back',
-    layer: 2,
-    fill: HAIR,
-    when: is('hair', 3),
-    d: 'M142,230C120,120 190,84 256,84C322,84 392,120 370,230L390,430L122,430Z',
-  },
+  // 2. Cabelo posterior (19 estilos de `hair`; ver HAIR_BACK)
+  ...HAIR_BACK,
 
   // 3. Orelhas, pescoço, ombros e roupa
   { name: 'ears', layer: 3, d: ell(142, 248, 13, 25) + ell(370, 248, 13, 25), fill: 'skin' },
@@ -254,6 +532,60 @@ export const PARTS: readonly Part[] = [
     d: 'M256,88C318,88 356,134 356,210C356,290 330,382 256,382C182,382 156,290 156,210C156,134 194,88 256,88Z',
   },
   { name: 'neck_shadow', layer: 4, d: 'M224,366Q256,402 288,366L292,396L220,396Z', fill: 'shade' },
+  // Barbas (camada 4, logo depois do rosto: boca, nariz e bigode vêm por cima). Cor = `hair_color`.
+  {
+    name: 'beard_1', // barba cheia com bigode e furo da boca
+    layer: 4,
+    fill: HAIR,
+    when: is('beard', 1),
+    evenodd: true,
+    d:
+      sym(
+        [256, 408],
+        [
+          ['C', 306, 408, 346, 372, 354, 318],
+          ['L', 358, 240],
+          ['L', 342, 244],
+          ['Q', 336, 286, 312, 294],
+          ['Q', 284, 284, 256, 296],
+        ],
+      ) + ell(256, 334, 56, 24),
+  },
+  {
+    name: 'beard_2', // sombra de barba (rala): faixa no maxilar, com opacidade
+    layer: 4,
+    fill: HAIR,
+    opacity: 0.35,
+    evenodd: true,
+    when: is('beard', 2),
+    d:
+      'M166,254Q172,332 212,368Q256,396 300,368Q340,332 346,254Q336,296 306,310Q256,296 206,310Q176,296 166,254Z' +
+      ell(256, 334, 54, 24),
+  },
+  {
+    name: 'beard_3', // cavanhaque com bigode
+    layer: 4,
+    fill: HAIR,
+    when: is('beard', 3),
+    evenodd: true,
+    d:
+      sym(
+        [256, 392],
+        [
+          ['Q', 296, 390, 312, 360],
+          ['Q', 330, 340, 328, 312],
+          ['Q', 318, 290, 288, 292],
+          ['Q', 270, 288, 256, 298],
+        ],
+      ) + ell(256, 330, 48, 22),
+  },
+  {
+    name: 'beard_4', // cavanhaque (só o queixo)
+    layer: 4,
+    fill: HAIR,
+    when: is('beard', 4),
+    d: 'M226,352Q256,342 286,352Q294,378 256,398Q218,378 226,352Z',
+  },
 
   // 5. Olhos, sobrancelhas, nariz e boca
   // Olhos (6 estilos, na ordem da prancha de referência: cima para baixo): 0 amendoado com delineador,
@@ -516,88 +848,249 @@ export const PARTS: readonly Part[] = [
     d: ell(137, 282, 11, 15) + ell(137, 282, 6, 10),
   },
 
-  // 7. Cabelo frontal, bonés e chapéus
+  // 7. Cabelo frontal e chapéus
   {
     name: 'hair_bald_shade',
     layer: 7,
     fill: 'shade',
     opacity: 0.55,
     when: is('hair', 0),
+    hideWithHat: true,
     d: 'M190,134Q256,98 322,134Q256,114 190,134Z',
   },
-  {
-    name: 'hair_short',
-    layer: 7,
-    fill: HAIR,
-    when: is('hair', 1),
-    d: 'M148,215C140,120 190,84 256,84C322,84 372,120 364,215C350,170 330,150 256,148C182,150 162,170 148,215Z',
-  },
-  {
-    name: 'hair_afro_front',
-    layer: 7,
-    fill: HAIR,
-    when: is('hair', 2),
-    d: 'M150,215C140,110 190,70 256,70C322,70 372,110 362,215C350,168 322,150 256,150C190,150 162,168 150,215Z',
-  },
-  {
-    name: 'hair_long_front',
-    layer: 7,
-    fill: HAIR,
-    when: is('hair', 3),
-    d: 'M146,232C140,130 190,90 256,90C322,90 372,130 366,232C350,170 300,150 256,150C210,150 160,170 146,232Z',
-  },
-  {
-    name: 'hair_bun_cap',
-    layer: 7,
-    fill: HAIR,
-    when: is('hair', 4),
-    d: 'M148,215C140,120 190,88 256,88C322,88 372,120 364,215C350,170 330,150 256,148C182,150 162,170 148,215Z',
-  },
-  { name: 'hair_bun', layer: 7, fill: HAIR, when: is('hair', 4), d: ell(256, 76, 40, 33) },
-  {
-    name: 'cap_crown',
-    layer: 7,
-    fill: '#1E2836',
-    tilt: TILT_CAP,
-    when: is('hair', 5),
-    d: 'M150,170C150,100 200,76 256,76C312,76 362,100 362,170Z',
-  },
-  {
-    name: 'cap_brim',
-    layer: 7,
-    fill: '#111827',
-    tilt: TILT_CAP,
-    when: is('hair', 5),
-    d: 'M148,168Q256,154 362,168Q432,174 452,200Q396,188 322,190L148,188Z',
-  },
-  {
-    name: 'hat_crown',
-    layer: 7,
-    fill: '#D6B982',
-    tilt: TILT_HAT,
-    when: is('hair', 6),
-    d: 'M150,154C150,84 206,60 256,60C306,60 362,84 362,154Z',
-  },
-  {
-    name: 'hat_brim',
-    layer: 7,
-    fill: '#BE9B5F',
-    tilt: TILT_HAT,
-    when: is('hair', 6),
-    d: ell(256, 150, 152, 26),
-  },
-  {
-    name: 'hair_pompadour',
-    layer: 7,
-    fill: HAIR,
-    when: is('hair', 7),
-    d: 'M150,212C130,120 190,66 270,74C340,78 384,112 362,212C350,160 320,140 260,140C200,140 170,150 150,212Z',
-  },
+  // 7. Cabelo frontal (cada estilo desenha só o que fica na frente da cabeça)
+  hairFront(
+    1,
+    'M148,228C136,160 142,112 184,98L190,84L212,96L226,78L244,92L266,76L280,92L304,82L312,98C356,112 376,160 364,228C352,190 340,166 312,160C292,170 262,156 240,166C208,160 176,176 148,228Z',
+  ),
+  hairFront(
+    2,
+    sym(
+      [256, 84],
+      [
+        ['C', 330, 84, 378, 128, 378, 230],
+        ['Q', 386, 268, 372, 300],
+        ['Q', 360, 332, 380, 372],
+        ['C', 350, 372, 334, 322, 334, 266],
+        ['C', 332, 198, 304, 150, 256, 138],
+      ],
+    ),
+  ),
+  hairFront(
+    3,
+    curlTop(
+      [256, 158, 130, 100],
+      155,
+      385,
+      8,
+      0.16,
+      'C350,178 310,160 256,162C202,160 162,178 145,210',
+    ),
+  ),
+  hairFront(
+    4,
+    'M150,226C140,150 180,92 256,92C332,92 372,150 362,226L338,226C336,170 310,122 256,118C202,122 176,170 174,226Z' +
+      ell(256, 68, 38, 34),
+  ),
+  hairFront(
+    5,
+    sym(
+      [256, 86],
+      [
+        ['C', 330, 86, 374, 128, 374, 232],
+        ['L', 380, 384],
+        ['L', 352, 386],
+        ['L', 344, 290],
+        ['L', 338, 188],
+        ['L', 320, 166],
+        ['L', 300, 182],
+        ['L', 280, 160],
+        ['L', 256, 176],
+      ],
+    ),
+  ),
+  hairFront(
+    6,
+    'M362,236C390,150 346,84 256,84C168,84 124,146 140,236C142,284 126,310 138,342C158,328 162,292 166,252C170,206 196,168 236,148C262,150 292,150 318,134C340,160 346,200 350,250C354,292 352,320 376,342C390,306 376,270 362,236Z',
+  ),
+  hairFront(
+    7,
+    'M150,226C136,150 156,100 214,86C266,72 330,76 378,96L368,114C372,124 372,140 362,226C352,190 332,168 296,158C262,150 220,168 196,186C176,198 160,206 150,226Z',
+  ),
+  hairFront(
+    8,
+    curlTop(
+      [256, 150, 112, 90],
+      160,
+      380,
+      9,
+      0.1,
+      'L362,215C350,168 322,150 256,150C190,150 162,168 150,215',
+    ),
+  ),
+  hairFront(
+    9,
+    'M156,206C142,140 172,92 232,80L206,58L262,76C320,76 372,108 362,206C352,180 340,166 320,160C290,166 262,154 238,170C214,166 186,176 156,206Z',
+  ),
+  hairFront(
+    10,
+    'M146,250C132,160 152,100 224,84C270,72 322,80 366,110C386,140 380,200 368,250C356,216 350,190 336,178L322,200L304,168L286,190L268,160L252,186L232,162L214,188L196,166L176,196C166,206 156,226 146,250Z',
+  ),
+  hairFront(
+    11,
+    'M142,258C130,150 158,98 240,84C320,76 388,122 380,258C376,230 370,208 358,188C326,176 296,152 270,118C258,150 214,178 166,200C152,216 146,236 142,258Z',
+  ),
+  hairFront(
+    12,
+    'M144,236C134,140 170,84 250,82C336,80 384,130 384,236C386,300 372,350 382,396C396,436 412,470 400,500C380,470 350,440 346,380C346,320 350,280 340,246C332,206 310,170 262,150C214,160 174,190 160,250C152,300 160,330 144,336C130,300 142,270 144,236Z',
+  ),
+  hairFront(
+    13,
+    'M360,232C380,150 338,96 256,94C176,94 134,150 148,232C150,262 140,284 150,308C166,292 168,262 170,244C174,204 200,176 226,160C246,184 290,170 320,146C340,172 346,210 346,246C348,266 352,286 364,306C380,286 370,258 360,232Z',
+  ),
+  hairFront(
+    14,
+    sym(
+      [256, 88],
+      [
+        ['C', 328, 88, 372, 130, 372, 230],
+        ['L', 380, 402],
+        ['L', 352, 404],
+        ['C', 340, 330, 340, 290, 336, 250],
+        ['C', 330, 196, 300, 150, 256, 140],
+      ],
+    ),
+  ),
+  hairFront(
+    15,
+    'M146,276C130,170 156,104 230,86C300,72 374,102 376,196C376,230 382,254 392,288C370,276 360,262 354,246C352,212 344,190 322,176C300,184 266,160 246,134C226,176 190,200 168,222C160,238 156,256 146,276Z',
+  ),
+  hairFront(
+    16,
+    'M148,215C140,120 190,88 256,88C322,88 372,120 364,215C350,170 330,150 256,148C182,150 162,170 148,215Z',
+    {},
+    'cap',
+  ),
+  hairFront(16, ell(256, 76, 40, 33), {}, 'bun'),
+  hairFront(
+    17,
+    sym(
+      [256, 88],
+      [
+        ['C', 328, 88, 372, 128, 372, 232],
+        ['L', 376, 320],
+        ['Q', 366, 338, 350, 338],
+        ['L', 344, 280],
+        ['L', 338, 196],
+        ['L', 326, 174],
+        ['L', 256, 172],
+      ],
+    ),
+  ),
+  hairFront(
+    18,
+    'M164,200C158,130 200,104 256,102C312,104 354,130 348,200C336,168 304,148 256,146C208,148 176,168 164,200Z',
+    { opacity: 0.5 },
+  ),
+  // Chapéus e bonés (camada 7, depois do cabelo): cada um com as suas cores.
+  ...cap(1, '#2F6FB5', '#1F4F8A'),
+  ...cap(2, '#C23030', '#8F1F23'),
+  ...cap(3, '#1C1C1F', '#0E0E10'),
+  hatPart(4, 'brim', '#E3BE5B', ell(256, 148, 170, 34)),
+  hatPart(
+    4,
+    'crown',
+    '#EBCB74',
+    'M184,142C182,90 224,62 256,62C288,62 330,90 328,142Q256,160 184,142Z',
+  ),
+  hatPart(4, 'band', '#C8453B', 'M184,124Q256,146 328,124L328,142Q256,162 184,142Z'),
+  hatPart(
+    5,
+    'crown',
+    '#C93030',
+    'M148,174C146,100 196,68 256,68C322,68 366,108 366,172Q256,150 148,174Z',
+  ),
+  hatPart(5, 'panel', '#A52428', 'M300,70C340,80 366,110 366,172Q330,160 300,158Z'),
+  hatPart(5, 'brim', '#A52428', 'M214,164Q320,142 432,190Q402,198 372,190Q300,170 214,186Z'),
+  hatPart(5, 'button', '#A52428', ell(256, 68, 7, 6)),
+  hatPart(
+    6,
+    'dome',
+    '#2F7FC4',
+    sym(
+      [256, 70],
+      [
+        ['C', 316, 70, 366, 100, 366, 176],
+        ['L', 256, 176],
+      ],
+    ),
+  ),
+  hatPart(6, 'cuff', '#2A6DAE', 'M146,136Q256,112 366,136L370,176Q256,188 142,176Z'),
+  hatPart(6, 'pompom', '#2A6DAE', ell(256, 56, 25, 23)),
+  hatPart(
+    7,
+    'dome',
+    '#C32B2E',
+    sym(
+      [256, 74],
+      [
+        ['C', 318, 74, 364, 104, 364, 176],
+        ['L', 256, 176],
+      ],
+    ),
+  ),
+  hatPart(7, 'cuff', '#A32024', 'M146,140Q256,116 366,140L370,178Q256,190 142,178Z'),
+  hatPart(
+    7,
+    'ribs',
+    '#8E1A1F',
+    [158, 180, 202, 224, 246, 268, 290, 312, 334, 354]
+      .map((x) => `M${x},146L${x + 4},146L${x + 4},182L${x},182Z`)
+      .join(''),
+  ),
+  hatPart(8, 'brim', '#D9B36A', ell(256, 148, 156, 28)),
+  hatPart(
+    8,
+    'crown',
+    '#E4C27E',
+    'M180,144C178,110 196,80 232,82Q256,98 280,82C316,80 334,110 332,144Q256,160 180,144Z',
+  ),
+  hatPart(8, 'band', '#1B1B1B', 'M180,126Q256,144 332,126L332,144Q256,162 180,144Z'),
+  hatPart(
+    9,
+    'brim',
+    '#5F7FA3',
+    'M122,148Q256,124 390,148Q398,176 372,184Q256,198 140,184Q114,176 122,148Z',
+  ),
+  hatPart(
+    9,
+    'crown',
+    '#6E8FB0',
+    'M184,152C184,92 214,72 256,72C298,72 328,92 328,152Q256,168 184,152Z',
+  ),
+  hatPart(9, 'eyelets', '#4A6585', ell(312, 116, 5, 5) + ell(318, 130, 5, 5)),
+  hatPart(
+    10,
+    'crown',
+    '#1A1A1C',
+    'M148,174C146,100 196,68 256,68C322,68 366,108 366,172Q256,150 148,174Z',
+  ),
+  hatPart(10, 'panel', '#2D2D31', 'M300,70C340,80 366,110 366,172Q330,160 300,158Z'),
+  hatPart(10, 'brim', '#C23030', 'M214,166Q330,144 436,176L430,192Q330,180 216,186Z'),
+  hatPart(10, 'button', '#C23030', ell(256, 68, 7, 6)),
 ];
 
+/** Peça escolhida pela config (`when`) e não escondida pelo chapéu (`hideWithHat`). */
+export const isShown = (p: Part, c: Cfg): boolean =>
+  (!p.when || p.when(c)) && !(p.hideWithHat === true && c.hat !== 0);
+
+/** Defensivo: cabelo que não combina com chapéu (dado antigo) é desenhado como `hat` 0. */
+export const effectiveCfg = (c: Cfg): Cfg => (isHatAllowed(c.hair, c.hat) ? c : { ...c, hat: 0 });
+
 /** Partes selecionadas para uma config, já na ordem de desenho. */
-export function selectParts(c: Cfg): Part[] {
-  return PARTS.filter((p) => !p.hidden && (!p.when || p.when(c)))
+export function selectParts(cfg: Cfg): Part[] {
+  const c = effectiveCfg(cfg);
+  return PARTS.filter((p) => !p.hidden && isShown(p, c))
     .map((p, i) => ({ p, i }))
     .sort((a, b) => a.p.layer - b.p.layer || a.i - b.i)
     .map((x) => x.p);
@@ -665,8 +1158,9 @@ export function artGroup(p: Part): ArtGroup | null {
 }
 
 /** Partes de um grupo para uma config. `hidden` entra só com `withHidden` (boca aberta e línguas). */
-export function groupParts(group: ArtGroup, c: Cfg, withHidden = false): Part[] {
+export function groupParts(group: ArtGroup, cfg: Cfg, withHidden = false): Part[] {
+  const c = effectiveCfg(cfg);
   return PARTS.filter(
-    (p) => artGroup(p) === group && (withHidden || p.hidden !== true) && (!p.when || p.when(c)),
+    (p) => artGroup(p) === group && (withHidden || p.hidden !== true) && isShown(p, c),
   ).sort((a, b) => a.layer - b.layer);
 }
