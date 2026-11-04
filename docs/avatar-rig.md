@@ -94,7 +94,7 @@ O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma 
 - **`accessory` (3)**: 0 nenhum; 1 bigode (cor do cabelo); 2 brinco dourado (#F5B301). Óculos e boné de acessório **não existem**: os óculos escondem o piscar de olho, base dos sinais (ADR 0003).
 - **`bg_color` (8)**: 0 verde (#1E5631); 1 azul (#1D4ED8); 2 vermelho (#991B1B); 3 laranja (#D97706); 4 cinza (#4B5563); 5 roxo (#581C87); 6 laranja escuro (#C2410C); 7 turquesa (#0F766E). Cor chapada, sem degradê.
 
-A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (182 paths e 1252 vértices, orçamento de 1300; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
+A fonte vetorial de todas as variantes é `packages/avatar/src/art.ts` (183 paths e 1256 vértices, orçamento de 1300; 512×512); o fallback vetorial e o `.riv` desenham o mesmo conjunto (ADR 0003). Referência visual: `assets/rive/test_matrix/`.
 
 Regras de composição: as variantes de `hair`, `accessory` e `eyes` se combinam livremente (com chapéu o cabelo da frente some; o cabelo longo e o afro ficam atrás do rosto). Camadas, de trás para a frente: fundo, cabelo de trás, pescoço e ombros/roupa, rosto, barba, sobrancelhas, olhos, nariz, bochechas de sinal, boca, sinais de boca (dentes, língua, sorriso), acessório, cabelo da frente, chapéu.
 
@@ -154,7 +154,7 @@ No fallback (`art.ts`), o pompom é `ell(256, 64, 23, 21)` escalado por `HAT_SCA
 
 Margem do topo (artboard 512): o gorro inteiro cabe no Rive (cúpula em y 80,8; pompom em y 56,5). O SVG de origem do pompom nunca saiu do artboard (topo em 47,5 antes da correção); o excesso visto antes no editor foi leitura errada, não geometria.
 
-### 3.4 Cabelos longos 2, 12 e 14: franja fora dos olhos (branch `fix/avatar-cabelos-longos`, ainda não mesclada)
+### 3.4 Cabelos longos 2, 12 e 14: franja fora dos olhos (mesclada no PR #18, fbc552b)
 
 Os cabelos 2 (longo ondulado), 12 (longo de lado) e 14 (longo liso) cobriam de 13% a 53% de olhos e sobrancelhas (medido com o cabelo dilatado 6 px). A abertura do rosto na peça da frente foi alargada (meia-largura de 78 para 110 px, topo da linha do cabelo de y 138/150 para y 128) e o contorno externo subiu de 4 a 14 px para a mecha não ficar fina. Resultado medido (rasterização, dilatação de 6 px, 4 sobrancelhas e 6 olhos): cobertura 0% em todas as combinações. Silhueta mantida: as peças `hair_<n>_back` não mudaram (o contorno externo da frente fica entre 4 e 16 px dentro do de trás). Ressalva do 12: ele não tem peça de trás, então a abertura larga deixava uma faixa de fundo entre a bochecha e o cabelo (até 20 px a y 300 no rosto oval, até 26 no coração). A borda interna do 12 volta para perto do contorno do rosto abaixo de y 240 (vértices 5, 6, 8 e 9 de novo; ver a tabela): faixa de no máximo 3 px nos 6 rostos entre y 240 e 300, e olhos e sobrancelhas seguem a 6 px de folga (até 0,08% dos pontos do estilo 5). Em contrapartida, o cabelo cobre parte das bochechas dos rostos redondo e quadrado (a borda interna passa por x 178 a 334 em y 300). Mesmo número de vértices (10 por peça) e mesmo orçamento (182 paths, 1252 vértices).
 
@@ -213,9 +213,135 @@ Vértices alterados: 10 de 10. Handles em coordenadas absolutas do artboard 512;
 
 Vértices alterados: 10 de 10. Handles em coordenadas absolutas do artboard 512; segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle). Os segmentos com handle = vértice são retos.
 
-**O que o Rive tem agora (04/11/2026):** `assets/rive/avatar.riv` com 60.502 bytes (`avatar (22).riv`), 15 Numbers e 16 triggers. Só os vértices de `hair_2_front`, `hair_12_front` e `hair_14_front` mudaram, em relação a `avatar (20).riv` (do mesmo tamanho); o `(22)` difere do `(21)` apenas no cabelo 12 (comparação pixel a pixel). Nomes, camadas, hierarquia e inputs seguem iguais. O fallback (`packages/avatar/src/art.ts`) tem a mesma geometria, inclusive o `hair_12_front` com a borda interna da tabela acima (vértices 5, 6, 8 e 9 reajustados, sem faixa de fundo; os mesmos valores foram digitados no Rive no `(22)`). Validação: comparação pixel a pixel no runtime web de 85 combinações (`hair` 0 a 18 com `hair_color` 0 e 3, `skin` 0 a 7, `mouth` 0 a 4, `face_shape` 0 a 5, `beard` 0 a 4, `hat` 0 a 10, `eyes`, `brows`, `nose`, `outfit`, `accessory`, `eye_color`) contra a versão anterior: só os cabelos 2, 12 e 14 mudaram. O ruído do piscar (90 a 330 px) é o mesmo quando a versão anterior é comparada com ela mesma.
+**Estado em `avatar (22).riv` (04/11/2026, antes da seção 3.5):** `assets/rive/avatar.riv` com 60.502 bytes, 15 Numbers e 16 triggers. Só os vértices de `hair_2_front`, `hair_12_front` e `hair_14_front` mudaram, em relação a `avatar (20).riv` (do mesmo tamanho); o `(22)` difere do `(21)` apenas no cabelo 12 (comparação pixel a pixel). Nomes, camadas, hierarquia e inputs seguem iguais. O fallback (`packages/avatar/src/art.ts`) tem a mesma geometria, inclusive o `hair_12_front` com a borda interna da tabela acima (vértices 5, 6, 8 e 9 reajustados, sem faixa de fundo; os mesmos valores foram digitados no Rive no `(22)`). Validação: comparação pixel a pixel no runtime web de 85 combinações (`hair` 0 a 18 com `hair_color` 0 e 3, `skin` 0 a 7, `mouth` 0 a 4, `face_shape` 0 a 5, `beard` 0 a 4, `hat` 0 a 10, `eyes`, `brows`, `nose`, `outfit`, `accessory`, `eye_color`) contra a versão anterior: só os cabelos 2, 12 e 14 mudaram. O ruído do piscar (90 a 330 px) é o mesmo quando a versão anterior é comparada com ela mesma.
 
-Cabelos que ainda cobrem sobrancelha ou olho com folga de 6 px (pendência, fora deste ajuste): 4 (até 26% nos olhos 3 e 5), 6 (até 35%), 11 (6% na sobrancelha 1, 13% no olho 3), 13 (até 42%) e 15 (até 57%). O teste de regressão (`packages/avatar/src/art.test.ts`, "franja dos cabelos 1, 2, 5, 7, 10, 12, 14 e 17 deixa sobrancelhas e olhos livres") cobre 1, 2, 5, 7, 10, 12, 14 e 17. Para as sobrancelhas o teste exige zero toque. Para os olhos, nos cabelos 2, 12 e 14 o teto é 0,5% dos pontos de cada um dos 6 estilos de olho (com folga de 6 px; o estilo 3 e o 5, de pálpebra mais aberta, são os que mais encostam); nos demais, 5% do total. O mesmo teste confere que o 12 não abre faixa de fundo (no máximo 3 px) entre o rosto e o cabelo em y 240 a 300, nos 6 rostos.
+Os cabelos 4, 6, 11, 13 e 15 e a ressalva do 12 foram tratados na seção 3.5. A tabela do `hair_12_front` acima é a da versão anterior à 3.5: a frente do 12 foi reeditada de novo e o `hair_12_back` foi criado. O teste de regressão (`packages/avatar/src/art.test.ts`, "franja de todos os cabelos 1..18 deixa sobrancelhas e olhos livres...") cobre os 18 cabelos em três grupos: ZERO (3, 4, 6, 8, 11, 12, 13, 15: folga de 6 px, nenhum ponto de olho ou sobrancelha coberto), LONGOS (2 e 14: folga de 6 px, teto de 0,5% dos pontos de cada um dos 6 estilos de olho; o cílio do estilo 3 encosta) e JUSTOS (1, 5, 7, 9, 10, 16, 17, 18: sem folga, só não podem sobrepor; nenhuma sobrancelha e teto de 2% por estilo de olho; o cílio do estilo 5 encosta na mecha lateral de 5 e 17). O mesmo teste confere que o 12 não abre faixa de fundo (0 px, com cabelo achado em toda linha) entre o rosto e o cabelo em y 240 a 300, nos 6 rostos.
+
+### 3.5 Cabelos 4, 6, 11, 12, 13 e 15: rosto livre e `hair_12_back` (branch `fix/avatar-cabelos-rosto`, ainda não mesclada)
+
+Os cabelos 4 (coque alto), 6 (ondulado médio), 11 (bob de lado), 13 (ondulado curto) e 15 (bob repicado) cobriam parte de olhos e sobrancelhas (até 26%, 35%, 13%, 42% e 57% de um estilo de olho, com folga de 6 px; 4 a 31% das sobrancelhas). Em todos, a franja subiu para y 176 ou menos e a borda interna da mecha lateral saiu da zona dos olhos (x de 142 a 148 à esquerda e de 366 a 372 à direita); o contorno externo foi alargado de 4 a 12 px para a mecha lateral não ficar fina (sempre dentro do contorno da peça de trás, que não mudou). Silhueta e caráter mantidos: coque e testa limpa no 4, ondas e pontas no 6 e no 13, franja de lado no 11, pontas repicadas no 15.
+
+O cabelo 12 (longo de lado) não tinha peça de trás, então a borda interna da frente precisava voltar ao contorno do rosto abaixo de y 240 e cobria bochechas dos rostos redondo e quadrado. Agora o 12 tem a peça `hair_12_back` (camada 2, sem `hideWithHat`, como as de 2 e 14: fica sob o chapéu) que cobre a faixa de fundo atrás do rosto, e a frente voltou à abertura larga (borda interna em x 144 e 366 em y 250 a 340; a mecha longa do lado direito e a mecha curta do esquerdo mantidas). O brilho (`shade_hair_gloss`) segue recortado só pela frente (`hair_12_front`).
+
+Resultado medido (rasterização por amostragem do contorno, 4 sobrancelhas e 6 estilos de olho, os dois lados): com folga de 6 px, 0% de cobertura em olhos (por estilo) e sobrancelhas nos cabelos 3, 4, 6, 8, 11, 12, 13 e 15; 2 e 14 até 0,2% (um ponto do cílio do estilo 3); 1, 5, 7, 9, 10, 16, 17 e 18 já eram aceitos sem folga (0 sobrancelhas, até 1,8% do estilo 5). Faixa de fundo no 12: 0 px nos 6 rostos entre y 240 e 300 (frente mais `hair_12_back`); pontos de bochecha (194,292) e (318,292) fora da frente do 12 nos 6 rostos. Orçamento: 183 paths e 1256 vértices pela contagem do `countVertices` (teto 1300; eram 182 paths e 1248 vértices: `hair_12_back` soma 8 e as seis frentes mantêm o mesmo número de vértices cada).
+
+Peças alteradas ou novas (reimportar o SVG de `assets/rive/source/` por cima do nó de mesmo nome, ou editar os vértices abaixo no Edit Vertices; `_composto.svg` e `_indice.csv` já trazem tudo): `hair_4_front.svg`, `hair_6_front.svg`, `hair_11_front.svg`, `hair_12_front.svg`, `hair_13_front.svg`, `hair_15_front.svg` e o nó novo `hair_12_back.svg` (importar o SVG, mesmo grupo e as mesmas timelines `hair_color_*` dos outros `hair_<n>_back`). Nenhum nome existente, camada, hierarquia ou input mudou; só o nó `hair_12_back` é novo.
+
+Tabelas em valores LOCAIS do Rive: local = absoluto do artboard 512 menos o centro do bbox do path antigo (indicado no título de cada peça). Cada célula mostra antigo -> novo; "igual" quando não muda. O hair_4_front tem um segundo subpath (a elipse do coque) que não muda.
+
+Validação: `packages/avatar/src/art.test.ts` ("franja de todos os cabelos 1..18...") cobre todas as frentes por estilo de olho e sobrancelha, a ausência de bochecha coberta e de faixa de fundo no 12 e o recorte do brilho; sem exceções anotadas.
+
+#### hair_4_front (6 vértices do corpo; o coque, subpath da elipse, não muda; centro do path antigo = 256,159; local = absoluto - centro)
+
+| Vértice | posição local antiga -> nova | in local antigo -> novo | out local antigo -> novo |
+| ------- | ---------------------------- | ----------------------- | ------------------------ |
+| 0       | -106,67 -> -106,17           | - (igual)               | -116,-9 -> -114,-29      |
+| 1       | 0,-67 (igual)                | -76,-67 -> -68,-67      | 76,-67 -> 68,-67         |
+| 2       | 106,67 -> 106,17             | 116,-9 -> 114,-29       | 106,67 -> 106,17         |
+| 3       | 82,67 -> 82,17               | 82,67 -> 82,17          | 80,11 -> 78,-19          |
+| 4       | 0,-41 (igual)                | 54,-37 -> 50,-37        | -54,-37 -> -50,-37       |
+| 5       | -82,67 -> -82,17             | -80,11 -> -78,-19       | - (igual)                |
+
+Vértices alterados: 6 de 6. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_6_front (9 vértices; centro do path antigo = 257.65,213; local = absoluto - centro)
+
+| Vértice         | posição local antiga -> nova | in local antigo -> novo    | out local antigo -> novo  |
+| --------------- | ---------------------------- | -------------------------- | ------------------------- |
+| 0               | 104.35,23 -> 124.35,23       | 118.35,57 -> 134.35,57     | 132.35,-63 -> 146.35,-63  |
+| 1 (sem mudança) | -1.65,-129 (igual)           | 88.35,-129 (igual)         | -89.65,-129 (igual)       |
+| 2               | -117.65,23 -> -125.65,23     | -133.65,-67 -> -139.65,-67 | -115.65,71 -> -123.65,71  |
+| 3               | -119.65,129 -> -125.65,129   | -131.65,97 -> -137.65,97   | -99.65,115 -> -113.65,115 |
+| 4               | -91.65,39 -> -115.65,39      | -95.65,79 -> -115.65,79    | -87.65,-7 -> -115.65,-5   |
+| 5               | -21.65,-65 (igual)           | -61.65,-45 -> -97.65,-49   | 4.35,-63 (igual)          |
+| 6               | 60.35,-79 (igual)            | 34.35,-63 (igual)          | 82.35,-53 -> 92.35,-47    |
+| 7               | 92.35,37 -> 108.35,37        | 88.35,-13 -> 108.35,-7     | 96.35,79 -> 110.35,79     |
+| 8               | 118.35,129 -> 134.35,129     | 94.35,107 -> 114.35,107    | 132.35,93 -> 146.35,93    |
+
+Vértices alterados: 8 de 9. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_11_front (6 vértices; centro do path antigo = 259.99,170.56; local = absoluto - centro)
+
+| Vértice         | posição local antiga -> nova   | in local antigo -> novo        | out local antigo -> novo         |
+| --------------- | ------------------------------ | ------------------------------ | -------------------------------- |
+| 0               | -117.99,87.44 -> -127.99,87.44 | -113.99,65.44 -> -117.99,65.44 | -129.99,-20.56 -> -139.99,-20.56 |
+| 1 (sem mudança) | -19.99,-86.56 (igual)          | -101.99,-72.56 (igual)         | 60.01,-94.56 (igual)             |
+| 2               | 120.01,87.44 -> 126.01,87.44   | 128.01,-48.56 -> 132.01,-48.56 | 116.01,59.44 -> 124.01,59.44     |
+| 3               | 98.01,17.44 -> 112.01,1.44     | 110.01,37.44 -> 120.01,29.44   | 66.01,5.44 -> 76.01,-0.56        |
+| 4               | 10.01,-52.56 (igual)           | 36.01,-18.56 -> 36.01,-20.56   | -1.99,-20.56 (igual)             |
+| 5               | -93.99,29.44 -> -109.99,5.44   | -45.99,7.44 -> -45.99,-2.56    | -107.99,45.44 -> -113.99,35.44   |
+
+Vértices alterados: 5 de 6. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_12_front (10 vértices; centro do path antigo = 266.17,290.97; local = absoluto - centro)
+
+| Vértice         | posição local antiga -> nova     | in local antigo -> novo            | out local antigo -> novo         |
+| --------------- | -------------------------------- | ---------------------------------- | -------------------------------- |
+| 0 (sem mudança) | -136.17,-54.97 (igual)           | -140.17,-20.97 (igual)             | -144.17,-150.97 (igual)          |
+| 1 (sem mudança) | -16.17,-208.97 (igual)           | -100.17,-206.97 (igual)            | 69.83,-210.97 (igual)            |
+| 2 (sem mudança) | 123.83,-54.97 (igual)            | 123.83,-160.97 (igual)             | 125.83,9.03 (igual)              |
+| 3 (sem mudança) | 119.83,105.03 (igual)            | 109.83,59.03 (igual)               | 133.83,145.03 (igual)            |
+| 4 (sem mudança) | 135.83,209.03 (igual)            | 147.83,179.03 (igual)              | 115.83,179.03 (igual)            |
+| 5               | 83.83,89.03 (igual)              | 87.83,149.03 (igual)               | 53.83,45.03 -> 85.83,49.03       |
+| 6               | 95.83,-50.97 -> 99.83,-40.97     | 73.83,-20.97 -> 99.83,-0.97        | 107.83,-100.97 -> 99.83,-100.97  |
+| 7               | -4.17,-162.97 (igual)            | 55.83,-160.97 -> 63.83,-158.97     | -66.17,-160.97 -> -84.17,-158.97 |
+| 8               | -116.17,-50.97 -> -122.17,-28.97 | -128.17,-100.97 -> -126.17,-100.97 | -94.17,-22.97 -> -122.17,-0.97   |
+| 9               | -120.17,49.03 (igual)            | -70.17,17.03 -> -122.17,19.03      | -148.17,9.03 (igual)             |
+
+Vértices alterados: 5 de 10. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_13_front (9 vértices; centro do path antigo = 258.87,201; local = absoluto - centro)
+
+| Vértice         | posição local antiga -> nova | in local antigo -> novo    | out local antigo -> novo |
+| --------------- | ---------------------------- | -------------------------- | ------------------------ |
+| 0               | 101.13,31 -> 123.13,31       | 111.13,57 -> 133.13,57     | 121.13,-51 -> 143.13,-51 |
+| 1 (sem mudança) | -2.87,-107 (igual)           | 79.13,-105 (igual)         | -82.87,-107 (igual)      |
+| 2               | -110.87,31 -> -130.87,31     | -124.87,-51 -> -134.87,-51 | -108.87,61 -> -128.87,61 |
+| 3               | -108.87,107 -> -124.87,107   | -118.87,83 -> -136.87,83   | -92.87,91 -> -116.87,91  |
+| 4               | -88.87,43 -> -118.87,49      | -90.87,61 -> -118.87,61    | -84.87,3 -> -118.87,7    |
+| 5               | -32.87,-41 (igual)           | -58.87,-25 -> -94.87,-31   | -12.87,-17 (igual)       |
+| 6               | 61.13,-55 (igual)            | 31.13,-31 (igual)          | 81.13,-29 -> 87.13,-29   |
+| 7               | 87.13,45 -> 109.13,49        | 87.13,9 -> 109.13,9        | 89.13,65 -> 109.13,65    |
+| 8               | 105.13,105 -> 125.13,105     | 93.13,85 -> 113.13,85      | 121.13,85 -> 137.13,85   |
+
+Vértices alterados: 8 de 9. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_15_front (8 vértices; centro do path antigo = 266.73,185.37; local = absoluto - centro)
+
+| Vértice         | posição local antiga -> nova   | in local antigo -> novo        | out local antigo -> novo         |
+| --------------- | ------------------------------ | ------------------------------ | -------------------------------- |
+| 0               | -120.73,90.63 -> -132.73,90.63 | -110.73,70.63 -> -128.73,64.63 | -136.73,-15.37 -> -148.73,-15.37 |
+| 1 (sem mudança) | -36.73,-99.37 (igual)          | -110.73,-81.37 (igual)         | 33.27,-113.37 (igual)            |
+| 2               | 109.27,10.63 -> 119.27,10.63   | 107.27,-83.37 -> 125.27,-83.37 | 109.27,44.63 -> 119.27,44.63     |
+| 3               | 125.27,102.63 -> 129.27,102.63 | 115.27,68.63 -> 123.27,68.63   | 103.27,90.63 -> 109.27,90.63     |
+| 4               | 87.27,60.63 -> 105.27,60.63    | 93.27,76.63 -> 105.27,76.63    | 85.27,26.63 -> 105.27,26.63      |
+| 5               | 55.27,-9.37 -> 105.27,-13.37   | 77.27,4.63 -> 99.27,4.63       | 33.27,-1.37 -> 63.27,-9.37       |
+| 6               | -20.73,-51.37 (igual)          | -0.73,-25.37 -> 13.27,-25.37   | -40.73,-9.37 -> -40.73,-15.37    |
+| 7               | -98.73,36.63 -> -120.73,-11.37 | -76.73,14.63 -> -80.73,-13.37  | -106.73,52.63 -> -120.73,14.63   |
+
+Vértices alterados: 7 de 8. Segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle); handle igual ao vértice = segmento reto. O Rive mantém hoje a geometria antiga. Para o nó não se deslocar, mantenha a origem do nó onde está e digite os valores locais (absoluto = local + centro do path antigo, indicado acima).
+
+#### hair_12_back (nó NOVO, 7 pontos distintos; `countVertices` conta 8, porque o último `C` repete o ponto inicial; camada 2, sem hideWithHat, sob o chapéu como as demais)
+
+Importar `assets/rive/source/hair_12_back.svg` (artboard 512, mesma cor `hair_color` e as mesmas 8 timelines `hair_color_*` dos outros `hair_<n>_back`; visibilidade pelo mesmo mecanismo `hair = 12`). Valores absolutos do artboard 512 (local = absoluto - centro do bbox 257.97,266):
+
+| Vértice | posição absoluta | in      | out     |
+| ------- | ---------------- | ------- | ------- |
+| 0       | 256,92           | 174,92  | 338,92  |
+| 1       | 388,232          | 390,124 | 388,232 |
+| 2       | 392,396          | 392,396 | 392,396 |
+| 3       | 376,440          | 376,440 | 376,440 |
+| 4       | 256,440          | 256,440 | 256,440 |
+| 5       | 146,340          | 146,340 | 146,340 |
+| 6       | 124,232          | 124,232 | 122,124 |
+
+**O que o Rive tem agora (04/11/2026):** `assets/rive/avatar.riv` com 60.833 bytes (`avatar (23).riv`; o `(22)` tinha 60.502), 15 Numbers e 16 triggers. Em relação ao `(22)`: as frentes `hair_4_front`, `hair_6_front`, `hair_11_front`, `hair_12_front`, `hair_13_front` e `hair_15_front` tiveram os vértices reeditados (só `d`; nome, camada, hierarquia e inputs iguais). O nó `hair_12_back` é novo: grupo "hb_14 2", último filho do Solo de trás `cabelo4a 2`, depois de `hair_short 2`; vértices reeditados, 8 chaves de cor nas timelines `hair_color_0` a `hair_color_7`, e `Solo.Active` da timeline `hair_12` apontando para o novo filho. Nenhum input novo, nenhuma migração; `PROTOCOL_VERSION` continua 5. O fallback (`art.ts`) tem a mesma geometria, com a peça de trás do 12. Orçamento: 183 paths e 1256 vértices (teto 1300).
+
+Validação: comparação pixel a pixel no runtime web (`@rive-app/canvas` 2.21.6) de 85 combinações, `(23)` contra `(22)`: só os cabelos 4, 6, 11, 12, 13 e 15 mudaram (de 500 a 1650 px; o ruído do piscar é de até ~330 px). Render dos seis cabelos em vários rostos e dos cabelos 4, 6, 11, 12, 13 e 15 com os chapéus 1, 4, 6, 8, 9 e 10: olhos e sobrancelhas livres; a traseira do 12 aparece sob o chapéu. O teste de franja de `art.test.ts` cobre os cabelos 1 a 18 sem exceções; as tolerâncias estão explicadas no código.
+
+Divergência anotada pelo agente do Rive: nas peças 6 e 11, os valores das tabelas foram digitados sem somar a diferença de origem do Rive (cerca de 0,65 px em X no 6 e 1 px em X no 11). É sub-pixel, e a comparação visual não achou diferença.
+
+Não validado: inputs do state machine no preview do editor (a validação foi por timeline, canvas e runtime web); aparelho iOS/Android. A silhueta da mecha traseira do 12 (diagonal à esquerda, da mandíbula ao pescoço) é escolha da rai-avatar; o usuário pode pedir outra.
 
 ## 4. Teste de aceitação
 
