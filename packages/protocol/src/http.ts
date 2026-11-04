@@ -5,6 +5,9 @@
  * (`http/httpContract.test.ts`) quebra se um código novo aparecer no servidor sem entrada aqui.
  */
 import type { AvatarParts } from './avatar';
+import { cleanFreeText } from './messages';
+import type { VariantId } from './catalogs';
+import type { PublicAchievement, UserAchievement, UserMission } from './gamification';
 import type { Format, RoomOptions, Visibility } from './room';
 
 /**
@@ -12,9 +15,13 @@ import type { Format, RoomOptions, Visibility } from './room';
  * (`ServerError`). Conjunto = catálogo congelado em `apps/server/src/errorCodes.contract.test.ts`
  * mais `INVALID_REFRESH_TOKEN` (emitido por variável, em `/auth/refresh`) e `BO3_REQUIRES_PRIVATE`
  * (vem de `validateRoomOptions`). Em ordem alfabética.
+ * Fase 6 (contrato 6A, ainda não emitidos pelo servidor até os blocos 6B a 6F): `ALREADY_LINKED` (409),
+ * `INVALID_BLOCK` (400), `INVALID_ID_TOKEN` (401), `INVALID_REPORT` (400), `PROVIDER_TAKEN` (409),
+ * `SOCIAL_LOGIN_DISABLED` (503) e `USER_NOT_FOUND` (404).
  */
 export const HTTP_ERROR_CODES = [
   'ALREADY_IN_TABLE',
+  'ALREADY_LINKED',
   'ALREADY_SEATED',
   'BANNED',
   'BO3_REQUIRES_PRIVATE',
@@ -22,30 +29,36 @@ export const HTTP_ERROR_CODES = [
   'FORBIDDEN',
   'INTERNAL',
   'INVALID_AVATAR',
+  'INVALID_BLOCK',
   'INVALID_BODY',
   'INVALID_CODE',
   'INVALID_CODES',
+  'INVALID_ID_TOKEN',
   'INVALID_INPUT',
   'INVALID_JSON',
   'INVALID_NICKNAME',
   'INVALID_OPTIONS',
   'INVALID_PARTNER',
   'INVALID_REFRESH_TOKEN',
+  'INVALID_REPORT',
   'METHOD_NOT_ALLOWED',
   'NICKNAME_TAKEN',
   'NOT_FOUND',
   'NOT_IMPLEMENTED',
   'NOT_PARTNERS',
   'PAYLOAD_TOO_LARGE',
+  'PROVIDER_TAKEN',
   'QUEUE_COOLDOWN',
   'QUEUE_FULL',
   'RATE_LIMITED',
   'ROOM_FULL',
   'SERVICE_UNAVAILABLE',
+  'SOCIAL_LOGIN_DISABLED',
   'TABLE_UNAVAILABLE',
   'UNAUTHORIZED',
   'UNAVAILABLE',
   'UNSUPPORTED_MEDIA_TYPE',
+  'USER_NOT_FOUND',
   'USE_LOBBY',
 ] as const;
 
@@ -108,6 +121,8 @@ export interface MeResponse {
   readonly avatar: AvatarParts | null;
   /** ISO 8601. */
   readonly createdAt: string;
+  /** Partidas e vitórias por variante (só partidas terminadas e contadas pela Fase 6). */
+  readonly stats: UserStats;
 }
 
 /** `PUT /me` (corpo `{ nickname }`) -> 200. */
@@ -171,4 +186,260 @@ export interface RefreshRequest {
 export type LogoutRequest = { readonly refreshToken: string } | { readonly all: true };
 export interface JoinTableRequest {
   readonly code: string;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fase 6 (contrato 6A): login social, vínculo, perfil, histórico, bloqueio, denúncia, conquistas.
+// ---------------------------------------------------------------------------------------------
+
+/** Caminhos REST da Fase 6 (relativos à raiz da API). `:id` e `:userId` são UUID. */
+export const HTTP_ROUTES = {
+  authGoogle: '/auth/google',
+  authApple: '/auth/apple',
+  authLink: '/auth/link',
+  matches: '/matches',
+  myAchievements: '/me/achievements',
+  myMissions: '/me/missions',
+  myBlocks: '/me/blocks',
+  myBlock: '/me/blocks/:userId',
+  deleteMe: '/me',
+  publicProfile: '/users/:id',
+  reports: '/reports',
+} as const;
+
+export const SOCIAL_PROVIDERS = ['google', 'apple'] as const;
+export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number];
+
+/** Limites de entrada (validados antes de qualquer lógica; o servidor reaplica o rate limit). */
+export const ID_TOKEN_MAX_LENGTH = 4096;
+export const NONCE_MAX_LENGTH = 128;
+export const REFRESH_TOKEN_MAX_LENGTH = 1024;
+export const REPORT_TEXT_MAX_LENGTH = 500;
+/** Denúncias por usuário por hora (rate limit no servidor, em memória do processo). */
+export const REPORT_RATE_LIMIT_PER_HOUR = 5;
+/** Paginação de `GET /matches` (`?limit=&cursor=`): espelho do repositório. */
+export const MATCHES_PAGE_DEFAULT = 20;
+export const MATCHES_PAGE_MAX = 50;
+
+/**
+ * Motivos de denúncia. Espelham `ReportReasonId` do servidor e o enum `report_reason` do banco
+ * (sem migração).
+ */
+export const REPORT_REASONS = [
+  'cheating',
+  'abusive_chat',
+  'offensive_nickname',
+  'harassment',
+  'other',
+] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+
+/** `POST /auth/google` e `POST /auth/apple` (sem Bearer): `provider` tem de bater com a rota. */
+export interface SocialAuthRequest {
+  readonly provider: SocialProvider;
+  /** JWT de identidade emitido pelo provedor. Uso único. Nunca logar. */
+  readonly idToken: string;
+  /** Nonce enviado ao provedor, quando o fluxo o usa. */
+  readonly nonce?: string;
+}
+
+/** `POST /auth/link` (Bearer, convidado): mesma forma do login social; o `userId` vem do token. */
+export type LinkRequest = SocialAuthRequest;
+
+/** `POST /auth/google|apple` -> 200 (conta existente) ou 201 (`created: true`); `POST /auth/link` -> 200. */
+export type SocialAuthResponse = TokenPairResponse & {
+  readonly user: { readonly id: string; readonly nickname: string };
+  readonly created: boolean;
+};
+
+/** `DELETE /me` (Bearer) -> 204. Exige o refresh token como prova de acesso recente. */
+export interface DeleteAccountRequest {
+  readonly refreshToken: string;
+}
+
+export interface VariantStats {
+  readonly played: number;
+  readonly won: number;
+}
+export type UserStats = Readonly<Record<VariantId, VariantStats>>;
+
+/** `GET /users/:id` -> 200. Nunca traz histórico, provedor nem datas. */
+export interface PublicProfileResponse {
+  readonly id: string;
+  readonly nickname: string;
+  readonly avatar: AvatarParts | null;
+  /** Só as desbloqueadas (nível >= 1). */
+  readonly achievements: readonly PublicAchievement[];
+  readonly stats: UserStats;
+}
+
+export interface MatchSummaryPlayerResponse {
+  readonly seat: number;
+  readonly team: 0 | 1;
+  readonly userId: string | null;
+  /** `null` para bot ou usuário removido. */
+  readonly nickname: string | null;
+  readonly botFrom: number | null;
+}
+
+/** Item de `GET /matches`: sem `events`, `deals` nem `seed`. Datas em ISO 8601. */
+export interface MatchSummaryResponse {
+  readonly id: string;
+  readonly variant: VariantId;
+  readonly format: Format;
+  readonly ironHand: boolean;
+  readonly visibility: Visibility;
+  readonly status: 'finished' | 'cancelled';
+  readonly winnerTeam: 0 | 1 | null;
+  /** Resumo por jogo da série (JSON do servidor; o cliente trata como opaco ou valida o que usa). */
+  readonly games: readonly unknown[];
+  readonly startedAt: string;
+  readonly endedAt: string;
+  readonly players: readonly MatchSummaryPlayerResponse[];
+}
+
+/** `GET /matches?limit=&cursor=` (Bearer) -> 200. Só as partidas do próprio usuário. */
+export interface MatchesPageResponse {
+  readonly items: readonly MatchSummaryResponse[];
+  /** `null` na última página; opaco para o cliente. */
+  readonly nextCursor: string | null;
+}
+
+/** `POST /reports` (Bearer) -> 201 `{}` (sem eco do que foi gravado). */
+export interface ReportRequest {
+  readonly userId: string;
+  readonly matchId?: string;
+  readonly reason: ReportReason;
+  readonly text?: string;
+}
+
+/** `POST /me/blocks` (Bearer) -> 204. Idempotente. */
+export interface BlockRequest {
+  readonly userId: string;
+}
+
+export interface BlockedUser {
+  readonly userId: string;
+  /** `null` se o bloqueado apagou a conta. */
+  readonly nickname: string | null;
+}
+
+/** `GET /me/blocks` -> 200. */
+export interface BlocksResponse {
+  readonly blocks: readonly BlockedUser[];
+}
+
+/** `GET /me/achievements` -> 200: o catálogo inteiro, com progresso (nível 0 = bloqueada). */
+export interface AchievementsResponse {
+  readonly achievements: readonly UserAchievement[];
+}
+
+/** `GET /me/missions` -> 200: missões do dia e da semana corrente. */
+export interface MissionsResponse {
+  readonly missions: readonly UserMission[];
+}
+
+// --- Validadores de corpo (puros; `null` = inválido). Mesma postura de `parseAvatarParts`:
+// objeto simples, sem chave extra (inclui `__proto__`, que o JSON.parse cria como chave própria),
+// tipos e limites exatos. O servidor responde `INVALID_BODY` (ou o código específico) em `null`.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(x: unknown): x is string {
+  return typeof x === 'string' && UUID_RE.test(x);
+}
+
+/** UUID em minúsculas (forma canônica, igual a `normalizeId` do servidor) ou `null`. */
+export function normalizeUuid(x: unknown): string | null {
+  return isUuid(x) ? x.toLowerCase() : null;
+}
+
+/** Objeto simples cujas chaves próprias estão todas em `allowed`; senão `null`. */
+function plainRecord(raw: unknown, allowed: readonly string[]): Record<string, unknown> | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const proto: unknown = Object.getPrototypeOf(raw);
+  if (proto !== Object.prototype && proto !== null) return null;
+  const rec = raw as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (!allowed.includes(key)) return null;
+  }
+  return rec;
+}
+
+function boundedString(x: unknown, max: number): x is string {
+  return typeof x === 'string' && x.length >= 1 && x.length <= max;
+}
+
+export function isSocialProvider(x: unknown): x is SocialProvider {
+  return typeof x === 'string' && (SOCIAL_PROVIDERS as readonly string[]).includes(x);
+}
+
+export function isReportReason(x: unknown): x is ReportReason {
+  return typeof x === 'string' && (REPORT_REASONS as readonly string[]).includes(x);
+}
+
+/** Valida o corpo de `POST /auth/google|apple|link`. */
+export function parseSocialAuthRequest(raw: unknown): SocialAuthRequest | null {
+  const rec = plainRecord(raw, ['provider', 'idToken', 'nonce']);
+  if (rec === null) return null;
+  const { provider, idToken } = rec;
+  if (!isSocialProvider(provider)) return null;
+  if (!boundedString(idToken, ID_TOKEN_MAX_LENGTH)) return null;
+  if (!Object.hasOwn(rec, 'nonce')) return { provider, idToken };
+  const nonce = rec['nonce'];
+  if (!boundedString(nonce, NONCE_MAX_LENGTH)) return null;
+  return { provider, idToken, nonce };
+}
+
+export const parseLinkRequest: (raw: unknown) => LinkRequest | null = parseSocialAuthRequest;
+
+/** Valida o corpo de `DELETE /me`. */
+export function parseDeleteAccountRequest(raw: unknown): DeleteAccountRequest | null {
+  const rec = plainRecord(raw, ['refreshToken']);
+  if (rec === null) return null;
+  const refreshToken = rec['refreshToken'];
+  if (!boundedString(refreshToken, REFRESH_TOKEN_MAX_LENGTH)) return null;
+  return { refreshToken };
+}
+
+/** Valida o corpo de `POST /me/blocks`. */
+export function parseBlockRequest(raw: unknown): BlockRequest | null {
+  const rec = plainRecord(raw, ['userId']);
+  if (rec === null) return null;
+  const userId = normalizeUuid(rec['userId']);
+  if (userId === null) return null;
+  return { userId };
+}
+
+/**
+ * Valida o corpo de `POST /reports`. Ids saem em minúsculas. `text` passa pela limpeza do chat (NUL,
+ * controles, bidi e formatação são recusados; quebras viram espaço; devolve o texto limpo) e vazio é
+ * recusado (omita a chave).
+ */
+export function parseReportRequest(raw: unknown): ReportRequest | null {
+  const rec = plainRecord(raw, ['userId', 'matchId', 'reason', 'text']);
+  if (rec === null) return null;
+  const userId = normalizeUuid(rec['userId']);
+  const reason = rec['reason'];
+  if (userId === null || !isReportReason(reason)) return null;
+  let matchId: string | undefined;
+  if (Object.hasOwn(rec, 'matchId')) {
+    const m = normalizeUuid(rec['matchId']);
+    if (m === null) return null;
+    matchId = m;
+  }
+  let text: string | undefined;
+  if (Object.hasOwn(rec, 'text')) {
+    const rawText = rec['text'];
+    if (typeof rawText !== 'string') return null;
+    const t = cleanFreeText(rawText, REPORT_TEXT_MAX_LENGTH);
+    if (t === null) return null;
+    text = t;
+  }
+  return {
+    userId,
+    reason,
+    ...(matchId === undefined ? {} : { matchId }),
+    ...(text === undefined ? {} : { text }),
+  };
 }

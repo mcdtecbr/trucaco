@@ -22,9 +22,30 @@ import { emittedHttpCodes } from '../errorCodeScan.contract';
 import { buildHealth } from '../index';
 import type { SeatReservation as ServerReservation, QueueStatus } from '../lobby/lobby';
 
+/**
+ * Códigos da Fase 6 declarados no protocol (bloco 6A) e ainda não emitidos pelo servidor. Cada bloco
+ * (6B a 6F) remove daqui os que passar a emitir; a lista tem de ficar vazia ao fim da fase.
+ */
+const PENDING_PHASE6 = [
+  'ALREADY_LINKED',
+  'INVALID_BLOCK',
+  'INVALID_ID_TOKEN',
+  'INVALID_REPORT',
+  'PROVIDER_TAKEN',
+  'SOCIAL_LOGIN_DISABLED',
+  'USER_NOT_FOUND',
+];
+
 describe('contrato HTTP protocol <-> servidor', () => {
+  it('todo item de PENDING_PHASE6 pertence a HTTP_ERROR_CODES', () => {
+    for (const c of PENDING_PHASE6) expect(HTTP_ERROR_CODES as readonly string[]).toContain(c);
+  });
+
+  it.todo('PENDING_PHASE6 vazio ao fim da fase 6 (bloco 6H)');
+
   it('HTTP_ERROR_CODES coincide com os códigos emitidos pelo servidor', () => {
-    expect([...HTTP_ERROR_CODES].sort()).toEqual([...emittedHttpCodes()].sort());
+    const declared = HTTP_ERROR_CODES.filter((c) => !PENDING_PHASE6.includes(c));
+    expect([...declared].sort()).toEqual([...emittedHttpCodes()].sort());
   });
 
   it('a varredura não ficou vazia', () => {
@@ -63,6 +84,7 @@ describe('contrato HTTP protocol <-> servidor', () => {
       provider: 'guest',
       avatar: null,
       createdAt: new Date(0).toISOString(),
+      stats: { paulista: { played: 0, won: 0 }, mineiro: { played: 0, won: 0 } },
     };
     const health: HealthResponse = buildHealth();
     const logoutRefresh: LogoutRequest = { refreshToken: 'r' };

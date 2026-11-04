@@ -209,7 +209,7 @@ describe('SettingsView e BootView', () => {
     );
     expect(html).toContain('Atual: Zé');
     expect(html).toContain('Esse apelido já está em uso');
-    expect(html).toContain('App 1.2.3 · protocolo v5');
+    expect(html).toContain('App 1.2.3 · protocolo v6');
     expect(html).toContain('Sair');
   });
 

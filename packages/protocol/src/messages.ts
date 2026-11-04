@@ -169,6 +169,15 @@ function cleanChatText(raw: string, max: number = CHAT_MAX_LENGTH): string | nul
 }
 
 /**
+ * Limpeza do texto livre de uma denúncia: mesma limpeza do chat (rejeita NUL, controles, bidi e
+ * formatação; quebra de linha e tabulação viram espaço) com teto `max` em code points. Recusado
+ * devolve `null`.
+ */
+export function cleanFreeText(raw: string, max: number): string | null {
+  return cleanChatText(raw, max);
+}
+
+/**
  * Limpeza do significado de um sinal combinado (mensagem `setCode`, REST e leitura do banco).
  * Vazio (só espaços) devolve `''` (apaga o combinado); o resto passa pela mesma limpeza do chat com
  * teto `PARTNER_CODE_MAX_LENGTH`; recusado devolve `null`.
