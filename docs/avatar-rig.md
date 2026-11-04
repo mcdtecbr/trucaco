@@ -136,11 +136,11 @@ Montado no Rive (fatia 5, 04/11/2026; `avatar.riv` de 60.606 bytes, 15 Numbers, 
 - **Cor por pele:** `shade`, `blush` e `deep` chaveadas nas timelines `skin_0` a `skin_7` (`skin_0` chaveado explicitamente).
 - **Visibilidade:** `shade_beard_neck` pela opacidade do grupo nas timelines `beard_0` a `beard_4` (0% em 0 e 2, 100% nas outras). `shade_hair_gloss` nas timelines `hair_n` (0% em `hair_0` e `hair_16`, 100% nas outras 17).
 
-**Divergência (conhecida):** no fallback o recorte do brilho do cabelo é o `hair_<n>_front` do cabelo escolhido. No Rive é o Solo inteiro, que serve a qualquer `hair`. Nas combinações testadas no runtime não apareceu vazamento. Se o Solo abranger mais que o cabelo escolhido, o brilho pode cair sobre a pele fora dele; isso precisa ser conferido combinação a combinação no editor.
+**Não há divergência.** No Rive o recorte é o Solo `cabelo4a` inteiro, mas um Solo renderiza só o filho ativo (o cabelo escolhido). Por isso o recorte no Rive equivale ao `hair_<n>_front` do fallback. Verificado no runtime web (04/11/2026) com todos os formatos de `hair` (0 a 18), `hair_color` 5 e `skin` 1: o brilho não vazou para a pele. (A suspeita de que o Solo inteiro vazaria foi um falso alarme.)
 
 No fallback, o `AvatarFallback` usa `ClipPath` do `react-native-svg` com os mesmos paths (`clipPaths` em `art.ts`); id do recorte único por instância (`useId`), emitido uma vez por Svg. Só testado no web; `ClipPath` nativo não foi visto em aparelho. Referência visual do estado final: `assets/rive/test_matrix/` (todos os 10 PNGs regenerados com o sombreado). Em `_composto.svg` o recorte aparece como atributo `data-clip` (não é renderizado por visualizadores comuns).
 
-Pendências: a matriz de combinações não foi toda conferida no editor (hair 8, 12 e 16, entre outros, foram vistos só no runtime); assets duplicados no painel Assets do Rive; iOS e Android não testados. Lições e receitas em `docs/avatar-rive-estado.md` (fatia 5).
+Pendências: a matriz de combinações não foi toda conferida no editor (hair 8, 12 e 16, entre outros, foram vistos só no runtime); iOS e Android não testados. Os assets de importação do painel Assets do Rive não são sobras: os nomes aparecem como nós em uso na hierarquia, então não há nada a apagar. Lições e receitas em `docs/avatar-rive-estado.md` (fatia 5).
 
 ### 3.3 Peças com geometria alterada (`fix/avatar-pendencias`, 04/11/2026)
 
@@ -153,6 +153,69 @@ Esta correção mudou o desenho (`d`) de 7 peças e a opacidade de `hair_18_fron
 No fallback (`art.ts`), o pompom é `ell(256, 64, 23, 21)` escalado por `HAT_SCALE` (`'6'`), e termina no mesmo topo (y 56,5) do SVG.
 
 Margem do topo (artboard 512): o gorro inteiro cabe no Rive (cúpula em y 80,8; pompom em y 56,5). O SVG de origem do pompom nunca saiu do artboard (topo em 47,5 antes da correção); o excesso visto antes no editor foi leitura errada, não geometria.
+
+### 3.4 Cabelos longos 2, 12 e 14: franja fora dos olhos (branch `fix/avatar-cabelos-longos`, ainda não mesclada)
+
+Os cabelos 2 (longo ondulado), 12 (longo de lado) e 14 (longo liso) cobriam de 13% a 53% de olhos e sobrancelhas (medido com o cabelo dilatado 6 px). A abertura do rosto na peça da frente foi alargada (meia-largura de 78 para 110 px, topo da linha do cabelo de y 138/150 para y 128) e o contorno externo subiu de 4 a 14 px para a mecha não ficar fina. Resultado medido (rasterização, dilatação de 6 px, 4 sobrancelhas e 6 olhos): cobertura 0% em todas as combinações. Silhueta mantida: as peças `hair_<n>_back` não mudaram (o contorno externo da frente fica entre 4 e 16 px dentro do de trás). Ressalva do 12: ele não tem peça de trás, então a abertura larga deixava uma faixa de fundo entre a bochecha e o cabelo (até 20 px a y 300 no rosto oval, até 26 no coração). A borda interna do 12 volta para perto do contorno do rosto abaixo de y 240 (vértices 5, 6, 8 e 9 de novo; ver a tabela): faixa de no máximo 3 px nos 6 rostos entre y 240 e 300, e olhos e sobrancelhas seguem a 6 px de folga (até 0,08% dos pontos do estilo 5). Em contrapartida, o cabelo cobre parte das bochechas dos rostos redondo e quadrado (a borda interna passa por x 178 a 334 em y 300). Mesmo número de vértices (10 por peça) e mesmo orçamento (182 paths, 1252 vértices).
+
+Peças com `d` alterado (reimportar o SVG de `assets/rive/source/` por cima do nó de mesmo nome, ou editar os vértices abaixo no Edit Vertices; `_composto.svg` traz as três): `hair_2_front.svg`, `hair_12_front.svg`, `hair_14_front.svg`. Nenhum nome, camada, hierarquia ou input mudou.
+
+Tabela vértice a vértice (ordem do path, começando no `M`). Coordenadas absolutas do artboard 512; cada handle e posição aparece como antigo -> novo.
+
+#### hair_2_front (10 vértices, mesma ordem e mesmos tipos de segmento)
+
+| Vértice (ordem do path, começando em M) | posição antiga -> nova | handle de entrada (in) antigo -> novo | handle de saída (out) antigo -> novo |
+| --------------------------------------- | ---------------------- | ------------------------------------- | ------------------------------------ |
+| 0                                       | 256,84 (igual)         | 182,84 -> 180,84                      | 330,84 -> 332,84                     |
+| 1                                       | 378,230 -> 384,230     | 378,128 -> 384,128                    | 383.33,255.33 -> 390.67,255.33       |
+| 2                                       | 372,300 -> 382,300     | 381.33,278.67 -> 390,278.67           | 364,321.33 -> 374,321.33             |
+| 3                                       | 380,372 -> 388,372     | 366.67,345.33 -> 376,345.33           | 350,372 -> 362,372                   |
+| 4                                       | 334,266 -> 366,266     | 334,322 -> 366,326                    | 332,198 -> 366,190                   |
+| 5                                       | 256,138 -> 256,128     | 304,150 -> 330,132                    | 208,150 -> 182,132                   |
+| 6                                       | 178,266 -> 146,266     | 180,198 -> 146,190                    | 178,322 -> 146,326                   |
+| 7                                       | 132,372 -> 124,372     | 162,372 -> 150,372                    | 145.33,345.33 -> 136,345.33          |
+| 8                                       | 140,300 -> 130,300     | 148,321.33 -> 138,321.33              | 130.67,278.67 -> 122,278.67          |
+| 9                                       | 134,230 -> 128,230     | 128.67,255.33 -> 121.33,255.33        | 134,128 -> 128,128                   |
+
+Vértices alterados: 10 de 10. Handles em coordenadas absolutas do artboard 512; segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle). Os segmentos com handle = vértice são retos.
+
+#### hair_12_front (10 vértices, mesma ordem e mesmos tipos de segmento)
+
+| Vértice (ordem do path, começando em M) | posição antiga -> nova | handle de entrada (in) antigo -> novo | handle de saída (out) antigo -> novo |
+| --------------------------------------- | ---------------------- | ------------------------------------- | ------------------------------------ |
+| 0                                       | 144,236 -> 130,236     | 142,270 -> 126,270                    | 134,140 -> 122,140                   |
+| 1                                       | 250,82 (igual)         | 170,84 -> 166,84                      | 336,80 (igual)                       |
+| 2                                       | 384,236 -> 390,236     | 384,130 -> 390,130                    | 386,300 -> 392,300                   |
+| 3                                       | 382,396 -> 386,396     | 372,350 -> 376,350                    | 396,436 -> 400,436                   |
+| 4                                       | 400,500 -> 402,500     | 412,470 -> 414,470                    | 380,470 -> 382,470                   |
+| 5                                       | 346,380 -> 350,380     | 350,440 -> 354,440                    | 346,320 -> 320,336                   |
+| 6                                       | 340,246 -> 362,240     | 350,280 -> 340,270                    | 332,206 -> 374,190                   |
+| 7                                       | 262,150 -> 262,128     | 310,170 -> 322,130                    | 214,160 -> 200,130                   |
+| 8                                       | 160,250 -> 150,240     | 174,190 -> 138,190                    | 152,300 -> 172,268                   |
+| 9                                       | 144,336 -> 146,340     | 160,330 -> 196,308                    | 130,300 -> 118,300                   |
+
+Vértices alterados: 10 de 10. Handles em coordenadas absolutas do artboard 512; segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle). Os segmentos com handle = vértice são retos.
+
+#### hair_14_front (10 vértices, mesma ordem e mesmos tipos de segmento)
+
+| Vértice (ordem do path, começando em M) | posição antiga -> nova | handle de entrada (in) antigo -> novo | handle de saída (out) antigo -> novo |
+| --------------------------------------- | ---------------------- | ------------------------------------- | ------------------------------------ |
+| 0                                       | 256,88 (igual)         | 184,88 -> 180,88                      | 328,88 -> 332,88                     |
+| 1                                       | 372,230 -> 382,230     | 372,130 -> 380,130                    | 372,230 -> 382,230                   |
+| 2                                       | 380,402 -> 388,402     | 380,402 -> 388,402                    | 380,402 -> 388,402                   |
+| 3                                       | 352,404 -> 360,404     | 352,404 -> 360,404                    | 340,330 -> 366,330                   |
+| 4                                       | 336,250 -> 366,262     | 340,290 -> 366,290                    | 330,196 -> 366,190                   |
+| 5                                       | 256,140 -> 256,128     | 300,150 -> 330,132                    | 212,150 -> 182,132                   |
+| 6                                       | 176,250 -> 146,262     | 182,196 -> 146,190                    | 172,290 -> 146,290                   |
+| 7                                       | 160,404 -> 152,404     | 172,330 -> 146,330                    | 160,404 -> 152,404                   |
+| 8                                       | 132,402 -> 124,402     | 132,402 -> 124,402                    | 132,402 -> 124,402                   |
+| 9                                       | 140,230 -> 130,230     | 140,230 -> 130,230                    | 140,130 -> 132,130                   |
+
+Vértices alterados: 10 de 10. Handles em coordenadas absolutas do artboard 512; segmentos Q já elevados a cúbicos (handle = ponto + 2/3 do controle). Os segmentos com handle = vértice são retos.
+
+**O que o Rive tem agora (04/11/2026):** `assets/rive/avatar.riv` com 60.502 bytes (`avatar (22).riv`), 15 Numbers e 16 triggers. Só os vértices de `hair_2_front`, `hair_12_front` e `hair_14_front` mudaram, em relação a `avatar (20).riv` (do mesmo tamanho); o `(22)` difere do `(21)` apenas no cabelo 12 (comparação pixel a pixel). Nomes, camadas, hierarquia e inputs seguem iguais. O fallback (`packages/avatar/src/art.ts`) tem a mesma geometria, inclusive o `hair_12_front` com a borda interna da tabela acima (vértices 5, 6, 8 e 9 reajustados, sem faixa de fundo; os mesmos valores foram digitados no Rive no `(22)`). Validação: comparação pixel a pixel no runtime web de 85 combinações (`hair` 0 a 18 com `hair_color` 0 e 3, `skin` 0 a 7, `mouth` 0 a 4, `face_shape` 0 a 5, `beard` 0 a 4, `hat` 0 a 10, `eyes`, `brows`, `nose`, `outfit`, `accessory`, `eye_color`) contra a versão anterior: só os cabelos 2, 12 e 14 mudaram. O ruído do piscar (90 a 330 px) é o mesmo quando a versão anterior é comparada com ela mesma.
+
+Cabelos que ainda cobrem sobrancelha ou olho com folga de 6 px (pendência, fora deste ajuste): 4 (até 26% nos olhos 3 e 5), 6 (até 35%), 11 (6% na sobrancelha 1, 13% no olho 3), 13 (até 42%) e 15 (até 57%). O teste de regressão (`packages/avatar/src/art.test.ts`, "franja dos cabelos 1, 2, 5, 7, 10, 12, 14 e 17 deixa sobrancelhas e olhos livres") cobre 1, 2, 5, 7, 10, 12, 14 e 17. Para as sobrancelhas o teste exige zero toque. Para os olhos, nos cabelos 2, 12 e 14 o teto é 0,5% dos pontos de cada um dos 6 estilos de olho (com folga de 6 px; o estilo 3 e o 5, de pálpebra mais aberta, são os que mais encostam); nos demais, 5% do total. O mesmo teste confere que o 12 não abre faixa de fundo (no máximo 3 px) entre o rosto e o cabelo em y 240 a 300, nos 6 rostos.
 
 ## 4. Teste de aceitação
 

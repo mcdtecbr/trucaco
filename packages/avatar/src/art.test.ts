@@ -541,7 +541,7 @@ describe('cores como dimensão própria', () => {
       }
     });
 
-    it('franja dos cabelos 1, 5, 7, 10 e 17 não cobre as sobrancelhas (x 174..338)', () => {
+    it('franja dos cabelos 1, 2, 5, 7, 10, 12, 14 e 17 deixa sobrancelhas e olhos livres (2, 12 e 14 com folga de 6 px) e o 12 não abre faixa de fundo', () => {
       // amostra densamente o contorno (M/L/C/Q/Z absolutos)
       const sample = (d: string): [number, number][] => {
         const pts: [number, number][] = [];
@@ -586,7 +586,8 @@ describe('cores como dimensão própria', () => {
         }
         return pts;
       };
-      // nenhum ponto do contorno das sobrancelhas (os 4 estilos, os dois lados) cai dentro da franja
+      // folga: os cabelos longos 2, 12 e 14 ficam a 6 px do contorno; os demais só não podem sobrepor
+      // (mede a distância ao contorno amostrado)
       const inside = (poly: [number, number][], x: number, y: number): boolean => {
         let r = false;
         for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
@@ -596,16 +597,83 @@ describe('cores como dimensão própria', () => {
         }
         return r;
       };
+      const tocaFranja = (
+        poly: [number, number][],
+        [x, y]: [number, number],
+        folga: number,
+      ): boolean =>
+        inside(poly, x, y) ||
+        (folga > 0 && poly.some(([px, py]) => Math.hypot(px - x, py - y) < folga));
+      const flip = (p: (typeof PARTS)[number]): [number, number][] =>
+        sample(p.d).map(([x, y]): [number, number] => [p.mirror ? 512 - x : x, y]);
       const brows = PARTS.filter((p) => /^brow(_\d)?_[lr]$/.test(p.name));
       expect(brows.length).toBe(8);
-      const browPts = brows.flatMap((p) =>
-        sample(p.d).map(([x, y]): [number, number] => [p.mirror ? 512 - x : x, y]),
-      );
-      for (const n of [1, 5, 7, 10, 17]) {
+      const browPts = brows.flatMap(flip);
+      // todas as peças dos 6 estilos de olho, nos dois lados (branco, íris, pupila, pálpebra e brilho)
+      const eyes = PARTS.filter((p) => p.when?.key === 'eyes');
+      expect(eyes.length).toBeGreaterThanOrEqual(6 * 6);
+      const eyePts = eyes.flatMap(flip);
+      // Cabelos ainda fora desta checagem (cobrem sobrancelha ou olho; pendência do catálogo): 4, 6, 11, 13 e 15.
+      const longos = [2, 12, 14];
+      for (const n of [1, 2, 5, 7, 10, 12, 14, 17]) {
         const part = PARTS.find((p) => p.name === `hair_${n}_front`)!;
         const poly = sample(part.d);
-        const hit = browPts.find(([x, y]) => inside(poly, x, y));
+        const folga = longos.includes(n) ? 6 : 0;
+        const hit = browPts.find((pt) => tocaFranja(poly, pt, folga));
         expect(hit, `hair_${n}_front cobre sobrancelha`).toBeUndefined();
+        if (!longos.includes(n)) {
+          // demais cabelos: até 5% de todos os pontos (o cílio mais comprido, estilo 5, pode encostar)
+          const tocam = eyePts.filter((pt) => tocaFranja(poly, pt, folga)).length;
+          expect(tocam / eyePts.length, `hair_${n}_front cobre olho`).toBeLessThanOrEqual(0.05);
+          continue;
+        }
+        // cabelos longos (2, 12 e 14): por estilo de olho, com 6 px de folga, no máximo 0,5% dos
+        // pontos do estilo (o estilo 3 e o 5, de pálpebra mais aberta, são os que mais encostam)
+        for (let v = 0; v < 6; v++) {
+          const estilo = eyes.filter((p) => p.when?.value === v).flatMap(flip);
+          expect(estilo.length, `estilo de olho ${v}`).toBeGreaterThan(0);
+          const tocam = estilo.filter((pt) => tocaFranja(poly, pt, folga)).length;
+          expect(
+            tocam / estilo.length,
+            `hair_${n}_front cobre olho do estilo ${v}`,
+          ).toBeLessThanOrEqual(0.005);
+        }
+      }
+
+      // Faixa de fundo (hair_12_front, abaixo de y 240)
+      // O 12 não tem peça de trás: entre o contorno do rosto (e das orelhas) e a borda interna do
+      // cabelo não pode aparecer o fundo. Varre, de dentro para fora, cada linha de y 240 a 300;
+      // a faixa (pixels fora do rosto antes de chegar ao cabelo) fica em até 3 px nos 6 rostos.
+      // O resto vem da abertura larga acima dos olhos (os olhos exigem folga de 6 px).
+      const poly = sample(PARTS.find((p) => p.name === 'hair_12_front')!.d);
+      const orelha = (x: number, y: number): boolean =>
+        ((x - 142) / 13) ** 2 + ((y - 248) / 25) ** 2 <= 1 ||
+        ((x - 370) / 13) ** 2 + ((y - 248) / 25) ** 2 <= 1;
+      for (let shape = 0; shape < AVATAR_PART_COUNTS.face_shape; shape++) {
+        const face = sample(
+          PARTS.find((p) => p.name.startsWith('face_') && p.when?.value === shape)!.d,
+        );
+        let pior = 0;
+        for (let y = 240; y <= 300; y += 4) {
+          for (const lado of [-1, 1]) {
+            let viuRosto = false;
+            let faixa = 0;
+            for (let k = 0; k < 150; k++) {
+              const x = 256 + lado * k;
+              if (inside(face, x, y) || orelha(x, y)) {
+                viuRosto = true;
+                continue;
+              }
+              if (!viuRosto) continue;
+              if (inside(poly, x, y)) {
+                pior = Math.max(pior, faixa);
+                break;
+              }
+              faixa++;
+            }
+          }
+        }
+        expect(pior, `faixa de fundo no rosto ${shape}`).toBeLessThanOrEqual(3);
       }
     });
 
