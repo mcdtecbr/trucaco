@@ -43,6 +43,8 @@ export async function startGameServer(options: {
       // Windows: o Node precisa disto para resolver rede/DNS.
       ...(process.env['SystemRoot'] !== undefined ? { SystemRoot: process.env['SystemRoot'] } : {}),
       NODE_ENV: 'test',
+      // Verificador de identidade de TESTE (`test:<sub>`): só existe em development/test.
+      AUTH_TEST_IDENTITY: '1',
       PORT: String(options.port),
       CORS_ORIGINS: options.corsOrigin,
       // Baralho fixo (só dev/test) e limites frouxos: 4 convidados do mesmo IP jogando em sequência.
