@@ -10,6 +10,7 @@ import { useReduceMotion } from '../platform/useReduceMotion';
 import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
 import { useRoomStore } from '../store/roomStore';
+import { selectProvider, useSessionStore } from '../store/sessionStore';
 import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
 import {
   connectionBanner,
@@ -89,8 +90,8 @@ function useChatPanel(
 }
 
 /**
- * Props do painel "Combinar sinais" (espera e mesa). Hoje só existe login de convidado, então o aviso
- * de que o combinado some ao sair da conta vale para todos até a Fase 6 (contas Google/Apple).
+ * Props do painel "Combinar sinais" (espera e mesa). O aviso de que o combinado some ao sair da conta
+ * vale só para convidado (`provider` da sessão; desconhecido = sem aviso até o `GET /me` responder).
  */
 function useCodesPanel(
   seats: readonly { seat: number; nickname: string; status: string; isBot: boolean }[],
@@ -100,6 +101,7 @@ function useCodesPanel(
   const codesOpen = useTableStore((s) => s.codesOpen);
   const codes = useTableStore((s) => s.codes);
   const codesError = useTableStore((s) => s.codesError);
+  const provider = useSessionStore(selectProvider);
   return buildCodesPanelProps({
     codesOpen,
     codes,
@@ -107,7 +109,7 @@ function useCodesPanel(
     seats,
     mySeat,
     connected,
-    guest: true,
+    guest: provider === 'guest',
     table: getApp().table,
   });
 }

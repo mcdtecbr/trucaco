@@ -25,6 +25,7 @@ import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
 import { buildColyseusServer } from '../server';
+import { emitBlockChange } from '../social/blockBus';
 import { defineTrucoRoom, devAuth, devReconnectUserId, isChatRecipient } from './TrucoRoom';
 import type { TrucoRoom, TrucoRoomConfig } from './TrucoRoom';
 
@@ -1945,6 +1946,45 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       assertNoLeaks(game);
     } finally {
       SECRETS.length = 0;
+    }
+  });
+
+  it('(c3) bloqueio: chat da mesa entre bloqueador e bloqueado é descartado nos dois sentidos; o da dupla segue', async () => {
+    const game = await startedRec('truco-soc');
+    const [p0, p1, p2, p3] = game.players as [Player, Player, Player, Player];
+    // user-0 bloqueou o parceiro (user-2); user-1 (adversário) bloqueou user-0.
+    emitBlockChange({ blockerId: 'user-0', blockedId: 'user-2', active: true });
+    emitBlockChange({ blockerId: 'user-1', blockedId: 'user-0', active: true });
+    try {
+      p0.room.send('chat', { scope: 'table', text: 'da mesa' });
+      await until(
+        () => inboxOf(p3).chats.length === 1 && inboxOf(p0).chats.length === 1,
+        'p3 e eco',
+      );
+      await sleep(QUIET_MS);
+      expect(inboxOf(p1).chats).toEqual([]);
+      expect(inboxOf(p2).chats).toEqual([]);
+      // sentido inverso: o bloqueado (p0) não recebe o chat de quem o bloqueou
+      p1.room.send('chat', { scope: 'table', text: 'resposta' });
+      await until(
+        () => inboxOf(p2).chats.length === 1 && inboxOf(p3).chats.length === 2,
+        'p2 e p3',
+      );
+      await sleep(QUIET_MS);
+      expect(inboxOf(p0).chats.map((c) => c.text)).toEqual(['da mesa']);
+      // chat da dupla não é filtrado pelo bloqueio
+      await sleep(450);
+      p0.room.send('chat', { scope: 'partner', text: 'da dupla' });
+      await until(() => inboxOf(p2).chats.some((c) => c.text === 'da dupla'), 'dupla entregue');
+      // desbloqueio ao vivo: volta a chegar
+      emitBlockChange({ blockerId: 'user-0', blockedId: 'user-2', active: false });
+      emitBlockChange({ blockerId: 'user-1', blockedId: 'user-0', active: false });
+      await sleep(450);
+      p0.room.send('chat', { scope: 'table', text: 'liberado' });
+      await until(() => inboxOf(p1).chats.some((c) => c.text === 'liberado'), 'após desbloqueio');
+    } finally {
+      emitBlockChange({ blockerId: 'user-0', blockedId: 'user-2', active: false });
+      emitBlockChange({ blockerId: 'user-1', blockedId: 'user-0', active: false });
     }
   });
 

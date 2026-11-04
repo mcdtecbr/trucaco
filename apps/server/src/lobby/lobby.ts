@@ -18,6 +18,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { isValidRoomCode } from '@trucaco/protocol';
 import type { RoomOptions, Visibility } from '@trucaco/protocol';
 import { log } from '../logger';
+import { onBlockChange, onUserDeleted } from '../social/blockBus';
 import { DEFAULT_JOIN_GUARD, JoinGuard } from './joinGuard';
 import type { JoinGuardConfig } from './joinGuard';
 import { MatchQueue } from './matchQueue';
@@ -73,6 +74,14 @@ export const DEFAULT_LOBBY_CONFIG: LobbyConfig = {
   maxCooldownKeys: 50_000,
   guard: DEFAULT_JOIN_GUARD,
 };
+
+/**
+ * Fonte dos bloqueios (Fase 6): todos os `userId` com bloqueio em QUALQUER sentido em relação a
+ * `userId` (quem ele bloqueou e quem o bloqueou). Falha = lança; o lobby falha FECHADO.
+ */
+export interface BlockLookup {
+  relatedIds(userId: string): Promise<ReadonlySet<string>>;
+}
 
 /** Concessão de criação: o que a sala recém-criada pode fazer. Criada só pelo lobby. */
 export interface Grant {
@@ -170,12 +179,15 @@ export class Lobby {
   private readonly cooldowns = new Map<string, number>();
   private readonly guard: JoinGuard;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private unsubscribeBlocks: (() => void) | null = null;
+  private unsubscribeDeleted: (() => void) | null = null;
 
   constructor(
     private readonly gateway: TableGateway,
     readonly config: LobbyConfig = DEFAULT_LOBBY_CONFIG,
     private readonly clock: () => number = Date.now,
     private readonly rand: RandomIntFn = randomInt,
+    private readonly blocks: BlockLookup | null = null,
   ) {
     this.queue = new MatchQueue(config.maxQueue);
     this.guard = new JoinGuard(config.guard);
@@ -186,11 +198,45 @@ export class Lobby {
     if (this.timer !== null) return;
     this.timer = setInterval(() => this.sweep(), everyMs);
     this.timer.unref();
+    // Bloqueio feito com a fila andando vale já: quem espera nunca casa com o bloqueado.
+    this.unsubscribeBlocks ??= onBlockChange((c) => {
+      if (c.active) this.noteBlock(c.blockerId, c.blockedId);
+    });
+    this.unsubscribeDeleted ??= onUserDeleted((userId) => this.forgetUser(userId));
   }
 
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    this.unsubscribeBlocks?.();
+    this.unsubscribeBlocks = null;
+    this.unsubscribeDeleted?.();
+    this.unsubscribeDeleted = null;
+  }
+
+  /**
+   * Conta apagada: sai da fila e perde o ticket (fila ou mesa privada ainda sem assento). Quem já está
+   * sentado é tratado pela sala (`dropDeletedUser`). Sem cooldown: a conta não existe mais.
+   */
+  forgetUser(userId: string): void {
+    const slot = this.slots.get(userId);
+    if (slot === undefined) return;
+    if (slot.kind === 'queued') this.queue.remove(userId);
+    if (slot.kind !== 'table') this.slots.delete(userId);
+  }
+
+  /** Bloqueio novo entre dois usuários: as entradas que esperam na fila passam a se evitar. */
+  noteBlock(a: string, b: string): void {
+    this.queue.addAvoid(a, b);
+  }
+
+  /** `true` se `userId` tem bloqueio (qualquer sentido) com alguém de `others`. Sem fonte: `false`. */
+  private async hasBlockWith(userId: string, others: Iterable<string>): Promise<boolean> {
+    if (this.blocks === null) return false;
+    const related = await this.blocks.relatedIds(userId);
+    if (related.size === 0) return false;
+    for (const other of others) if (related.has(other)) return true;
+    return false;
   }
 
   // ------------------------------------------------------------------ lado da sala (síncrono)
@@ -423,6 +469,22 @@ export class Lobby {
     if (roomId === undefined || info === undefined || info.grant?.kind !== 'private') {
       return this.unavailable(userId, ip);
     }
+    // Bloqueio (qualquer sentido) com o criador ou com quem já sentou: o MESMO erro de mesa inexistente.
+    // Falha do banco = fechado (também `TABLE_UNAVAILABLE`, nada de erro distinto).
+    if (!sameRoom && this.blocks !== null) {
+      const present: string[] = [];
+      if (info.grant.creator !== null) present.push(info.grant.creator);
+      for (const [other, s] of this.slots) {
+        if (s.kind === 'table' && s.roomId === roomId) present.push(other);
+      }
+      let blocked = true;
+      try {
+        blocked = await this.hasBlockWith(userId, present);
+      } catch (err) {
+        log.warn('lobby: consulta de bloqueios falhou', { name: errName(err) });
+      }
+      if (blocked) return this.unavailable(userId, ip);
+    }
     // A reserva pendente ocupa o slot do usuário: não dá para segurar várias vagas de uma vez.
     let own: TicketSlot | null = slot?.kind === 'ticket' ? slot : null;
     let created: TicketSlot | null = null;
@@ -517,10 +579,28 @@ export class Lobby {
     if (slot === undefined) {
       const wait = this.cooldownLeftSec(userId);
       if (wait > 0) return { ok: false, error: 'QUEUE_COOLDOWN', retryAfterSec: wait };
-      const entry = this.queue.enqueue(userId, options, this.clock(), this.config.queueTtlMs);
-      if (entry === null) return { ok: false, error: 'QUEUE_FULL' };
-      this.slots.set(userId, { kind: 'queued', entry });
-      await this.drain();
+      let avoid: ReadonlySet<string> | undefined;
+      if (this.blocks !== null) {
+        try {
+          avoid = await this.blocks.relatedIds(userId);
+        } catch (err) {
+          log.warn('lobby: consulta de bloqueios falhou', { name: errName(err) });
+          return { ok: false, error: 'UNAVAILABLE' };
+        }
+      }
+      // O `await` acima abre uma janela: outra chamada do mesmo usuário pode ter entrado na fila.
+      if (!this.slots.has(userId)) {
+        const entry = this.queue.enqueue(
+          userId,
+          options,
+          this.clock(),
+          this.config.queueTtlMs,
+          avoid,
+        );
+        if (entry === null) return { ok: false, error: 'QUEUE_FULL' };
+        this.slots.set(userId, { kind: 'queued', entry });
+        await this.drain();
+      }
     }
     // Já na fila: idempotente (mantém variante e posição; nunca uma segunda entrada).
     return { ok: true, status: await this.statusOf(userId, bearer) };

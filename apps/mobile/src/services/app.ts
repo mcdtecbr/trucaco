@@ -43,6 +43,12 @@ export function getApp(): App {
   if (app !== null) return app;
   const session = createSession({ storage: createTokenStorage() });
   bindSession(session);
+  // Sessão restaurada não traz o tipo de conta: lê uma vez (o convidado novo já nasce com `guest`).
+  session.subscribe((st) => {
+    if (st.status === 'authenticated' && st.user !== null && st.user.provider === undefined) {
+      void session.loadProvider();
+    }
+  });
   const resumeStorage = createResumeStorage();
   const recorder = createResumeRecorder({
     storage: resumeStorage,

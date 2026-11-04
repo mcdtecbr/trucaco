@@ -56,6 +56,86 @@ const finished = (a: string, b: string, c: string | null, d: string | null): Fin
     })),
   });
 
+describe('repositórios em memória: Fase 6B (bloqueios, denúncias, apagar conta)', () => {
+  it('listBlocks traz apelido, na ordem em que bloqueou, e some quando o bloqueado é apagado', async () => {
+    const { users } = createMemoryRepositories();
+    const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
+    const b = await users.createGuest({ providerSubject: 'b', nickname: 'Beto' });
+    const c = await users.createGuest({ providerSubject: 'c', nickname: 'Caio' });
+    await users.addBlock(a.id, c.id);
+    await users.addBlock(a.id, b.id);
+    await users.addBlock(a.id, b.id);
+    expect(await users.listBlocks(a.id)).toEqual([
+      { userId: c.id, nickname: 'Caio' },
+      { userId: b.id, nickname: 'Beto' },
+    ]);
+    expect(await users.listBlocks(b.id)).toEqual([]);
+    await users.deleteUser(c.id);
+    expect(await users.listBlocks(a.id)).toEqual([{ userId: b.id, nickname: 'Beto' }]);
+  });
+
+  it('hasReport: com partida vale para sempre; sem partida só nas últimas 24 h', async () => {
+    const { users, matches, store } = createMemoryRepositories();
+    const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
+    const b = await users.createGuest({ providerSubject: 'b', nickname: 'Beto' });
+    const matchId = await matches.saveMatch(finished(a.id, b.id, null, null));
+    expect(await users.hasReport(a.id, b.id, null)).toBe(false);
+    await users.createReport({ reporterId: a.id, reportedId: b.id, reason: 'cheating' });
+    expect(await users.hasReport(a.id, b.id, null)).toBe(true);
+    expect(await users.hasReport(b.id, a.id, null)).toBe(false);
+    expect(await users.hasReport(a.id, b.id, matchId)).toBe(false);
+    await users.createReport({ reporterId: a.id, reportedId: b.id, matchId, reason: 'other' });
+    expect(await users.hasReport(a.id, b.id, matchId)).toBe(true);
+    // a denúncia sem partida vence depois de 24 h; a com partida não
+    store.reports = store.reports.map((r) => ({
+      ...r,
+      createdAt: new Date(Date.now() - 25 * 3_600_000),
+    }));
+    expect(await users.hasReport(a.id, b.id, null)).toBe(false);
+    expect(await users.hasReport(a.id, b.id, matchId)).toBe(true);
+  });
+
+  it('participantIds: humanos da partida; inexistente é null', async () => {
+    const { users, matches } = createMemoryRepositories();
+    const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
+    const b = await users.createGuest({ providerSubject: 'b', nickname: 'Beto' });
+    const id = await matches.saveMatch(finished(a.id, b.id, null, null));
+    expect([...((await matches.participantIds(id)) ?? [])].sort()).toEqual([a.id, b.id].sort());
+    expect(await matches.participantIds(GHOST)).toBeNull();
+  });
+
+  it('deleteUser: cascata (avatar, bloqueios, combinados), anonimiza partidas e mantém denúncias', async () => {
+    const { users, matches, store } = createMemoryRepositories();
+    const a = await users.createGuest({ providerSubject: 'a', nickname: 'Ana' });
+    const b = await users.createGuest({ providerSubject: 'b', nickname: 'Beto' });
+    const c = await users.createGuest({ providerSubject: 'c', nickname: 'Caio' });
+    await users.saveAvatar(a.id, DEFAULT_AVATAR_PARTS);
+    await users.addBlock(a.id, b.id);
+    await users.addBlock(c.id, a.id);
+    const matchId = await matches.saveMatch(finished(a.id, b.id, c.id, null));
+    await users.savePartnerCodes(a.id, b.id, { wink: 'x' });
+    await users.createReport({ reporterId: b.id, reportedId: a.id, matchId, reason: 'cheating' });
+    await users.createReport({ reporterId: a.id, reportedId: b.id, reason: 'other' });
+
+    expect(await users.deleteUser(a.id)).toBe(true);
+    expect(await users.deleteUser(a.id)).toBe(false);
+    expect(await users.findById(a.id)).toBeNull();
+    expect(await users.getAvatar(a.id)).toBeNull();
+    expect(await users.listBlockerIds(a.id)).toEqual([]);
+    expect(await users.listBlockedIds(c.id)).toEqual([]);
+    expect(await users.getPartnerCodes(a.id, b.id)).toBeNull();
+    expect(store.reports).toHaveLength(2);
+    expect(store.reports.every((r) => r.reporterId !== a.id && r.reportedId !== a.id)).toBe(true);
+    expect(store.reports.some((r) => r.reporterId === b.id && r.reportedId === null)).toBe(true);
+    const page = await matches.listForUser(b.id);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.players.map((p) => p.userId)).toEqual([null, c.id, b.id, null]);
+    expect(page.items[0]?.players.map((p) => p.nickname)).toEqual([null, 'Caio', 'Beto', null]);
+    expect((await matches.listForUser(a.id)).items).toEqual([]);
+    expect(await matches.participantIds(matchId)).not.toContain(a.id);
+  });
+});
+
 describe('repositórios em memória (espelham as regras do SQL)', () => {
   it('updateNickname: troca, repete só o próprio, 409 sem diferenciar caixa e usuário inexistente', async () => {
     const { users } = createMemoryRepositories();

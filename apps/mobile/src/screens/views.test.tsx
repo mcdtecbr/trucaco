@@ -36,6 +36,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
       queueCancel: noop,
       settings: noop,
       avatar: noop,
+      profile: noop,
     },
     ...over,
   };

@@ -28,12 +28,9 @@ import type { SeatReservation as ServerReservation, QueueStatus } from '../lobby
  */
 const PENDING_PHASE6 = [
   'ALREADY_LINKED',
-  'INVALID_BLOCK',
   'INVALID_ID_TOKEN',
-  'INVALID_REPORT',
   'PROVIDER_TAKEN',
   'SOCIAL_LOGIN_DISABLED',
-  'USER_NOT_FOUND',
 ];
 
 describe('contrato HTTP protocol <-> servidor', () => {

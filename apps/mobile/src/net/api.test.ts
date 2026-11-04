@@ -137,6 +137,65 @@ describe('requisições', () => {
   });
 });
 
+describe('rotas da Fase 6 (histórico, bloqueio, denúncia, apagar conta)', () => {
+  it('matches pagina por query; blocks/block/unblock/report usam rota, método e corpo certos', async () => {
+    const { auth } = makeAuth({ access: 'a0', refresh: 'r0' });
+    const { client, calls } = api((r) => {
+      if (r.path === '/matches') return { status: 200, json: { items: [], nextCursor: null } };
+      if (r.path === '/me/blocks' && r.method === 'GET')
+        return { status: 200, json: { blocks: [] } };
+      if (r.path === '/reports') return { status: 201, json: {} };
+      return { status: 204 };
+    }, auth);
+    await client.matches();
+    await client.matches('c/1', 10);
+    await client.blocks();
+    await client.block('u1');
+    await client.unblock('u 2');
+    await client.report({ userId: 'u1', reason: 'cheating' });
+    expect(calls.map((c) => `${c.method} ${c.path}${c.search}`)).toEqual([
+      'GET /matches',
+      'GET /matches?limit=10&cursor=c%2F1',
+      'GET /me/blocks',
+      'POST /me/blocks',
+      'DELETE /me/blocks/u%202',
+      'POST /reports',
+    ]);
+    expect(calls[3]?.body).toEqual({ userId: 'u1' });
+    expect(calls[5]?.body).toEqual({ userId: 'u1', reason: 'cheating' });
+  });
+
+  it('deleteAccount manda o refresh e NÃO repete por 401', async () => {
+    const { auth, st } = makeAuth({ access: 'a0', refresh: 'r0' });
+    const { client, calls } = api(
+      () => ({ status: 401, json: { error: { code: 'INVALID_REFRESH_TOKEN' } } }),
+      auth,
+    );
+    await expect(client.deleteAccount('r0')).rejects.toMatchObject({
+      code: 'INVALID_REFRESH_TOKEN',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'DELETE', path: '/me', body: { refreshToken: 'r0' } });
+    expect(st.saved).toEqual([]);
+  });
+
+  it('erros 400/404/429 chegam com o código do servidor', async () => {
+    const { auth } = makeAuth({ access: 'a0', refresh: 'r0' });
+    const { client } = api(
+      () => ({
+        status: 429,
+        json: { error: { code: 'RATE_LIMITED' } },
+        headers: { 'retry-after': '3600' },
+      }),
+      auth,
+    );
+    await expect(client.report({ userId: 'u', reason: 'other' })).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: 3600,
+    });
+  });
+});
+
 describe('refresh em fila única', () => {
   it('N chamadas concorrentes com 401 geram UM refresh e cada uma repete uma vez', async () => {
     const { auth, st } = makeAuth({ access: 'a0', refresh: 'r0' });

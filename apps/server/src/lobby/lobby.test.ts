@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOBBY_CONFIG, GatewayAuthError, Lobby } from './lobby';
 import type { Grant, LobbyConfig, SeatReservation, TableGateway } from './lobby';
 import { setLogSink } from '../logger';
+import type { BlockLookup } from './lobby';
 
 setLogSink(() => undefined);
 
@@ -52,12 +53,126 @@ function fakeGateway(): Fake {
 function setup(
   over: Partial<LobbyConfig> = {},
   rand?: (min: number, max: number) => number,
+  blocks: BlockLookup | null = null,
 ): { lobby: Lobby; gw: Fake; now: { t: number } } {
   const gw = fakeGateway();
   const now = { t: 1_000_000 };
-  const lobby = new Lobby(gw, { ...DEFAULT_LOBBY_CONFIG, ...over }, () => now.t, rand);
+  const lobby = new Lobby(gw, { ...DEFAULT_LOBBY_CONFIG, ...over }, () => now.t, rand, blocks);
   return { lobby, gw, now };
 }
+
+/** Bloqueios por pares `[a, b]` (qualquer sentido); `fail` simula o banco fora do ar. */
+function pairs(list: [string, string][], fail = { on: false }): BlockLookup {
+  return {
+    relatedIds: (userId) => {
+      if (fail.on) return Promise.reject(new Error('db'));
+      const out = new Set<string>();
+      for (const [a, b] of list) {
+        if (a === userId) out.add(b);
+        if (b === userId) out.add(a);
+      }
+      return Promise.resolve(out);
+    },
+  };
+}
+
+describe('Lobby: bloqueios (Fase 6)', () => {
+  it('fila pública: dois usuários com bloqueio nunca caem na mesma mesa', async () => {
+    const { lobby, gw } = setup({}, undefined, pairs([['a', 'b']]));
+    for (const u of ['a', 'b', 'c', 'd']) await lobby.enqueue(u, `t-${u}`, Q());
+    expect(gw.created).toHaveLength(0);
+    await lobby.enqueue('e', 't-e', Q());
+    expect(gw.created).toHaveLength(1);
+    const grant = lobby.consumeGrant(gw.created[0]!.token) as Grant;
+    expect(grant.allowed?.has('a') && grant.allowed.has('b')).toBe(false);
+    expect(grant.allowed?.size).toBe(4);
+    // quem sobrou espera outro parceiro compatível
+    await lobby.enqueue('f', 't-f', Q());
+    await lobby.enqueue('g', 't-g', Q());
+    await lobby.enqueue('h', 't-h', Q());
+    expect(gw.created).toHaveLength(2);
+  });
+
+  it('bloqueio feito com a fila andando vale já (noteBlock)', async () => {
+    const { lobby, gw } = setup();
+    for (const u of ['a', 'b', 'c']) await lobby.enqueue(u, `t-${u}`, Q());
+    lobby.noteBlock('a', 'c');
+    await lobby.enqueue('d', 't-d', Q());
+    expect(gw.created).toHaveLength(0);
+    await lobby.enqueue('e', 't-e', Q());
+    expect(gw.created).toHaveLength(1);
+  });
+
+  it('conta apagada (forgetUser): sai da fila e perde o ticket da mesa privada', async () => {
+    const { lobby, gw } = setup();
+    await lobby.enqueue('a', 't', Q());
+    lobby.forgetUser('a');
+    expect(lobby.slotKind('a')).toBeNull();
+    expect(lobby.stats().queued).toBe(0);
+    for (const u of ['b', 'c', 'd']) await lobby.enqueue(u, 't', Q());
+    expect(gw.created).toHaveLength(0);
+    const created = await lobby.createTable('dono', 'tk', {
+      variant: 'paulista',
+      format: 'single',
+      ironHand: true,
+      visibility: 'private',
+    });
+    expect(created.ok).toBe(true);
+    expect(lobby.slotKind('dono')).toBe('ticket');
+    lobby.forgetUser('dono');
+    expect(lobby.slotKind('dono')).toBeNull();
+    lobby.forgetUser('ninguem');
+  });
+
+  it('falha ao consultar bloqueios: UNAVAILABLE e ninguém entra na fila', async () => {
+    const fail = { on: true };
+    const { lobby } = setup({}, undefined, pairs([], fail));
+    expect(await lobby.enqueue('a', 't', Q())).toEqual({ ok: false, error: 'UNAVAILABLE' });
+    expect(lobby.stats().queued).toBe(0);
+    expect(lobby.slotKind('a')).toBeNull();
+  });
+
+  it('mesa privada: bloqueio com o criador (qualquer sentido) = TABLE_UNAVAILABLE, igual a código inexistente', async () => {
+    const { lobby, gw } = setup({}, undefined, pairs([['dono', 'inimigo']]));
+    const priv: RoomOptions = {
+      variant: 'paulista',
+      format: 'single',
+      ironHand: true,
+      visibility: 'private',
+    };
+    const created = await lobby.createTable('dono', 'tk', priv);
+    if (!created.ok) throw new Error(created.error);
+    const c = gw.created.at(-1)!;
+    const grant = lobby.consumeGrant(c.token)!;
+    lobby.registerRoom(c.roomId, grant.code, 'private', grant);
+    const ghost = await lobby.joinByCode('inimigo', 'tk', 'ip', 'AAAAAAAA');
+    const blocked = await lobby.joinByCode('inimigo', 'tk', 'ip', created.code);
+    expect(blocked).toEqual(ghost);
+    expect(blocked).toEqual({ ok: false, error: 'TABLE_UNAVAILABLE' });
+    expect(lobby.slotKind('inimigo')).toBeNull();
+    expect(await lobby.joinByCode('amigo', 'tk', 'ip', created.code)).toMatchObject({ ok: true });
+  });
+
+  it('mesa privada: banco fora do ar falha fechado (TABLE_UNAVAILABLE)', async () => {
+    const fail = { on: false };
+    const { lobby, gw } = setup({}, undefined, pairs([], fail));
+    const created = await lobby.createTable('dono', 'tk', {
+      variant: 'paulista',
+      format: 'single',
+      ironHand: true,
+      visibility: 'private',
+    });
+    if (!created.ok) throw new Error(created.error);
+    const c = gw.created.at(-1)!;
+    const grant = lobby.consumeGrant(c.token)!;
+    lobby.registerRoom(c.roomId, grant.code, 'private', grant);
+    fail.on = true;
+    expect(await lobby.joinByCode('x', 'tk', 'ip', created.code)).toEqual({
+      ok: false,
+      error: 'TABLE_UNAVAILABLE',
+    });
+  });
+});
 
 describe('Lobby: fila pública', () => {
   it('4 compatíveis formam UMA mesa pública single e cada um recebe reserva ao consultar', async () => {

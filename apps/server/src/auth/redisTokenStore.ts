@@ -167,6 +167,25 @@ export class RedisTokenStore implements TokenStore {
     });
   }
 
+  async peekLive(refreshHash: string): Promise<{ userId: string; familyId: string } | null> {
+    return this.run(async () => {
+      const [userId, familyId, usedAt] = await this.redis.hmget(
+        `${REDIS_PREFIX}rt:${refreshHash}`,
+        'userId',
+        'familyId',
+        'usedAt',
+      );
+      if (userId === null || userId === undefined) return null;
+      if (familyId === null || familyId === undefined || (usedAt ?? null) !== null) return null;
+      const fam = `${REDIS_PREFIX}rtfam:${familyId}`;
+      const [exists, revoked] = await Promise.all([
+        this.redis.exists(fam),
+        this.redis.hexists(fam, 'revokedAt'),
+      ]);
+      return exists === 1 && revoked === 0 ? { userId, familyId } : null;
+    });
+  }
+
   async rotate(input: RotateInput): Promise<RotateResult> {
     return this.run(async () => {
       const reply = await this.scripts.trucacoRotate(

@@ -642,7 +642,7 @@ describe('stubs, 404 e 405', () => {
     expect(text).not.toMatch(/script|etc|at\s.*\(|\.ts/);
     for (const [method, path, allow] of [
       ['GET', '/auth/guest', 'POST'],
-      ['DELETE', '/me', 'GET, PUT'],
+      ['PATCH', '/me', 'GET, PUT, DELETE'],
       ['POST', '/me/avatar', 'PUT'],
       ['PUT', '/auth/refresh', 'POST'],
     ] as const) {

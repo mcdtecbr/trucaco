@@ -8,7 +8,7 @@ import { ERROR_CODES, ROOM_OPTIONS_ERRORS } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { dynamicCodes, emittedRoomOptionErrors, scanHttp } from './errorCodeScan.contract';
 
-/** Catálogo congelado (Fase 2). Chave = código; valor = status HTTP possíveis. */
+/** Catálogo congelado (Fase 2; Fase 6B acrescentou INVALID_BLOCK, INVALID_REPORT e USER_NOT_FOUND). Chave = código; valor = status HTTP possíveis. */
 const KNOWN: Record<string, number[]> = {
   ALREADY_IN_TABLE: [409],
   ALREADY_SEATED: [409],
@@ -17,6 +17,7 @@ const KNOWN: Record<string, number[]> = {
   FORBIDDEN: [403],
   INTERNAL: [500],
   INVALID_AVATAR: [400],
+  INVALID_BLOCK: [400],
   INVALID_BODY: [400],
   INVALID_CODE: [400],
   INVALID_CODES: [400],
@@ -25,6 +26,7 @@ const KNOWN: Record<string, number[]> = {
   INVALID_NICKNAME: [400],
   INVALID_OPTIONS: [400],
   INVALID_PARTNER: [400],
+  INVALID_REPORT: [400],
   METHOD_NOT_ALLOWED: [405],
   NICKNAME_TAKEN: [409],
   NOT_FOUND: [404],
@@ -40,6 +42,7 @@ const KNOWN: Record<string, number[]> = {
   UNAUTHORIZED: [401],
   UNAVAILABLE: [503],
   UNSUPPORTED_MEDIA_TYPE: [415],
+  USER_NOT_FOUND: [404],
   USE_LOBBY: [403],
 };
 

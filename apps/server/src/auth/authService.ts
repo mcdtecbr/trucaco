@@ -175,6 +175,20 @@ export class AuthService {
     await this.tokens.revokeJti(principal.jti, this.cfg.accessTtlSec);
   }
 
+  /**
+   * Prova de acesso recente para ações destrutivas (`DELETE /me`): o refresh apresentado tem de ser VIVO
+   * (não usado, família não revogada nem expirada) e do próprio `userId`. NÃO rotaciona nem gasta o token:
+   * se a ação falhar depois (banco fora), a sessão do cliente fica intacta. Falha = `INVALID_REFRESH_TOKEN`,
+   * sem distinguir a causa.
+   */
+  async assertRecentRefresh(userId: string, presented: string): Promise<void> {
+    if (typeof presented !== 'string' || !REFRESH_FORMAT.test(presented)) {
+      throw new AuthError('INVALID_REFRESH_TOKEN');
+    }
+    const owner = await this.tokens.peekLive(hashRefresh(presented));
+    if (owner === null || owner.userId !== userId) throw new AuthError('INVALID_REFRESH_TOKEN');
+  }
+
   /** Revoga a família e o access vigente dela (`lastJti`), se acabou de ser revogada. */
   private async revokeFamilyAndAccess(familyId: string): Promise<void> {
     const lastJti = await this.tokens.revokeFamily(familyId);

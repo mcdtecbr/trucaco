@@ -4,7 +4,35 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Fase 5b: áudio, vozes dos avatares e efeitos (2026-11-04), concluída com ressalvas, branch `feat/audio-5b`, ainda não mesclada
+### Fase 6, blocos 6A e 6B: contrato, bloqueio, denúncia, histórico e apagar conta (2026-11-04), em andamento, branch `feat/fase-6b-social`
+
+Ressalvas: login Google e Apple (6F), conquistas, missões e estatísticas (6C a 6E) ainda não entraram. Bloquear e denunciar só a partir do histórico (o assento na mesa não tem `userId` público). Não validado em aparelho iOS ou Android, com leitor de tela, nem por E2E novo de histórico, bloqueio e apagar conta. Plano e status em `docs/specs/2026-11-04-fase-6-plano.md` (seção 7); contrato em `docs/protocolo-servidor.md`.
+
+#### Adicionado
+
+- 6A (`d1dcbc7`): contrato em `packages/protocol` para login social, vínculo, `GET /matches`, perfil público, bloqueio, denúncia, conquistas e missões (`gamification.ts`). `PROTOCOL_VERSION` 6.
+- Servidor: `GET /matches` (paginação por cursor, só partidas do próprio usuário); `GET` e `POST /me/blocks` e `DELETE /me/blocks/:userId`; `POST /reports` (5 por usuário por hora); `DELETE /me` (apaga a conta, anonimiza as partidas, revoga as sessões e derruba os sockets). CORS libera `DELETE`.
+- Servidor: bloqueio vale nos dois sentidos na fila pública (a mesma mesa não recebe bloqueados) e na mesa privada (entrar com bloqueio responde `TABLE_UNAVAILABLE`, o mesmo erro de código inexistente). Chat da mesa entre bloqueados é descartado em silêncio.
+- Cliente: histórico de partidas em `/profile` ("Carregar mais"); bloquear e denunciar um jogador a partir de uma partida do histórico; lista de bloqueados com "Desbloquear" em Configurações; apagar conta em dois passos de confirmação.
+- `SessionUser.provider` (lido de `GET /me` por `loadProvider()`).
+
+#### Alterado
+
+- `GET /me` traz `stats` (zeros até o 6E).
+
+#### Corrigido
+
+- Aviso de convidado do combinado de sinais aparecia para todos (`guest: true` fixo). Agora lê o provedor da sessão.
+- Revisão (Rita-C, Claude opus): 1 P2 e 6 P3, todos corrigidos ou aceitos e registrados em `apps/server/README.md`. Auditoria (Vitor): 6 baixas, nenhum achado crítico, alto ou médio.
+
+#### Divergências conhecidas
+
+- Bloquear o parceiro, ou alguém já sentado, não tira ninguém da partida em andamento. Mesa de fila já formada não reavalia bloqueio feito depois do sorteio.
+- Denúncia repetida e o teto de 200 bloqueios não são atômicos (falta `UNIQUE` em `reports` e checagem atômica; `dalva-dba`).
+- `blockBus`, a lista evitada da fila e a derrubada de sockets valem só para um processo.
+- No aparelho, `trucaco.muted.v1` e o `sessionStorage` continuam depois de apagar a conta.
+
+### Fase 5b: áudio, vozes dos avatares e efeitos (2026-11-04), concluída com ressalvas, branch `feat/audio-5b`, mesclada (PR #20)
 
 Ressalvas: **todo o áudio é placeholder** (tom senoidal gerado por `scripts/audio/gen-placeholders.mjs`). O serviço de voz e a fonte dos efeitos seguem a definir (decisão do usuário), e nenhum arquivo real entra sem licença comercial registrada em `assets/audio/LICENSES.md`. Vozes `masc_2`, `masc_3`, `fem_2` e `fem_3` não têm arquivo (tocam a voz do mesmo grupo). `trig_shout` não existe no `avatar.riv` e não é disparado. Nada validado em aparelho iOS ou Android, nem no Safari. Detalhes em `docs/audio.md`, `assets/audio/README.md` e `apps/mobile/README.md`; status por etapa em `docs/plano-desenvolvimento.md` (Fase 5b).
 

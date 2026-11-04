@@ -4,6 +4,8 @@ import type { FetchLike } from './api';
 export interface RecordedRequest {
   method: string;
   path: string;
+  /** Query string (com `?`), vazia se não houver. */
+  search: string;
   headers: Record<string, string>;
   body: unknown;
 }
@@ -24,6 +26,7 @@ export function fakeFetch(handler: Handler): { fetch: FetchLike; calls: Recorded
     const req: RecordedRequest = {
       method: init.method,
       path: u.pathname,
+      search: u.search,
       headers: init.headers,
       body: init.body === undefined ? undefined : (JSON.parse(init.body) as unknown),
     };

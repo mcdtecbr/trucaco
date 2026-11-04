@@ -63,6 +63,7 @@ export interface HomeViewProps {
     queueCancel(): void;
     settings(): void;
     avatar(): void;
+    profile(): void;
   };
 }
 
@@ -212,6 +213,13 @@ export function HomeView(p: HomeViewProps) {
         onPress={p.on.avatar}
         disabled={locked}
         testID="open-avatar"
+      />
+      <Button
+        label="Meu perfil"
+        variant="secondary"
+        onPress={p.on.profile}
+        disabled={locked}
+        testID="open-profile"
       />
       <Button
         label="Configurações"

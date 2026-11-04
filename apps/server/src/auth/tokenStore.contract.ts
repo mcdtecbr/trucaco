@@ -69,6 +69,23 @@ export function tokenStoreContract(name: string, make: (clock: () => number) => 
       };
     };
 
+    it('peekLive: vivo sem efeito colateral; usado, revogado e desconhecido dão null', async () => {
+      const store = fresh();
+      const f = await family(store);
+      expect(await store.peekLive(f.refreshHash)).toEqual({
+        userId: f.userId,
+        familyId: f.familyId,
+      });
+      expect(await store.peekLive(f.refreshHash)).not.toBeNull();
+      expect(await store.peekLive(hex())).toBeNull();
+      const a = rot(store, f.refreshHash);
+      expect((await a.run()).status).toBe('rotated');
+      expect(await store.peekLive(f.refreshHash)).toBeNull();
+      expect(await store.peekLive(a.to)).not.toBeNull();
+      await store.revokeFamily(f.familyId);
+      expect(await store.peekLive(a.to)).toBeNull();
+    });
+
     it('rotaciona em cadeia e o token novo vale', async () => {
       const store = fresh();
       const f = await family(store);

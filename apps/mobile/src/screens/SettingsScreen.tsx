@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BlockedUser } from '@trucaco/protocol';
 import { useAudioPrefs } from '../audio/useAudioPrefs';
 import { messageForError } from '../i18n/errors';
 import { errorMessage } from '../i18n/errors';
@@ -8,7 +9,12 @@ import { performLogout } from '../lobby/logout';
 import { checkNickname } from '../lobby/nickname';
 import { getApp } from '../services/app';
 import { lobbyStore } from '../store/lobbyStore';
-import { selectNickname, sessionStore, useSessionStore } from '../store/sessionStore';
+import {
+  selectNickname,
+  selectProvider,
+  sessionStore,
+  useSessionStore,
+} from '../store/sessionStore';
 import { SettingsView } from './SettingsView';
 
 export function SettingsScreen() {
@@ -20,6 +26,79 @@ export function SettingsScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const provider = useSessionStore(selectProvider);
+  const alive = useRef(true);
+  const [blocksState, setBlocksState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [blocks, setBlocks] = useState<readonly BlockedUser[]>([]);
+  const [blocksError, setBlocksError] = useState<string | null>(null);
+  const [unblocking, setUnblocking] = useState<string | null>(null);
+  const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const loadBlocks = useCallback(async (): Promise<void> => {
+    setBlocksState('loading');
+    setBlocksError(null);
+    try {
+      const res = await getApp().session.api.blocks();
+      if (!alive.current) return;
+      setBlocks(res.blocks);
+      setBlocksState('ready');
+    } catch (e) {
+      if (!alive.current) return;
+      setBlocksError(messageForError(e));
+      setBlocksState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBlocks();
+  }, [loadBlocks]);
+
+  const unblock = async (userId: string): Promise<void> => {
+    if (unblocking !== null) return;
+    setUnblocking(userId);
+    setBlocksError(null);
+    try {
+      await getApp().session.api.unblock(userId);
+      if (alive.current) setBlocks((cur) => cur.filter((b) => b.userId !== userId));
+    } catch (e) {
+      if (alive.current) setBlocksError(messageForError(e));
+    } finally {
+      if (alive.current) setUnblocking(null);
+    }
+  };
+
+  /** Apagar conta: sai da fila (melhor esforço), apaga no servidor e só então limpa o estado local. */
+  const deleteAccount = async (): Promise<void> => {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const app = getApp();
+    sessionStore.getState().beginLogout(); // o signedOut que vem é intencional, não "sessão perdida"
+    try {
+      try {
+        await app.session.api.leaveQueue();
+      } catch {
+        // Melhor esforço.
+      }
+      await app.session.deleteAccount();
+      lobbyStore.getState().reset();
+      router.replace('/');
+    } catch (e) {
+      sessionStore.setState({ loggingOut: false });
+      if (alive.current) setDeleteError(messageForError(e));
+    } finally {
+      if (alive.current) setDeleting(false);
+    }
+  };
 
   const save = async (): Promise<void> => {
     if (busy) return;
@@ -71,6 +150,26 @@ export function SettingsScreen() {
       saved={saved}
       appVersion={version}
       sound={{ prefs: audioPrefs, onChange: (patch) => audio.setPrefs(patch) }}
+      account={{
+        provider,
+        blocks: { state: blocksState, items: blocks, error: blocksError, busyId: unblocking },
+        deletion: { step: deleteStep, busy: deleting, error: deleteError },
+        on: {
+          profile: () => router.push('/profile'),
+          unblock: (id) => void unblock(id),
+          retryBlocks: () => void loadBlocks(),
+          deleteStart: () => {
+            setDeleteError(null);
+            setDeleteStep(1);
+          },
+          deleteContinue: () => setDeleteStep(2),
+          deleteCancel: () => {
+            setDeleteError(null);
+            setDeleteStep(0);
+          },
+          deleteConfirm: () => void deleteAccount(),
+        },
+      }}
       on={{
         draft: (t) => {
           setDraft(t);

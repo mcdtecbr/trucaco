@@ -80,7 +80,8 @@ Rotas em `app/` (finas) e telas em `src/screens/`:
 - `/` (boot): restaura a sessão ou cria convidado; `unavailable` mostra "Tentar de novo" sem criar convidado.
 - `/home`: criar mesa privada (variante, formato `single` ou `bo3`, mão de ferro), entrar por código, fila pública.
 - `/table/[code]`: espera, mesa e resultado (visões acima). Rota protegida por `RequireSession`: sem sessão pronta, volta a `/`.
-- `/settings`: apelido via `PUT /me`, sair (sai da fila no servidor antes), versões.
+- `/profile`: perfil e histórico de partidas (seção "Perfil e moderação").
+- `/settings`: apelido via `PUT /me`, sair (sai da fila no servidor antes), bloqueados, apagar conta, versões.
 
 - `src/store/`: Zustand só para UI. `sessionStore` espelha `session.ts`; `lobbyStore` = fila/busy/erro; `roomStore` = conexão e projeção da sala de espera. A fonte continua sendo `room.state`.
 - `src/lobby/lobbyController.ts`: criar/entrar/fila (validação antes da rede, anti duplo clique, polling de 2 s cancelável, guards de resposta). `src/room/roomService.ts`: uma sala por vez, `leave(true)`, reconexão manual quando o SDK desiste.
@@ -169,10 +170,10 @@ O resultado depende da máquina: é uma medição de um ambiente, não uma garan
 - **Painel de sinais**: o combinado aparece sob o nome do sinal (`signal-meaning-<id>`). Quando o parceiro sinaliza e há combinado para esse sinal, a mesa mostra um aviso por 5 s (`partnerSignalNote`) e o anúncio para o leitor de tela inclui o significado.
 - **Erros** (textos em `src/i18n/errors.ts`, função própria para `setCode`): `CODE_NOT_SAVED` ("O combinado não foi salvo; vale só nesta mesa."), `CHAT_BLOCKED` e `RATE_LIMITED` no campo do combinado.
 - **Reenvio**: `roomService` liga o handler `codes` antes de enviar `ready` (1 s depois de ligar os handlers, `READY_DELAY_MS`). O servidor responde ao `ready` com o combinado; o `ready` não inicia a partida.
-- **Como convidado**: `CodesPanel` mostra "Como convidado, seu combinado some ao sair da conta." **Hoje esse aviso aparece para todos**: `TableRoomScreen.tsx` passa `guest: true` fixo. Corrigir para ler o provedor da sessão (fase de contas, Fase 6) é pendência.
+- **Como convidado**: `CodesPanel` mostra "Como convidado, seu combinado some ao sair da conta." Desde o 6B o aviso lê o provedor da sessão (`guest: provider === 'guest'` em `TableRoomScreen.tsx`). Antes era `guest: true` fixo e aparecia para todos.
 - **Ocupante trocado na espera**: o chat e o balão do assento que mudou de mão são apagados (`tableController`); se o assento era do parceiro, o chat da dupla do par antigo também. O servidor manda `codes` vazio ao parceiro que ficou e carrega o combinado do novo par.
 - **Silenciar um jogador** (`ChatPanel.tsx`, `src/store/mutedStore.ts`): um botão "Silenciar <nome>" por OUTRO jogador sentado humano (bot não entra). Esconde o chat e os balões daquele assento nesta mesa. É **preferência local**: não vai ao servidor nem à conta, e o outro jogador não sabe. Chave: apelido normalizado (minúsculas), até 50 nomes (`MAX_MUTED`). Guardada com a chave `trucaco.muted.v1`: `localStorage` no web, `expo-secure-store` no nativo (`src/platform/mutedStorage*.ts`), memória nos testes.
-- **Fora do escopo desta fase**: filtro de palavrões, bloqueio e denúncia (Fase 6; `canReceiveChat` no servidor é o ponto de extensão).
+- **Fora do escopo desta fase**: filtro de palavrões (Fase 8). Bloqueio e denúncia entraram na Fase 6, bloco 6B (seção "Perfil e moderação").
 - **Não validado**: silenciar no nativo (`expo-secure-store`), toque real no painel, leitor de tela lendo o combinado, layout em tela estreita. Só Chromium no E2E (`e2e/codes.spec.ts`).
 
 ## Retomar a mesa depois de recarregar
@@ -200,6 +201,17 @@ Código em `src/audio/`. Os arquivos de `assets/audio/` são **placeholders sile
 - **Testes**: `src/audio/*.test.ts`, `src/screens/sound.test.tsx`, `src/table/tableController.sfx.test.ts` e `tableController.speech.test.ts`. Sem E2E de áudio ainda.
 - **Não validado**: som em aparelho (iOS, Android), no Safari, latência do primeiro grito e memória dos players no Android. Mesas de 6 assentos (fase 8) não testadas com a pré-carga.
 - **Pendente**: animação `trig_shout` (não existe no `avatar.riv`; o ponto de extensão é `store.speech[seat].event`, em `tableStore`).
+
+## Perfil e moderação (Fase 6, bloco 6B)
+
+- **Perfil e histórico** (`app/profile.tsx` → `ProfileScreen` e `ProfileView`, dentro de `RequireSession`): apelido, tipo de conta e as partidas de `GET /matches`, paginadas por cursor ("Carregar mais"). Falha ao carregar mais mantém a lista já mostrada e oferece tentar de novo.
+- **Bloquear e denunciar** saem de uma partida do histórico (`ModerationPanel`). A denúncia pede o motivo (`REPORT_REASONS`) e aceita um texto opcional; envia `POST /reports`. O bloqueio pede confirmação antes de `POST /me/blocks`.
+- **Bloqueados** (Configurações): lista de `GET /me/blocks`, com "Desbloquear" (`DELETE /me/blocks/:userId`).
+- **Fora do cliente hoje**: bloquear ou denunciar pelo menu do assento na mesa, porque o `PublicPlayer` não tem `userId` (decisão pendente, `docs/specs/2026-11-04-fase-6-plano.md`, seção 7). Perfil público de outro jogador (`GET /users/:id`) existe no servidor, sem tela no cliente.
+- **Tipo de conta** (`session.ts`, `loadProvider()`): busca `GET /me` e preenche `SessionUser.provider`. Uma chamada por vez: se já há uma em andamento, devolve a mesma promessa. Se falhar, não tenta sozinho de novo; só em `start()` (login ou restauração). Enquanto não carrega, `provider` fica `undefined`.
+- **Apagar conta** (Configurações): dois passos, um aviso com "Continuar" e a confirmação final "Apagar minha conta para sempre". `session.deleteAccount()` manda o refresh atual como prova. Em sucesso, limpa tudo local e vai a `signedOut`. Em erro, a sessão continua como estava e a mensagem aparece na tela.
+- **Não verificado**: E2E novo para histórico, bloqueio e apagar conta (não escrito). Os testes são de unidade e de tela (`profile.test.tsx`, `history.test.ts`, `moderation.test.ts`, `session.account.test.ts`). Nada disso foi visto em aparelho.
+- **Resíduo no aparelho**: depois de apagar a conta, `trucaco.muted.v1` (silenciados) e o `sessionStorage` continuam.
 
 ## Reserva, saída e a verificar
 
