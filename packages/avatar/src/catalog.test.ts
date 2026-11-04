@@ -8,7 +8,6 @@ import {
 } from '@trucaco/protocol';
 import {
   BG_COLORS,
-  HAIR_COLOR,
   HAIR_COLORS,
   EYE_COLORS,
   OUTFIT_COLORS,
@@ -72,7 +71,7 @@ describe('contrato do rig', () => {
       expect(c.base).toMatch(/^#[0-9A-F]{6}$/);
       expect(c.shade).toMatch(/^#[0-9A-F]{6}$/);
     }
-    expect(HAIR_COLOR).toBe('#2B1B12');
+    expect(HAIR_COLORS[0]).toBe('#2B1B12');
     expect(HAIR_COLORS).toHaveLength(AVATAR_PART_COUNTS.hair_color);
     expect(EYE_COLORS).toHaveLength(AVATAR_PART_COUNTS.eye_color);
     expect(OUTFIT_COLORS).toHaveLength(AVATAR_PART_COUNTS.outfit_color);

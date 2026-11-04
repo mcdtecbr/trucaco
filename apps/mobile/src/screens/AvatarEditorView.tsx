@@ -28,6 +28,8 @@ export const PART_TITLES: Readonly<Record<AvatarPartKey, string>> = {
   hair_color: 'Cor do cabelo',
   eye_color: 'Cor dos olhos',
   outfit_color: 'Cor da roupa',
+  brows: 'Sobrancelhas',
+  nose: 'Nariz',
 };
 
 /** Ordem de exibição no editor: cada cor logo depois da sua forma (a ordem do contrato é outra). */
@@ -38,6 +40,8 @@ export const EDITOR_PART_ORDER: readonly AvatarPartKey[] = [
   'hair_color',
   'eyes',
   'eye_color',
+  'brows',
+  'nose',
   'mouth',
   'outfit',
   'outfit_color',

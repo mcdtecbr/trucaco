@@ -4,6 +4,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Avatar: ampliação do catálogo, fatia 3 (rosto) (2026-11-05), sem commit
+
+Decisão em `docs/adr/0006-rosto-segue-as-pranchas-e-avatares-recomecam.md`. `.riv` reexportado (38,5 KB, 13 Numbers, 16 triggers), validado no runtime web; não validado em aparelho iOS/Android.
+
+#### Alterado
+
+- `face_shape` 6 e `eyes` 6, redesenhados pela prancha de referência (índices na ordem da prancha, sem compatibilidade com o desenho anterior); `brows` (4) e `nose` (8) são dimensões novas ao fim de `AVATAR_PART_KEYS` (13 Numbers). `PROTOCOL_VERSION` 4.
+- Migração `20261105120000_avatar_rosto`: **apaga todos os avatares** (`DELETE FROM "avatars"`); o cliente usa o padrão até o jogador recriar.
+- Orçamento de vértices do `art.ts` de 420 para 760 (122 paths, 725 vértices). Removido `HAIR_COLOR` (legado).
+
 ### Avatar: ampliação do catálogo, fatia 2 (bocas e línguas) (2026-11-04), sem commit final
 
 Decisão em `docs/adr/0005-boca-5-opcoes-e-sinal-mouth-open.md`. Não validado em aparelho iOS/Android.

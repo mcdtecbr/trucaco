@@ -94,6 +94,10 @@ describe('AvatarEditorView', () => {
     expect(i('eye_color')).toBe(i('eyes') + 1);
     expect(i('outfit_color')).toBe(i('outfit') + 1);
     expect(PART_TITLES.hair_color).toBe('Cor do cabelo');
+    // Fatia 3: sobrancelhas e nariz têm título e vêm logo depois dos olhos
+    expect(i('brows')).toBeGreaterThan(i('eye_color'));
+    expect(PART_TITLES.brows).toBe('Sobrancelhas');
+    expect(PART_TITLES.nose).toBe('Nariz');
   });
 
   it('rótulos vêm do catálogo; índice além do catálogo vira "Opção N"', () => {

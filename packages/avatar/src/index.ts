@@ -9,7 +9,6 @@ export {
 export {
   PART_VARIANT_NAMES,
   SKIN_COLORS,
-  HAIR_COLOR,
   HAIR_COLORS,
   EYE_COLORS,
   type SkinColor,
