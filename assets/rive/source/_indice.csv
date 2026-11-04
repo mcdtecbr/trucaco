@@ -32,6 +32,11 @@ face_heart.svg;4;face_shape=3;skin
 face_triangle.svg;4;face_shape=4;skin
 face_long.svg;4;face_shape=5;skin
 neck_shadow.svg;4;sempre;shade
+shade_jaw_soft.svg;4;sempre;shade (opacidade 0.12, recorte: rosto)
+shade_jaw.svg;4;sempre;shade (opacidade 0.16, recorte: rosto)
+shade_cheek_l.svg;4;sempre;blush = shade 50% #D2475A (opacidade 0.28)
+shade_cheek_r.svg;4;sempre;blush = shade 50% #D2475A (opacidade 0.28)
+shade_beard_neck.svg;4;beard=1,3,4;deep = shade 40% #2A1208 (opacidade 0.35)
 beard_1.svg;4;beard=1;#2B1B12
 beard_2.svg;4;beard=2;#2B1B12 (opacidade 0.35)
 beard_3.svg;4;beard=3;#2B1B12
@@ -174,3 +179,5 @@ hat_10_crown.svg;7;hat=10;#1A1A1C
 hat_10_panel.svg;7;hat=10;#2D2D31
 hat_10_brim.svg;7;hat=10;#C23030
 hat_10_button.svg;7;hat=10;#C23030
+shade_bald_gloss.svg;7;hair=0;#FFFFFF (opacidade 0.28, recorte: rosto, some com hat!=0)
+shade_hair_gloss.svg;7;hair!=0,16;#FFFFFF (opacidade 0.2, recorte: hair_<n>_front, some com hat!=0)

@@ -1,13 +1,13 @@
-import type { ReactNode } from 'react';
+import { Fragment, useId, type ReactNode } from 'react';
 import { Animated, StyleSheet, View, type ViewStyle } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { ClipPath, Defs, Path } from 'react-native-svg';
 import {
   DEFAULT_AVATAR_PARTS,
   parseAvatarParts,
   type AvatarParts,
   type SignalId,
 } from '@trucaco/protocol';
-import { groupParts, resolveFill, type ArtGroup } from './art';
+import { clipPaths, groupParts, resolveFill, type ArtGroup, type Part } from './art';
 import { BG_COLORS, safeIndex } from './parts';
 import { NEUTRAL, POSES, type PoseChannel } from './poses';
 
@@ -72,6 +72,7 @@ function box(u: number, cx: number, cy: number, w: number, h: number): ViewStyle
 }
 
 export function AvatarFallback(props: AvatarFallbackProps) {
+  const uid = `trucaco_clip_${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
   const parsed = parseAvatarParts(props.parts) ?? DEFAULT_AVATAR_PARTS;
   const u = props.size / 100;
   const k = props.size / 512;
@@ -128,21 +129,48 @@ export function AvatarFallback(props: AvatarFallbackProps) {
     ? Animated.multiply(smileMouthOp, ch('mouthOpacity'))
     : smileMouthOp;
 
+  /** Id do recorte do sombreado, único por instância (vários avatares na mesma página web). */
+  const clipIdOf = (p: Part): string | null =>
+    p.clip === 'face' ? `${uid}_face` : p.clip === 'hair' ? `${uid}_hair` : null;
+
   /** Um `<Svg>` com os paths de um grupo, recortado em `region`. */
   const layer = (group: ArtGroup, region: Region, withHidden = false): ReactNode => {
     const [x, y, w, h] = region;
+    const shown = groupParts(group, cfg, withHidden);
+    // cada recorte uma vez por Svg (várias peças podem usar o mesmo)
+    const clips = new Map<string, Part>();
+    for (const p of shown) {
+      const id = clipIdOf(p);
+      if (id !== null && !clips.has(id)) clips.set(id, p);
+    }
     return (
       <Svg width={w * k} height={h * k} viewBox={`${x} ${y} ${w} ${h}`}>
-        {groupParts(group, cfg, withHidden).map((p) => (
-          <Path
-            key={p.name}
-            d={p.d}
-            fill={resolveFill(p.fill, cfg)}
-            {...(p.evenodd === true ? { fillRule: 'evenodd' as const } : {})}
-            {...(p.opacity !== undefined ? { fillOpacity: p.opacity } : {})}
-            {...(p.mirror === true ? { transform: 'matrix(-1 0 0 1 512 0)' } : {})}
-          />
-        ))}
+        {clips.size > 0 ? (
+          <Defs>
+            {[...clips].map(([id, p]) => (
+              <ClipPath key={id} id={id}>
+                {clipPaths(p, cfg).map((d) => (
+                  <Path key={d} d={d} />
+                ))}
+              </ClipPath>
+            ))}
+          </Defs>
+        ) : null}
+        {shown.map((p) => {
+          const clipId = clipIdOf(p);
+          return (
+            <Fragment key={p.name}>
+              <Path
+                d={p.d}
+                fill={resolveFill(p.fill, cfg)}
+                {...(p.evenodd === true ? { fillRule: 'evenodd' as const } : {})}
+                {...(p.opacity !== undefined ? { fillOpacity: p.opacity } : {})}
+                {...(p.mirror === true ? { transform: 'matrix(-1 0 0 1 512 0)' } : {})}
+                {...(clipId !== null ? { clipPath: `url(#${clipId})` } : {})}
+              />
+            </Fragment>
+          );
+        })}
       </Svg>
     );
   };
