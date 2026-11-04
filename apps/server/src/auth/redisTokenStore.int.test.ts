@@ -170,3 +170,127 @@ describe('RedisTokenStore: userfam, graça e indisponibilidade', () => {
     await dead.close();
   });
 });
+
+describe('RedisTokenStore: claimIdToken, revokeAllForUser com exceção e peekLive (Redis real)', () => {
+  const hex = (): string => randomUUID().replaceAll('-', '').repeat(2);
+  const mkFamily = (userId: string, ttlSec = 60) => ({
+    familyId: randomUUID(),
+    userId,
+    refreshHash: hex(),
+    jti: randomUUID(),
+    ttlSec,
+  });
+
+  it('claimIdToken grava só a chave idtoken:used:<key> com TTL arredondado para cima e mínimo de 1 s', async () => {
+    const store = new RedisTokenStore(URL);
+    const key = hex();
+    expect(await store.claimIdToken(key, 30.2)).toBe(true);
+    const redisKey = `${REDIS_PREFIX}idtoken:used:${key}`;
+    expect(await probe.ttl(redisKey)).toBeGreaterThan(29);
+    expect(await probe.ttl(redisKey)).toBeLessThanOrEqual(31);
+    // A segunda tentativa não renova o TTL (NX).
+    expect(await store.claimIdToken(key, 3000)).toBe(false);
+    expect(await probe.ttl(redisKey)).toBeLessThanOrEqual(31);
+    // TTL nulo ou negativo não cria chave sem expiração.
+    const zero = hex();
+    expect(await store.claimIdToken(zero, 0)).toBe(true);
+    expect(await probe.ttl(`${REDIS_PREFIX}idtoken:used:${zero}`)).toBeGreaterThan(0);
+    await store.close();
+  });
+
+  it('claimIdToken: duas instâncias do store disputando a mesma chave, só uma vence', async () => {
+    const a = new RedisTokenStore(URL);
+    const b = new RedisTokenStore(URL);
+    const key = hex();
+    const results = await Promise.all([
+      ...Array.from({ length: 10 }, () => a.claimIdToken(key, 60)),
+      ...Array.from({ length: 10 }, () => b.claimIdToken(key, 60)),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    await a.close();
+    await b.close();
+  });
+
+  it('revokeAllForUser(exceptFamilyId) poupa a família indicada (sem revokedAt, ainda no userfam) e revoga as outras', async () => {
+    const store = new RedisTokenStore(URL);
+    const userId = randomUUID();
+    const keep = mkFamily(userId);
+    const other1 = mkFamily(userId);
+    const other2 = mkFamily(userId);
+    const stranger = mkFamily(randomUUID());
+    for (const f of [keep, other1, other2, stranger]) await store.createFamily(f);
+
+    const jtis = await store.revokeAllForUser(userId, keep.familyId);
+    expect(jtis.sort()).toEqual([other1.jti, other2.jti].sort());
+
+    const revoked = async (familyId: string): Promise<boolean> =>
+      (await probe.hexists(`${REDIS_PREFIX}rtfam:${familyId}`, 'revokedAt')) === 1;
+    expect(await revoked(keep.familyId)).toBe(false);
+    expect(await revoked(other1.familyId)).toBe(true);
+    expect(await revoked(other2.familyId)).toBe(true);
+    expect(await revoked(stranger.familyId)).toBe(false);
+    expect(await probe.sismember(`${REDIS_PREFIX}userfam:${userId}`, keep.familyId)).toBe(1);
+
+    expect(await store.peekLive(keep.refreshHash)).toEqual({ userId, familyId: keep.familyId });
+    expect(await store.peekLive(other1.refreshHash)).toBeNull();
+    // Segunda chamada com a mesma exceção: nada novo a revogar.
+    expect(await store.revokeAllForUser(userId, keep.familyId)).toEqual([]);
+    await store.close();
+  });
+
+  it('revokeAllForUser com exceção desconhecida revoga tudo do usuário', async () => {
+    const store = new RedisTokenStore(URL);
+    const userId = randomUUID();
+    const a = mkFamily(userId);
+    const b = mkFamily(userId);
+    await store.createFamily(a);
+    await store.createFamily(b);
+    expect((await store.revokeAllForUser(userId, randomUUID())).sort()).toEqual(
+      [a.jti, b.jti].sort(),
+    );
+    expect(await store.peekLive(a.refreshHash)).toBeNull();
+    expect(await store.peekLive(b.refreshHash)).toBeNull();
+    await store.close();
+  });
+
+  it('peekLive não consome o token: nenhum usedAt é gravado e o token ainda rotaciona depois', async () => {
+    const store = new RedisTokenStore(URL);
+    const f = mkFamily(randomUUID());
+    await store.createFamily(f);
+    for (let i = 0; i < 3; i++) {
+      expect(await store.peekLive(f.refreshHash)).toEqual({
+        userId: f.userId,
+        familyId: f.familyId,
+      });
+    }
+    expect(await probe.hexists(`${REDIS_PREFIX}rt:${f.refreshHash}`, 'usedAt')).toBe(0);
+    const rotated = await store.rotate({
+      refreshHash: f.refreshHash,
+      newRefreshHash: hex(),
+      newJti: randomUUID(),
+      ttlSec: 60,
+      graceSec: 0,
+      familyMaxSec: 3600,
+    });
+    expect(rotated.status).toBe('rotated');
+    // Depois de rotacionado (usado), peekLive devolve null.
+    expect(await store.peekLive(f.refreshHash)).toBeNull();
+    await store.close();
+  });
+
+  it('peekLive devolve null quando a família expirou ou foi apagada, mesmo com o token ainda no Redis', async () => {
+    const store = new RedisTokenStore(URL);
+    const f = mkFamily(randomUUID());
+    await store.createFamily(f);
+    await probe.del(`${REDIS_PREFIX}rtfam:${f.familyId}`);
+    expect(await probe.exists(`${REDIS_PREFIX}rt:${f.refreshHash}`)).toBe(1);
+    expect(await store.peekLive(f.refreshHash)).toBeNull();
+    // Hash desconhecido e hash revogado por revokeFamily.
+    expect(await store.peekLive(hex())).toBeNull();
+    const g = mkFamily(randomUUID());
+    await store.createFamily(g);
+    await store.revokeFamily(g.familyId);
+    expect(await store.peekLive(g.refreshHash)).toBeNull();
+    await store.close();
+  });
+});
