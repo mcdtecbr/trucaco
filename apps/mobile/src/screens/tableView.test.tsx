@@ -40,7 +40,6 @@ function html(state: unknown, over: Partial<TableViewProps> = {}): string {
     on: {
       pressCard: noop,
       act: noop,
-      confirmSelected: noop,
       dismissError: noop,
       toggleCover: noop,
       voteCancel: noop,
@@ -60,6 +59,7 @@ describe('TableView', () => {
   it('celular: mão, quatro jogadores, vira, placar e sonda de estado', () => {
     const out = html(snapshot());
     expect(out).toContain('data-testid="table"');
+    expect(out).toContain('table-felt');
     expect(out).toContain('três de paus');
     for (let i = 1; i < 4; i++) expect(out).toContain(`table-seat-${i}`);
     expect(out).toContain('Ana, online');
@@ -114,13 +114,12 @@ describe('TableView', () => {
     expect(html(snapshot(), { banner: 'closed' })).toContain('A conexão com a mesa foi encerrada.');
   });
 
-  it('carta selecionada mostra o botão de confirmar; erro e presença aparecem como texto', () => {
+  it('sem botão de confirmar; erro e presença aparecem como texto', () => {
     const out = html(snapshot(), {
-      selected: 'play:3paus',
       errorText: 'Não é a sua vez.',
       presenceNote: 'Caio está ausente.',
     });
-    expect(out).toContain('Jogar três de paus');
+    expect(out).not.toContain('confirm-play');
     expect(out).toContain('Não é a sua vez.');
     expect(out).toContain('Caio está ausente.');
   });
@@ -131,9 +130,13 @@ describe('TableView', () => {
     expect(out).toContain('aria-disabled="true"');
   });
 
-  it('largo: lateral com histórico aberto e vira; Mineiro lista as manilhas fixas', () => {
+  it('largo: placar fixo compacto com histórico recolhido, vira na lateral; Mineiro lista as manilhas fixas', () => {
     const wide = html(snapshot(), { layout: 'wide' });
-    expect(wide).toContain('Histórico das mãos');
+    expect(wide).toContain('score-fixed');
+    expect(wide).toContain('score-ad');
+    expect(html(snapshot(), { layout: 'wide', scoreAd: null })).not.toContain('score-ad');
+    expect(wide).toContain('aria-expanded="false"');
+    expect(wide).not.toContain('Histórico das mãos');
     const mineiro = html(
       snapshot({
         options: { variant: 'mineiro' },
@@ -271,10 +274,9 @@ describe('TableView: 3H2', () => {
         hand: { special: 'maoDeFerro' },
         privates: priv(0, { legalActions: ['playBlind:0', 'playBlind:1', 'playBlind:2'] }),
       }),
-      { selected: 'playBlind:1' },
     );
     expect(out).toContain('Carta 1 de 3, às cegas');
-    expect(out).toContain('Jogar a carta 2');
+    expect(out).toContain('Carta 2 de 3, às cegas');
   });
 
   it('botão Cobrir só existe com playCovered legal; modo ligado marca o botão', () => {
@@ -287,9 +289,8 @@ describe('TableView: 3H2', () => {
     expect(html(state)).toContain('cover-toggle');
     expect(html(state, { coverMode: true })).toContain('Cobrir: ligado');
     expect(html(snapshot())).not.toContain('cover-toggle');
-    expect(html(state, { coverMode: true, selected: 'playCovered:3paus' })).toContain(
-      'Jogar coberta: três de paus',
-    );
+    expect(html(state, { coverMode: true })).toContain('Jogar coberta: três de paus');
+    expect(html(state)).not.toContain('Jogar coberta');
   });
 
   it('a última vaza fica na mesa por um instante, com o vencedor', () => {
@@ -334,7 +335,7 @@ describe('TableView: 3H2', () => {
     expect(out).not.toContain('Truco!');
   });
 
-  it('histórico detalhado: lances da mão e da mão em curso', () => {
+  it('histórico detalhado recolhido por padrão: nada das jogadas aparece até expandir', () => {
     const out = html(snapshot(), {
       layout: 'wide',
       handLog: ['Bia jogou rei de ouros.'],
@@ -349,9 +350,9 @@ describe('TableView: 3H2', () => {
         },
       ],
     });
-    expect(out).toContain('Vaza 1: Você levou.');
-    expect(out).toContain('Mão 1 em curso');
-    expect(out).toContain('Bia jogou rei de ouros.');
+    expect(out).not.toContain('Vaza 1: Você levou.');
+    expect(out).not.toContain('Bia jogou rei de ouros.');
+    expect(out).toContain('score-history-toggle');
   });
 });
 

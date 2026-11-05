@@ -61,6 +61,37 @@ const BASE: ScoreLayersProps = {
   tricks: [{ winnerTeam: 1 }, { winnerTeam: -1 }],
 };
 
+describe('ScoreLayers compacto', () => {
+  const history = [
+    {
+      handNumber: 1,
+      winnerTeam: 0 as const,
+      points: 1,
+      reason: 'tricks' as const,
+      scores: [1, 0] as [number, number],
+      details: ['Vaza 1: Você levou.'],
+    },
+  ];
+
+  it('mostra Nós, Eles, Vale e Mão, com o histórico recolhido e o botão com aria-expanded', () => {
+    const html = renderToStaticMarkup(<ScoreLayers {...BASE} compact history={history} />);
+    expect(html).toContain('Nós');
+    expect(html).toContain('Eles');
+    expect(html).toContain('Vale');
+    expect(html).toContain('Mão');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('Vaza 1: Você levou.');
+  });
+
+  it('aberto, o texto do histórico é o mesmo', () => {
+    const html = renderToStaticMarkup(
+      <ScoreLayers {...BASE} compact defaultHistoryOpen history={history} />,
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('Vaza 1: Você levou.');
+  });
+});
+
 describe('ScoreLayers', () => {
   it('histórico mostra os lances de cada mão e da mão em curso', () => {
     const html = renderToStaticMarkup(

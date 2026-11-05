@@ -173,7 +173,6 @@ async function performAction(page: Page, strategy: Strategy): Promise<boolean> {
   const cards = page.getByTestId('my-hand').locator('[role="button"]:not([aria-disabled="true"])');
   if ((await cards.count()) === 0) return false;
   await cards.first().click();
-  await page.getByTestId('confirm-play').click();
   return true;
 }
 

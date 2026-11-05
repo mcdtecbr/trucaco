@@ -286,3 +286,34 @@ describe('5C: silenciar', () => {
     expect(store.getState().chat).toEqual([]);
   });
 });
+
+describe('chat ao começar a partida', () => {
+  it('mensagem da dupla não lida na espera é zerada ao entrar em jogo', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waiting());
+    ctl.onChat({ scope: 'partner', seat: 2, text: 'oi', at: 1 });
+    ctl.onChat({ scope: 'table', seat: 1, text: 'olá', at: 2 });
+    expect(store.getState().chatUnread).toEqual({ table: 1, partner: 1 });
+    ctl.applyState(snapshot());
+    expect(store.getState().chatUnread).toEqual({ table: 1, partner: 0 });
+  });
+
+  it('aba Dupla ativa na espera volta para Mesa ao entrar em jogo', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waiting());
+    ctl.setChatTab('partner');
+    ctl.setChatOpen(true);
+    expect(store.getState().chatTab).toBe('partner');
+    ctl.applyState(snapshot());
+    expect(store.getState().chatTab).toBe('table');
+  });
+
+  it('em jogo, mensagem da dupla (servidor antigo) não conta como não lida', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(snapshot());
+    ctl.onChat({ scope: 'partner', seat: 2, text: 'oi', at: 1 });
+    expect(store.getState().chatUnread.partner).toBe(0);
+    ctl.onChat({ scope: 'table', seat: 1, text: 'oi', at: 2 });
+    expect(store.getState().chatUnread.table).toBe(1);
+  });
+});

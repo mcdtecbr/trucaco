@@ -13,7 +13,7 @@ import { captureBaseline, startGainWatch } from '../room/achievementWatch';
 import { progressStore, useProgressStore } from '../store/progressStore';
 import { useRoomStore } from '../store/roomStore';
 import { selectProvider, useSessionStore } from '../store/sessionStore';
-import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
+import { effectiveDeadline, useTableStore } from '../table/tableStore';
 import {
   connectionBanner,
   finishedResult,
@@ -55,6 +55,9 @@ export function TableRoomScreen() {
 }
 
 /** Props do painel de chat a partir do store da mesa (compartilhado entre espera e mesa). */
+/** Em jogo só há o chat da mesa; o da dupla fica na sala de espera. */
+const IN_GAME_CHAT_SCOPES: readonly ChatScope[] = ['table'];
+
 function useChatPanel(
   nicknameOf: (seat: number) => string,
   mySeat: number,
@@ -264,7 +267,7 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
     (seat) => vm?.seats[seat]?.nickname ?? '',
     vm?.mySeat ?? -1,
     connection === 'connected',
-    undefined,
+    IN_GAME_CHAT_SCOPES,
     (seat) => vm?.seats[seat]?.isBot === true || vm?.seats[seat]?.status === 'bot',
   );
   const codesPanel = useCodesPanel(vm?.seats ?? [], vm?.mySeat ?? -1, connection === 'connected');
@@ -294,7 +297,7 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       lingering={lingering}
       coverMode={coverMode}
       probe={isE2EMode()}
-      chatUnreadTotal={chatUnread.table + chatUnread.partner}
+      chatUnreadTotal={chatUnread.table}
       chatPanel={chatPanel}
       codes={codes}
       codesPanel={codesPanel}
@@ -312,16 +315,13 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       }}
       signals={signals}
       reduceMotion={reduceMotion}
+      animateDeal={!isE2EMode()}
       deadlineAt={deadlineAt}
       clockOffsetMs={clockOffsetMs}
       leaveConfirm={leaveConfirm}
       on={{
         pressCard: (id: LegalActionId) => table.pressCard(id),
         act: (id: LegalActionId) => void table.act(id),
-        confirmSelected: () => {
-          const sel = tableStore.getState().selected;
-          if (sel !== null) void table.act(sel);
-        },
         dismissError: () => table.clearError(),
         toggleCover: () => table.setCoverMode(!coverMode),
         voteCancel: () => void table.voteCancel(),

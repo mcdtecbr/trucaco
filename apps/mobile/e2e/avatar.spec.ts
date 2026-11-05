@@ -2,24 +2,12 @@
  * E2E web da Fase 4: sinais na mesa e criador de avatar, com 4 convidados em 4 navegadores contra o
  * servidor real. O avatar expõe `data-testid="avatar-<assento>-signal-<id>"` enquanto anima.
  */
-import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import { readProbe, startTable } from './support/table';
 import type { Player } from './support/table';
 
-/** Segura o botão por mais que os 400 ms exigidos. */
-async function hold(page: Page, testId: string, ms = 700): Promise<void> {
-  const button = page.getByTestId(testId);
-  await button.hover();
-  await page.mouse.down();
-  await page.waitForTimeout(ms);
-  await page.mouse.up();
-}
-
 test.describe('sinais na mesa', () => {
-  test('segurar o botão envia o sinal e os 4 navegadores veem o avatar animar; toque rápido não envia', async ({
-    players,
-  }) => {
+  test('um toque envia o sinal e os 4 navegadores veem o avatar animar', async ({ players }) => {
     await startTable(players);
     const [sender, ...others] = players as [Player, Player, Player, Player];
     const seat = (await readProbe(sender.page))?.me ?? -1;
@@ -37,13 +25,8 @@ test.describe('sinais na mesa', () => {
     ).toHaveCount(16);
     await expect(sender.page.getByTestId('signal-wink')).toHaveText('Piscar um olho');
 
-    // Toque rápido não envia nada.
-    await sender.page.getByTestId('signal-nod').click();
-    await sender.page.waitForTimeout(900);
-    for (const p of players) await expect(marker(p, 'nod')).toHaveCount(0);
-
-    // Segurar envia: o marcador aparece nos 4 (inclusive no emissor) ...
-    await hold(sender.page, 'signal-wink');
+    // Um toque envia: o marcador aparece nos 4 (inclusive no emissor) ...
+    await sender.page.getByTestId('signal-wink').click();
     await Promise.all(players.map((p) => marker(p, 'wink').waitFor({ state: 'attached' })));
     // ... e some quando a animação termina (volta ao ocioso).
     await Promise.all(players.map((p) => expect(marker(p, 'wink')).toHaveCount(0)));

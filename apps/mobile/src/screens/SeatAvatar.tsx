@@ -4,11 +4,13 @@ import { Avatar } from '@trucaco/avatar';
 import type { AvatarParts } from '@trucaco/protocol';
 import type { ActiveSignal } from '../table/tableStore';
 
-/** Lado do avatar nos assentos (px). */
-export const SEAT_AVATAR_SIZE = 56;
+/** Lado do avatar nos assentos (px): grande o bastante para os sinais (olho, boca) serem vistos. */
+export const SEAT_AVATAR_SIZE = { phone: 70, wide: 104 } as const;
 
 export interface SeatAvatarProps {
   readonly seat: number;
+  /** Lado em px (`SEAT_AVATAR_SIZE` por layout). */
+  readonly size?: number;
   readonly parts: AvatarParts;
   /** Sinal em animação neste assento (objeto estável até mudar) ou null. */
   readonly signal: ActiveSignal | null;
@@ -32,7 +34,7 @@ export const SeatAvatar = memo(function SeatAvatar(p: SeatAvatarProps) {
     <View accessible={false} aria-hidden importantForAccessibility="no-hide-descendants">
       <Avatar
         parts={p.parts}
-        size={SEAT_AVATAR_SIZE}
+        size={p.size ?? 56}
         signal={signal}
         onSignalEnd={end}
         reduceMotion={p.reduceMotion}

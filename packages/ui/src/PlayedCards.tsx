@@ -62,16 +62,18 @@ export function PlayedCards(p: PlayedCardsProps) {
       accessibilityRole="summary"
       accessibilityLabel={order.length === 0 ? 'Nenhuma carta na mesa' : 'Cartas na mesa'}
       style={styles.grid}
+      pointerEvents="box-none"
     >
       {GRID.map((row, r) => (
         <View
           key={r}
+          pointerEvents="box-none"
           style={[styles.row, r > 0 && { marginTop: -Math.round(cardSizes[size].height * 0.3) }]}
         >
           {row.map((pos, c) => {
             const play = pos === null ? undefined : byPosition[pos];
             if (pos === null || play === undefined) {
-              return <View key={c} style={slotSize(size)} />;
+              return <View key={c} style={slotSize(size)} pointerEvents="none" />;
             }
             const own = play.seat === p.mySeat && play.covered ? p.ownCovered : null;
             const face = parseFace(own ?? play);

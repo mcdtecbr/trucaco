@@ -3,7 +3,7 @@
  * cartas e botões habilitados vêm de `legalActions`; valores de aposta e manilhas, do estado.
  */
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { betCry, parseLegalAction } from '@trucaco/protocol';
+import { betCry } from '@trucaco/protocol';
 import type { LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
@@ -19,7 +19,6 @@ import {
   TurnTimer,
   Vira,
   canCover,
-  cardName,
   colors,
   fontSize,
   fontWeight,
@@ -43,7 +42,11 @@ import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
-import { SeatAvatar } from './SeatAvatar';
+import { DealOverlay, useDealSequence } from '../table/DealOverlay';
+import { ScoreAd } from '../table/ScoreAd';
+import { TableFelt } from '../table/TableFelt';
+import type { TableAd } from '../table/ad';
+import { SEAT_AVATAR_SIZE, SeatAvatar } from './SeatAvatar';
 import { SignalPanel } from './SignalPanel';
 
 export interface TableViewProps {
@@ -89,13 +92,18 @@ export interface TableViewProps {
   signals: Readonly<Record<number, ActiveSignal>>;
   /** Preferência do sistema: sem animação, só destaque estático. */
   reduceMotion: boolean;
+  /** Embaralhar, distribuir e recolher com animação. Omitido = desligado (só o estado final). */
+  animateDeal?: boolean;
+  /** Publicidade impressa no pano. Omitido = arte placeholder; `null` = sem publicidade. */
+  tableAd?: TableAd | null;
+  /** Publicidade na faixa do placar. Omitido = arte placeholder; `null` = sem publicidade. */
+  scoreAd?: TableAd | null;
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
   on: {
     pressCard(id: LegalActionId): void;
     act(id: LegalActionId): void;
-    confirmSelected(): void;
     dismissError(): void;
     toggleCover(): void;
     voteCancel(): void;
@@ -171,6 +179,7 @@ interface SeatSignals {
   sfxMarks?: Readonly<Record<number, SfxMarkEntry>> | undefined;
   signals: Readonly<Record<number, ActiveSignal>>;
   reduceMotion: boolean;
+  avatarSize: number;
   onSignalEnd(seat: number, key: number): void;
 }
 
@@ -201,6 +210,7 @@ function Seat({
         avatar={
           <SeatAvatar
             seat={s.seat}
+            size={fx.avatarSize}
             parts={s.avatar}
             signal={fx.signals[s.seat] ?? null}
             reduceMotion={fx.reduceMotion}
@@ -249,15 +259,6 @@ export function turnText(vm: TableViewModel): string | null {
   return `Vez de ${n !== undefined && n !== '' ? n : 'outro jogador'}`;
 }
 
-function selectedLabel(selected: string | null): string | null {
-  const a = parseLegalAction(selected);
-  if (a === null) return null;
-  if (a.kind === 'play') return `Jogar ${cardName(a.card.rank, a.card.suit)}`;
-  if (a.kind === 'playCovered') return `Jogar coberta: ${cardName(a.card.rank, a.card.suit)}`;
-  if (a.kind === 'playBlind') return `Jogar a carta ${a.index + 1}`;
-  return null;
-}
-
 function Banner({ banner, onLeave }: { banner: ConnectionBanner; onLeave(): void }) {
   if (banner === null) return null;
   if (banner === 'closed') {
@@ -300,7 +301,6 @@ export function TableView(p: TableViewProps) {
   const modalOpen = p.leaveConfirm;
   const actionsOn = p.connected && !p.busy && !modalOpen;
   const legal = p.connected && !modalOpen ? vm.legalActions : [];
-  const label = selectedLabel(p.selected);
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
@@ -308,8 +308,16 @@ export function TableView(p: TableViewProps) {
     sfxMarks: p.sfxMarks,
     signals: p.signals,
     reduceMotion: p.reduceMotion,
+    avatarSize: wide ? SEAT_AVATAR_SIZE.wide : SEAT_AVATAR_SIZE.phone,
     onSignalEnd: p.on.signalEnd,
   };
+  const deal = useDealSequence({
+    key: `${vm.matchNumber}:${vm.handNumber}`,
+    enabled: p.animateDeal === true && !p.reduceMotion && vm.handNumber > 0,
+    pe: vm.pe,
+    mySeat: vm.mySeat,
+    fresh: vm.current.length === 0 && vm.tricks.length === 0,
+  });
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
   const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}`;
 
@@ -325,15 +333,18 @@ export function TableView(p: TableViewProps) {
       history={p.history}
       currentLog={p.handLog}
       variant={vm.variant}
-      defaultHistoryOpen={wide}
+      compact
+      adSlot={<ScoreAd ad={p.scoreAd} />}
     />
   );
   const vira = (
-    <Vira
-      viraRank={vm.vira.rank}
-      viraSuit={vm.vira.suit}
-      {...(vm.manilhaLabel !== undefined ? { manilhaLabel: vm.manilhaLabel } : {})}
-    />
+    <View style={deal.viraHidden ? styles.hidden : undefined}>
+      <Vira
+        viraRank={vm.vira.rank}
+        viraSuit={vm.vira.suit}
+        {...(vm.manilhaLabel !== undefined ? { manilhaLabel: vm.manilhaLabel } : {})}
+      />
+    </View>
   );
   const showLinger = vm.current.length === 0 && p.lingering !== null;
   const trickPlays = showLinger ? (p.lingering?.plays ?? []) : vm.current;
@@ -352,15 +363,20 @@ export function TableView(p: TableViewProps) {
     ) : null;
 
   const board = (
-    <View style={styles.board}>
-      <View style={styles.partner}>
+    <TableFelt
+      style={styles.board}
+      contentStyle={styles.boardContent}
+      ad={p.tableAd}
+      testID="table-felt"
+    >
+      <View style={styles.partner} pointerEvents="box-none">
         <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
       </View>
-      <View style={styles.middle}>
-        <View style={styles.side}>
+      <View style={styles.middle} pointerEvents="box-none">
+        <View style={[styles.side, wide && styles.sideWide]}>
           <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
         </View>
-        <View style={styles.center} testID="trick">
+        <View style={styles.center} testID="trick" pointerEvents="box-none">
           <PlayedCards
             plays={trickPlays}
             mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
@@ -375,11 +391,14 @@ export function TableView(p: TableViewProps) {
             </Text>
           ) : null}
         </View>
-        <View style={styles.side}>
+        <View style={[styles.side, wide && styles.sideWide]}>
           <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
         </View>
       </View>
-    </View>
+      {deal.run !== null ? (
+        <DealOverlay runId={deal.run.id} plan={deal.run.plan} mySeat={vm.mySeat} />
+      ) : null}
+    </TableFelt>
   );
 
   const controls = (
@@ -394,9 +413,6 @@ export function TableView(p: TableViewProps) {
             {turn}
           </Text>
         ) : null}
-        <View style={styles.timer} testID="turn-timer">
-          <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
-        </View>
       </View>
       {pending !== null ? (
         <Text style={styles.pending} testID="pending-bet" accessibilityLiveRegion="polite">
@@ -453,10 +469,11 @@ export function TableView(p: TableViewProps) {
           <Text style={styles.menuText}>{p.coverMode ? 'Cobrir: ligado' : 'Cobrir'}</Text>
         </Pressable>
       ) : null}
-      {label !== null && actionsOn ? (
-        <Button label={label} onPress={p.on.confirmSelected} testID="confirm-play" />
-      ) : null}
-      <View testID="my-hand">
+      <View
+        testID="my-hand"
+        style={deal.handHidden ? styles.hidden : undefined}
+        pointerEvents={deal.handHidden ? 'none' : 'auto'}
+      >
         <HandFan
           hand={vm.myHand}
           legalActions={actionsOn ? vm.legalActions : []}
@@ -494,6 +511,7 @@ export function TableView(p: TableViewProps) {
           avatar={
             <SeatAvatar
               seat={mineSeat.seat}
+              size={fx.avatarSize}
               parts={mineSeat.avatar}
               signal={fx.signals[mineSeat.seat] ?? null}
               reduceMotion={fx.reduceMotion}
@@ -616,6 +634,9 @@ export function TableView(p: TableViewProps) {
         aria-hidden={modalOpen}
         importantForAccessibility={modalOpen ? 'no-hide-descendants' : 'auto'}
       >
+        <View style={styles.timerStrip} testID="turn-timer">
+          <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
+        </View>
         <Banner banner={p.banner} onLeave={p.on.leave} />
         {wide ? (
           <View style={styles.wideRow}>
@@ -625,7 +646,6 @@ export function TableView(p: TableViewProps) {
               {footer}
             </ScrollView>
             <ScrollView style={styles.sidebar} contentContainerStyle={styles.sidebarContent}>
-              {score}
               <View style={styles.viraBox}>{vira}</View>
               {mineiroManilhas}
             </ScrollView>
@@ -633,7 +653,6 @@ export function TableView(p: TableViewProps) {
         ) : (
           <ScrollView style={styles.phone} contentContainerStyle={styles.phoneContent}>
             <View style={styles.topRow}>
-              <View style={styles.topScore}>{score}</View>
               <View>{vira}</View>
             </View>
             {mineiroManilhas}
@@ -642,6 +661,10 @@ export function TableView(p: TableViewProps) {
             {footer}
           </ScrollView>
         )}
+        {/* Placar fixo no canto direito: não rola com a mesa e fica sobre o espaço vazio ao lado da vira. */}
+        <View style={styles.scoreFixed} pointerEvents="box-none" testID="score-fixed">
+          {score}
+        </View>
       </View>
       {p.presenceNote !== null ? (
         <Text style={styles.presence} testID="presence-note" pointerEvents="none">
@@ -698,19 +721,23 @@ const styles = StyleSheet.create({
   sfxMark: { alignSelf: 'center', fontSize: fontSize.large },
   probe: { position: 'absolute', width: 1, height: 1, opacity: 0, overflow: 'hidden' },
   phone: { flex: 1 },
-  phoneContent: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },
-  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  topScore: { flex: 1 },
-  board: { flex: 1, justifyContent: 'center', gap: spacing.md },
+  phoneContent: { flexGrow: 1, padding: spacing.xs, gap: spacing.sm },
+  // Reserva a altura do placar fixo (canto direito) ao lado da vira.
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, minHeight: 128 },
+  timerStrip: { paddingHorizontal: spacing.xs },
+  scoreFixed: { position: 'absolute', top: spacing.md, right: spacing.xs, zIndex: 5 },
+  hidden: { opacity: 0 },
+  board: { flex: 1 },
+  boardContent: { flex: 1, justifyContent: 'center', gap: spacing.md },
   partner: { alignItems: 'center' },
   middle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  side: { width: 88, alignItems: 'center' },
+  side: { width: 80, alignItems: 'center' },
+  sideWide: { width: 132 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   controls: { gap: spacing.sm, alignItems: 'stretch' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   turn: { color: colors.textMuted, fontSize: fontSize.small, fontWeight: fontWeight.bold },
   turnMine: { color: colors.primary },
-  timer: { flex: 1 },
   pending: {
     color: colors.primary,
     fontSize: fontSize.body,

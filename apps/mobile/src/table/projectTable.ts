@@ -86,6 +86,8 @@ export interface TableViewModel {
   readonly handPhase: HandPhaseId | '';
   readonly special: string;
   readonly handNumber: number;
+  /** Assento do pé (quem embaralha); -1 se o servidor ainda não publicou. */
+  readonly pe: number;
   readonly handValue: number;
   readonly vira: { readonly rank: string; readonly suit: string };
   /** Cartas manilha (para destaque). Paulista: todas as de `manilhaRank`; Mineiro: as fixas. */
@@ -308,6 +310,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
     handPhase,
     special,
     handNumber: num(game['handNumber']),
+    pe: num(game['pe'], ABSENT),
     handValue: num(hand['value']),
     vira: { rank: str(hand['viraRank']), suit: str(hand['viraSuit']) },
     manilhas,

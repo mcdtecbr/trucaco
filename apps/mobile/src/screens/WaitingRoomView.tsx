@@ -3,7 +3,7 @@ import { errorMessage } from '../i18n/errors';
 import { formatCodeDisplay } from '../lobby/codeInput';
 import type { LobbySeat, RoomConnection } from '../store/roomStore';
 import { AvatarPlaceholder, colors, fontSize, spacing } from '@trucaco/ui';
-import { SeatAvatar } from './SeatAvatar';
+import { SEAT_AVATAR_SIZE, SeatAvatar } from './SeatAvatar';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
@@ -102,6 +102,7 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
                         avatar: (
                           <SeatAvatar
                             seat={i}
+                            size={SEAT_AVATAR_SIZE.phone}
                             parts={seat.avatar}
                             signal={null}
                             reduceMotion={p.reduceMotion === true}
