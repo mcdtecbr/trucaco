@@ -130,7 +130,7 @@ describe('TableView', () => {
     expect(out).toContain('aria-disabled="true"');
   });
 
-  it('largo: placar fixo compacto com histórico recolhido, vira na lateral; Mineiro lista as manilhas fixas', () => {
+  it('largo: placar fixo compacto com histórico recolhido, vira na lateral; Mineiro sem texto de manilhas', () => {
     const wide = html(snapshot(), { layout: 'wide' });
     expect(wide).toContain('score-fixed');
     expect(wide).toContain('score-ad');
@@ -144,8 +144,53 @@ describe('TableView', () => {
       }),
       { layout: 'wide' },
     );
-    expect(mineiro).toContain('Manilhas:');
-    expect(mineiro).toContain('4♣');
+    expect(mineiro).not.toContain('Manilhas:');
+    expect(mineiro).not.toContain('data-testid="manilhas"');
+  });
+
+  it('apelido numa linha abaixo do avatar (fora do quadrado) nos quatro assentos', () => {
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout });
+      expect(out.match(/data-testid="seat-name"/g)?.length, layout).toBe(4);
+    }
+  });
+
+  it('monte no canto com a vira saindo por baixo e a legenda da manilha; Mineiro sem vira', () => {
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout });
+      expect(out).toContain('data-testid="deck-group"');
+      expect(out).toContain('data-testid="vira-card"');
+      expect(out).toContain('Vira: ');
+      // a vira não está mais no canto superior direito (um só monte, uma só vira)
+      expect(out.match(/data-testid="vira-card"/g)?.length).toBe(1);
+    }
+    const mineiro = html(
+      snapshot({
+        options: { variant: 'mineiro' },
+        hand: { viraRank: '', viraSuit: '', manilhaRank: '', manilhaCards: ['4paus'] },
+      }),
+    );
+    expect(mineiro).toContain('data-testid="deck-group"');
+    expect(mineiro).not.toContain('data-testid="vira-card"');
+  });
+
+  it('chat fixo: campo e Enviar visíveis sem abrir camada; some quando o painel completo abre', () => {
+    const chatDock = {
+      lines: [{ id: '1', author: 'Ana', text: 'oi <b>x</b>' }],
+      draft: '',
+      connected: true,
+      unread: 2,
+      errorText: null,
+      on: { setDraft: noop, send: noop, expand: noop },
+    };
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout, chatDock });
+      expect(out, layout).toContain('chat-dock-input');
+      expect(out).toContain('chat-dock-send');
+      expect(out).toContain('2 mensagens novas');
+      expect(out).toContain('oi &lt;b&gt;x&lt;/b&gt;');
+    }
+    expect(html(snapshot())).not.toContain('chat-dock');
   });
 
   it('confirmação de sair e apelido como texto puro (sem HTML interpretado)', () => {
@@ -395,6 +440,22 @@ describe('ChatPanel', () => {
     const out = html(snapshot(), { chatPanel: props, chatUnreadTotal: 3 });
     expect(out).toContain('chat-panel');
     expect(out).toContain('Chat, 3 mensagens novas');
+  });
+
+  it('com o painel completo aberto o chat fixo some (um só campo de texto na tela)', () => {
+    const chatDock = {
+      lines: [],
+      draft: '',
+      connected: true,
+      unread: 0,
+      errorText: null,
+      on: { setDraft: noop, send: noop, expand: noop },
+    };
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout, chatPanel: props, chatDock });
+      expect(out, layout).toContain('chat-panel');
+      expect(out).not.toContain('chat-dock');
+    }
   });
 });
 

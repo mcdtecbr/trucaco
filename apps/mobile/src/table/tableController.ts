@@ -182,6 +182,8 @@ export interface TableController {
   sendPhrase(scope: ChatScope, phraseId: string): boolean;
   setChatOpen(open: boolean): void;
   setChatTab(scope: ChatScope): void;
+  /** Chat fixo da mesa visível: zera as não lidas da mesa sem abrir o painel completo. */
+  markTableChatSeen(): void;
   setChatDraft(scope: ChatScope, text: string): void;
   clearError(): void;
   setLeaveConfirm(open: boolean): void;
@@ -670,7 +672,9 @@ export function createTableController(opts: TableControllerOptions): TableContro
       // Em jogo o chat da dupla não existe: não conta como não lida (o servidor também recusa).
       const seen =
         (cur.chatOpen && cur.chatTab === scope) ||
-        (scope === 'partner' && cur.vm?.phase === 'playing');
+        (scope === 'partner' && cur.vm?.phase === 'playing') ||
+        // A própria mensagem nunca é "não lida".
+        (cur.vm !== null && cur.vm !== undefined && seat === cur.vm.mySeat);
       // Balão: um por assento; o novo substitui o anterior e reinicia os 4 s.
       const prevTimer = bubbleTimers.get(seat);
       if (prevTimer !== undefined) timers.clearTimeout(prevTimer);
@@ -973,6 +977,11 @@ export function createTableController(opts: TableControllerOptions): TableContro
         chatError: null,
         ...(open ? { chatUnread: { ...s.chatUnread, [s.chatTab]: 0 } } : {}),
       });
+    },
+
+    markTableChatSeen() {
+      const s = store.getState();
+      if (s.chatUnread.table !== 0) s.patch({ chatUnread: { ...s.chatUnread, table: 0 } });
     },
 
     setChatTab(scope) {

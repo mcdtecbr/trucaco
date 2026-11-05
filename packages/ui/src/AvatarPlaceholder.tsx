@@ -18,6 +18,10 @@ const STATUS_COLOR: Readonly<Record<AvatarStatus, string>> = {
   bot: colors.textMuted,
 };
 
+/** Altura da linha do apelido sob o avatar na mesa e espaço até o avatar (px). */
+export const SEAT_NAME_H = 16;
+export const SEAT_NAME_GAP = 2;
+
 /** Primeira letra do apelido (code point inteiro), ou `?` se vazio. Texto puro. */
 export function initialOf(nickname: string): string {
   const first = [...nickname.trim()][0];
@@ -48,10 +52,14 @@ export interface AvatarPlaceholderProps {
   /** Raio do anel do avatar desenhado (px). Omitido = anel redondo; informado = quadrado arredondado. */
   readonly ringRadius?: number;
   /**
-   * Apelido em faixa sobre a borda de baixo do avatar (nada abaixo dele): libera o espaço para as costas
-   * das cartas saírem por trás. O status só aparece na faixa quando não é "online".
+   * Apelido numa linha logo abaixo do avatar, fora do quadrado (altura fixa `SEAT_NAME_H`), com o ponto
+   * de conexão ao lado do texto. O status só vira texto quando não é "online".
    */
-  readonly nameOverlay?: boolean;
+  readonly nameBelow?: boolean;
+  /** Largura da linha do apelido (px); omitida = largura do conteúdo. */
+  readonly nameWidth?: number;
+  /** Espaço entre o avatar e o apelido (px). Padrão `SEAT_NAME_GAP`. */
+  readonly nameGap?: number;
   /**
    * Avatar desenhado pelo app (`<Avatar>` de `@trucaco/avatar`; `ui` não depende desse pacote). Quando
    * presente e a vaga não está vazia, substitui o círculo com a inicial; o anel de time e o destaque
@@ -96,36 +104,34 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
         ) : (
           <Text style={styles.initial}>{empty ? '·' : initialOf(p.nickname)}</Text>
         )}
-        {p.nameOverlay === true ? (
-          <View
-            style={[
-              styles.nameBand,
-              p.ringRadius !== undefined
-                ? {
-                    borderBottomLeftRadius: Math.max(0, p.ringRadius - 3),
-                    borderBottomRightRadius: Math.max(0, p.ringRadius - 3),
-                  }
-                : null,
-            ]}
-            pointerEvents="none"
-          >
-            <Text style={styles.nameBandText} numberOfLines={1}>
-              {[name, status === 'away' || status === 'bot' ? STATUS_TEXT[status] : '']
-                .filter((x) => x !== '')
-                .join(' · ')}
-            </Text>
-          </View>
-        ) : null}
-        {status !== undefined && !empty ? (
+        {p.nameBelow !== true && status !== undefined && !empty ? (
           <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
         ) : null}
       </View>
+      {p.nameBelow === true ? (
+        <View
+          style={[
+            styles.nameRow,
+            {
+              marginTop: p.nameGap ?? SEAT_NAME_GAP,
+              ...(p.nameWidth !== undefined ? { width: p.nameWidth } : {}),
+            },
+          ]}
+          pointerEvents="none"
+          testID="seat-name"
+        >
+          {status !== undefined && !empty ? (
+            <View style={[styles.nameDot, { backgroundColor: STATUS_COLOR[status] }]} />
+          ) : null}
+          <Text style={styles.nameText} numberOfLines={1}>
+            {[name, status === 'away' || status === 'bot' ? STATUS_TEXT[status] : '']
+              .filter((x) => x !== '')
+              .join(' · ')}
+          </Text>
+        </View>
+      ) : null}
       <View
-        style={[
-          styles.texts,
-          column && styles.textsColumn,
-          p.nameOverlay === true && styles.hidden,
-        ]}
+        style={[styles.texts, column && styles.textsColumn, p.nameBelow === true && styles.hidden]}
       >
         <Text style={styles.nick} numberOfLines={column ? 2 : 1}>
           {name}
@@ -180,18 +186,19 @@ const styles = StyleSheet.create({
     borderColor: colors.background,
   },
   hidden: { display: 'none' },
-  nameBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingVertical: 2,
-    paddingHorizontal: spacing.xs,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+  nameRow: {
+    height: SEAT_NAME_H,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
-  nameBandText: {
+  nameDot: { width: 8, height: 8, borderRadius: radius.round, flexShrink: 0 },
+  nameText: {
+    flexShrink: 1,
     color: colors.text,
     fontSize: fontSize.caption,
+    lineHeight: SEAT_NAME_H,
     fontWeight: fontWeight.bold,
     textAlign: 'center',
   },

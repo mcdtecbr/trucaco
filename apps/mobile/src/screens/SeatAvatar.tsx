@@ -9,6 +9,11 @@ import type { ActiveSignal } from '../table/tableStore';
  * (olho, boca) serem vistos. Celular em retrato 76; deitado 72 (falta altura); web largo 112.
  */
 export const SEAT_AVATAR_SIZE = { phone: 76, landscape: 72, wide: 112 } as const;
+/** Celular deitado muito baixo (< `TIGHT_LANDSCAPE_HEIGHT`): avatar menor para caber com o apelido. */
+export const SEAT_AVATAR_TIGHT = 56;
+export const TIGHT_LANDSCAPE_HEIGHT = 340;
+/** Avatar menor no celular em retrato curto (< `SHORT_PHONE_HEIGHT`): sobra espaco para a vaza. */
+export const SHORT_PHONE_HEIGHT = 700;
 
 /** Raio do anel de time (borda de 3 px) que contorna o quadrado do avatar sem folga nos cantos. */
 export function seatRingRadius(size: number): number {

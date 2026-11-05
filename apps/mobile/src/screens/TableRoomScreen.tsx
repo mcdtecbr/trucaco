@@ -22,7 +22,13 @@ import {
   roomViewFor,
 } from '../table/tableRoute';
 import { useMutedNames, mutedStore } from '../store/mutedStore';
-import { buildChatPanelProps, muteFeedback, mutesFor, visibleBubbles } from './chatPanelProps';
+import {
+  buildChatPanelProps,
+  chatDockLines,
+  muteFeedback,
+  mutesFor,
+  visibleBubbles,
+} from './chatPanelProps';
 import { buildCodesPanelProps } from './codesPanelProps';
 import type { CodesPanelProps } from './CodesPanel';
 import { FinishedView } from './FinishedView';
@@ -272,10 +278,19 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
   );
   const codesPanel = useCodesPanel(vm?.seats ?? [], vm?.mySeat ?? -1, connection === 'connected');
   const mutedNames = useMutedNames();
-  const bubbles = visibleBubbles(
-    rawBubbles,
-    mutesFor(vm?.seats ?? [], vm?.mySeat ?? -1, mutedNames),
-  );
+  const chat = useTableStore((s) => s.chat);
+  const chatDraftTable = useTableStore((s) => s.chatDraft.table);
+  const chatError = useTableStore((s) => s.chatError);
+  const nicknameOf = (seat: number): string => vm?.seats[seat]?.nickname ?? '';
+  // O chat fixo da mesa mostra as mensagens recentes: enquanto ele está visível (painel completo
+  // fechado), as mensagens da mesa contam como lidas.
+  const tableUnread = chatUnread.table;
+  const dockVisible = chatPanel === null;
+  useEffect(() => {
+    if (dockVisible && tableUnread > 0) getApp().table.markTableChatSeen();
+  }, [dockVisible, tableUnread]);
+  const mutes = mutesFor(vm?.seats ?? [], vm?.mySeat ?? -1, mutedNames);
+  const bubbles = visibleBubbles(rawBubbles, mutes);
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
   const deadlineAt = useTableStore((s) => effectiveDeadline(s));
   const leaveConfirm = useTableStore((s) => s.leaveConfirm);
@@ -299,6 +314,18 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       probe={isE2EMode()}
       chatUnreadTotal={chatUnread.table}
       chatPanel={chatPanel}
+      chatDock={{
+        lines: chatDockLines(chat, vm.mySeat, nicknameOf, mutes),
+        draft: chatDraftTable,
+        connected: connection === 'connected',
+        unread: 0,
+        errorText: chatError === null ? null : errorMessage(chatError),
+        on: {
+          setDraft: (text: string) => table.setChatDraft('table', text),
+          send: () => void table.sendChat('table', chatDraftTable),
+          expand: () => table.setChatOpen(true),
+        },
+      }}
       codes={codes}
       codesPanel={codesPanel}
       partnerSignalNote={partnerSignalNote}
