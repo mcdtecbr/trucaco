@@ -68,6 +68,7 @@ export function BootScreen() {
         status === 'unavailable' ? 'unavailable' : stage === 'resuming' ? 'resuming' : 'loading'
       }
       onRetry={() => void getApp().session.start()}
+      legal={{ onTerms: () => router.push('/terms'), onPrivacy: () => router.push('/privacy') }}
     />
   );
 }

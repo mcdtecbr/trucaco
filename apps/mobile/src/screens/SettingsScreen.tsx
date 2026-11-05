@@ -159,6 +159,7 @@ export function SettingsScreen() {
       saved={saved}
       appVersion={version}
       sound={{ prefs: audioPrefs, onChange: (patch) => audio.setPrefs(patch) }}
+      legal={{ onTerms: () => router.push('/terms'), onPrivacy: () => router.push('/privacy') }}
       account={{
         provider,
         blocks: { state: blocksState, items: blocks, error: blocksError, busyId: unblocking },

@@ -195,7 +195,9 @@ describe('SettingsView: conta', () => {
   it('apagar conta em 2 passos descreve o que some', () => {
     const one = settings(account({ deletion: { step: 1, busy: false, error: null } }));
     expect(one).toContain('delete-warning');
-    expect(DELETE_WARNING_TEXT).toMatch(/avatar.*histórico.*combinados.*sessões/);
+    expect(DELETE_WARNING_TEXT).toMatch(
+      /avatar.*conquistas.*missões.*estatísticas.*combinados.*sessões.*partidas.*continuam.*nome some/,
+    );
     expect(one).not.toContain('delete-confirm');
     const two = settings(account({ deletion: { step: 2, busy: false, error: 'Erro.' } }));
     expect(two).toContain(DELETE_CONFIRM_TEXT);

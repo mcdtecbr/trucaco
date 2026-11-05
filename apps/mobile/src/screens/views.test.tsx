@@ -216,7 +216,7 @@ describe('SettingsView e BootView', () => {
 
   it('boot: carregando e indisponível com botão de tentar de novo', () => {
     expect(renderToStaticMarkup(<BootView phase="loading" onRetry={noop} />)).toContain(
-      'Entrando…',
+      'Carregando…',
     );
     const bad = renderToStaticMarkup(<BootView phase="unavailable" onRetry={noop} />);
     expect(bad).toContain('Tentar de novo');
@@ -227,7 +227,7 @@ describe('SettingsView e BootView', () => {
     const html = renderToStaticMarkup(<BootView phase="resuming" onRetry={noop} />);
     expect(html).toContain('data-testid="boot-resuming"');
     expect(html).toContain('Reconectando à mesa…');
-    expect(html).not.toContain('Entrando…');
+    expect(html).not.toContain('Carregando…');
   });
 });
 

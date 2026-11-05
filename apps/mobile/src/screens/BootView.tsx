@@ -2,15 +2,28 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { LiveRegion, colors, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
+import { LoadingArt } from '../ui/LoadingArt';
 import { Body, Title } from '../ui/Typography';
+import { LegalLinks } from './LegalLinks';
+import type { LegalLinksProps } from './LegalLinks';
 
 /** `resuming`: voltando à mesa depois de recarregar a página ou reabrir o app. */
 export type BootPhase = 'loading' | 'unavailable' | 'resuming';
 
+export const LOADING_TEXT = 'Carregando…';
 export const RESUMING_TEXT = 'Reconectando à mesa…';
 
 /** Splash: carregando, reconectando à mesa, ou servidor indisponível com botão de tentar de novo. */
-export function BootView({ phase, onRetry }: { phase: BootPhase; onRetry(): void }) {
+export function BootView({
+  phase,
+  onRetry,
+  legal,
+}: {
+  phase: BootPhase;
+  onRetry(): void;
+  /** Termos e Privacidade, só com o servidor indisponível (no carregamento o boot redireciona sozinho). */
+  legal?: LegalLinksProps;
+}) {
   // O leitor de tela só fala quando o texto MUDA: monta vazio e preenche no efeito.
   const [announced, setAnnounced] = useState('');
   useEffect(() => {
@@ -19,11 +32,12 @@ export function BootView({ phase, onRetry }: { phase: BootPhase; onRetry(): void
 
   return (
     <View style={styles.root} testID="boot">
+      <LoadingArt />
       <Title>Trucaço</Title>
       {phase === 'loading' ? (
         <>
-          <ActivityIndicator color={colors.primary} accessibilityLabel="Carregando" />
-          <Body muted>Entrando…</Body>
+          <ActivityIndicator color={colors.primary} accessibilityLabel={LOADING_TEXT} />
+          <Body testID="boot-loading">{LOADING_TEXT}</Body>
         </>
       ) : phase === 'resuming' ? (
         <>
@@ -38,6 +52,7 @@ export function BootView({ phase, onRetry }: { phase: BootPhase; onRetry(): void
           <Button label="Tentar de novo" onPress={onRetry} testID="boot-retry" />
         </>
       )}
+      {legal !== undefined && phase === 'unavailable' ? <LegalLinks {...legal} /> : null}
       <LiveRegion message={announced} />
     </View>
   );

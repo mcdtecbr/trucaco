@@ -30,6 +30,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm format:check
+
+      # O módulo gerado dos textos legais é versionado: falha se estiver fora de sincronia com docs/legal/*.md.
+      - name: Textos legais em sincronia
+        run: |
+          pnpm --filter @trucaco/mobile exec node scripts/gen-legal.mjs --strict
+          git diff --exit-code -- apps/mobile/src/legal/generated
+
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
