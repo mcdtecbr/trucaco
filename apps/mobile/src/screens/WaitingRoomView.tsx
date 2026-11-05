@@ -103,6 +103,7 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
                           <SeatAvatar
                             seat={i}
                             size={SEAT_AVATAR_SIZE.phone}
+                            shape="circle"
                             parts={seat.avatar}
                             signal={null}
                             reduceMotion={p.reduceMotion === true}

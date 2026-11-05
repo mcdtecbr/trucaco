@@ -1,6 +1,6 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { LiveRegion, useAnnouncer, useLayoutMode } from '@trucaco/ui';
+import { LiveRegion, useAnnouncer, useTableLayout } from '@trucaco/ui';
 import type { ChatScope, LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import type { ChatPanelProps } from './ChatPanel';
 import { useAudioPrefs } from '../audio/useAudioPrefs';
@@ -241,7 +241,7 @@ function FinishedTable({ onLeave }: { onLeave(): void }) {
 }
 
 function PlayingTable({ onLeave }: { onLeave(): void }) {
-  const layout = useLayoutMode();
+  const layout = useTableLayout();
   const connection = useRoomStore((s) => s.connection);
   const vm = useTableStore((s) => s.vm);
   const busy = useTableStore((s) => s.busy);
