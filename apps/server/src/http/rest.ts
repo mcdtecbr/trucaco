@@ -63,6 +63,10 @@ import {
 export const BODY_LIMIT = '8kb';
 /** Teto de bloqueios por usuário (memória e consultas do lobby/sala limitadas). */
 export const MAX_BLOCKS_PER_USER = 200;
+/** Denúncia sem `matchId` só vale se os dois jogaram a mesma partida terminada nesta janela (7 dias). */
+export const REPORT_SHARED_MATCH_WINDOW_MS = 7 * 24 * 3_600_000;
+/** Teto global de denúncias gravadas contra um mesmo denunciado por hora (de qualquer denunciante). */
+export const REPORTS_PER_REPORTED_PER_HOUR = 10;
 const CURSOR_MAX_LENGTH = 256;
 
 function toMatchResponse(m: MatchSummary): MatchSummaryResponse {
@@ -611,7 +615,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
   /**
    * Bloqueio persistente (decisão 5 do plano da Fase 6). Efeitos: a fila pública não casa os dois (qualquer
    * sentido), a mesa privada de quem bloqueia (ou do bloqueado) fica indisponível por código e o chat da
-   * MESA entre os dois é descartado. Alvo inexistente ou apagado: o mesmo `USER_NOT_FOUND`.
+   * MESA entre os dois é descartado. Alvo inexistente ou apagado: 204 igual ao sucesso, sem gravar (sem oráculo).
    */
   route('/me/blocks', ['GET', 'POST'], (r) => {
     r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {
@@ -632,22 +636,24 @@ export function mountRest(app: Application, opts: RestOptions): void {
         fail(res, 400, 'INVALID_BLOCK');
         return;
       }
-      const target = await users.findById(parsed.userId);
-      if (target === null) {
-        fail(res, 404, 'USER_NOT_FOUND');
+      // Teto ANTES de consultar o alvo: com o teto cheio, existente e inexistente dão a mesma resposta.
+      const current = await users.listBlockedIds(me);
+      if (!current.includes(parsed.userId) && current.length >= MAX_BLOCKS_PER_USER) {
+        fail(res, 400, 'INVALID_BLOCK');
         return;
       }
-      const current = await users.listBlockedIds(me);
-      if (!current.includes(target.id) && current.length >= MAX_BLOCKS_PER_USER) {
-        fail(res, 400, 'INVALID_BLOCK');
+      // Sem oráculo de existência: alvo inexistente ou apagado (inclusive entre a leitura e a gravação)
+      // responde 204 como se tivesse bloqueado, sem gravar nem publicar.
+      const target = await users.findById(parsed.userId);
+      if (target === null) {
+        res.status(204).end();
         return;
       }
       try {
         await users.addBlock(me, target.id);
       } catch (err) {
         if (err instanceof InvalidInputError) {
-          // Apagado entre a leitura e a gravação: o mesmo erro do alvo inexistente.
-          fail(res, 404, 'USER_NOT_FOUND');
+          res.status(204).end();
           return;
         }
         throw err;
@@ -676,8 +682,12 @@ export function mountRest(app: Application, opts: RestOptions): void {
   /**
    * Denúncia (moderação humana na Fase 8). 5 por hora por usuário. Sem oráculo: denunciado inexistente
    * ou apagado responde 201 como se tivesse gravado; denúncia repetida (mesmo denunciante, denunciado e
-   * partida) também é 201 e não grava de novo. Contra si mesmo e `matchId` em que o denunciante ou o
-   * denunciado não jogaram: `INVALID_REPORT`. Resposta 201 `{}` (sem eco).
+   * partida; sem partida, 24 h) também é 201 e não grava de novo (e há UNIQUE no banco); acima de
+   * `REPORTS_PER_REPORTED_PER_HOUR` (não limitadas) contra o mesmo denunciado, a denúncia é GRAVADA com
+   * `throttled = true` (fica para a moderação, fora da fila prioritária; não conta no teto) e a resposta é a
+   * mesma 201. Contra si mesmo,
+   * `matchId` em que o denunciante ou o denunciado não jogaram, e denúncia SEM `matchId` sem partida
+   * terminada em comum nos últimos `REPORT_SHARED_MATCH_WINDOW_MS` (7 dias): `INVALID_REPORT`. Resposta 201 `{}` (sem eco).
    */
   route('/reports', ['POST'], (r) =>
     r.post(byIp(ipLimiter, 60), authenticate, reportLimit, contentType, json, async (req, res) => {
@@ -699,15 +709,30 @@ export function mountRest(app: Application, opts: RestOptions): void {
           fail(res, 400, 'INVALID_REPORT');
           return;
         }
+      } else {
+        // Sem `matchId`: só quem dividiu uma partida terminada na janela (qualquer assento). Mesmo erro
+        // para inexistente, apagado e desconhecido.
+        const since = new Date(Date.now() - REPORT_SHARED_MATCH_WINDOW_MS);
+        if (!(await users.sharedMatchSince(me, parsed.userId, since))) {
+          fail(res, 400, 'INVALID_REPORT');
+          return;
+        }
       }
       if ((await users.findById(parsed.userId)) === null) {
         res.status(201).json({});
         return;
       }
+      // Idempotente: repetida responde igual ao sucesso e não grava de novo (nem sinaliza que já existia).
       if (await users.hasReport(me, parsed.userId, parsed.matchId ?? null)) {
         res.status(201).json({});
         return;
       }
+      // Teto global por denunciado: acima dele a denúncia é descartada em silêncio (mesma resposta), para
+      // um grupo não afogar a fila de moderação nem usar o 201 como oráculo.
+      const hourAgo = new Date(Date.now() - 3_600_000);
+      const throttled =
+        (await users.countReportsAgainst(parsed.userId, hourAgo)) >= REPORTS_PER_REPORTED_PER_HOUR;
+      if (throttled) log.warn('reports: teto por denunciado atingido, denúncia marcada throttled');
       try {
         await users.createReport({
           reporterId: me,
@@ -715,6 +740,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
           ...(parsed.matchId === undefined ? {} : { matchId: parsed.matchId }),
           reason: parsed.reason,
           ...(parsed.text === undefined ? {} : { text: parsed.text }),
+          throttled,
         });
       } catch (err) {
         if (!(err instanceof InvalidInputError)) throw err;

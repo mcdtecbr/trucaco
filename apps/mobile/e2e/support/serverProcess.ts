@@ -49,6 +49,8 @@ export async function startGameServer(options: {
       CORS_ORIGINS: options.corsOrigin,
       // Baralho fixo (só dev/test) e limites frouxos: 4 convidados do mesmo IP jogando em sequência.
       TRUCO_SEED: '12345',
+      // Partidas rápidas de 4 convidados precisam pontuar: sem o anti-farm (só dev/test).
+      TRUCO_PROGRESSION_RELAXED: '1',
       JOIN_MIN_LATENCY_MS: '0',
       ACCESS_TOKEN_TTL_SECONDS: '900',
       AUTH_GUEST_PER_IP_PER_HOUR: '10000',

@@ -221,10 +221,41 @@ export class PrismaUserRepository implements UserRepository {
     return count > 0;
   }
 
-  async deleteUser(id: string): Promise<boolean> {
-    // As cascatas e os SET NULL são do banco (docs/banco-de-dados.md): um DELETE só.
-    const result = await guarded(() => this.db.user.deleteMany({ where: { id: normalizeId(id) } }));
+  async countReportsAgainst(reportedId: string, since: Date): Promise<number> {
+    return this.db.report.count({
+      where: { reportedId: normalizeId(reportedId), throttled: false, createdAt: { gte: since } },
+    });
+  }
+
+  async deleteUser(rawId: string): Promise<boolean> {
+    const id = normalizeId(rawId);
+    // Mesma transação: anula o texto livre das denúncias escritas pelo titular (LGPD) e só então apaga.
+    // As cascatas e os SET NULL são do banco (docs/banco-de-dados.md). As denúncias CONTRA ele ficam.
+    const [, result] = await guarded(() =>
+      this.db.$transaction([
+        this.db.report.updateMany({
+          where: { reporterId: id, text: { not: null } },
+          data: { text: null },
+        }),
+        this.db.user.deleteMany({ where: { id } }),
+      ]),
+    );
     return result.count > 0;
+  }
+
+  async sharedMatchSince(userA: string, userB: string, since: Date): Promise<boolean> {
+    const a = normalizeId(userA);
+    const b = normalizeId(userB);
+    const rows = await this.db.$queryRaw<{ ok: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1
+          FROM match_players pa
+          JOIN match_players pb ON pb.match_id = pa.match_id
+          JOIN matches m ON m.id = pa.match_id
+         WHERE pa.user_id = ${a}::uuid AND pb.user_id = ${b}::uuid
+           AND m.ended_at >= ${since}::timestamptz
+      ) AS ok`;
+    return rows[0]?.ok === true;
   }
 
   async createReport(input: NewReportInput): Promise<ReportRecord> {
@@ -237,7 +268,14 @@ export class PrismaUserRepository implements UserRepository {
     }
     return guarded(() =>
       this.db.report.create({
-        data: { reporterId, reportedId, matchId, reason: input.reason, text: input.text ?? null },
+        data: {
+          reporterId,
+          reportedId,
+          matchId,
+          reason: input.reason,
+          text: input.text ?? null,
+          throttled: input.throttled === true,
+        },
       }),
     );
   }

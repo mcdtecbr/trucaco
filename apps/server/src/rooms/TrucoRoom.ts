@@ -86,6 +86,7 @@ import type {
   ProgressionRepository,
   UserRepository,
 } from '../db/types';
+import type { ProgressionPolicy } from '../progression/achievements';
 import { applyMatchProgression } from '../progression/service';
 import { GRANT_KEY, getLobby } from '../lobby/lobby';
 import { onBlockChange, onUserDeleted } from '../social/blockBus';
@@ -192,6 +193,8 @@ export interface TrucoRoomConfig {
    * há progressão. Nunca vem do cliente.
    */
   readonly progression?: ProgressionRepository;
+  /** Limites anti-farm da progressão (padrão: `DEFAULT_PROGRESSION_POLICY`). Só os testes de sala trocam. */
+  readonly progressionPolicy?: ProgressionPolicy;
   /**
    * Combinado de sinais da dupla (Fase 5): lê e grava `partner_codes`. Ausente: o combinado vive só na
    * sala (nada é lido nem gravado). Nunca vem do cliente.
@@ -1723,7 +1726,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const progression = this.config.progression;
     if (progression === undefined || matchId === null) return;
     try {
-      const result = await applyMatchProgression(progression, matchId, input, signals);
+      const result = await applyMatchProgression(
+        progression,
+        matchId,
+        input,
+        signals,
+        this.config.progressionPolicy,
+      );
       if (result?.applied === true) {
         log.info('truco: progressão aplicada', {
           room: this.roomId,

@@ -61,6 +61,8 @@ export class MemoryStore {
   readonly stats = new Map<string, StatsRecord & { readonly userId: string }>();
   /** Partidas já avaliadas (`progression_applied`). */
   readonly progressionApplied = new Set<string>();
+  /** Dessas, as aplicadas só para estatística (anti-farm barrou conquistas e missões). */
+  readonly progressionUnscored = new Set<string>();
 }
 
 interface StoredMatch {
@@ -268,8 +270,28 @@ export class MemoryUserRepository implements UserRepository {
       ...r,
       reporterId: r.reporterId === id ? null : r.reporterId,
       reportedId: r.reportedId === id ? null : r.reportedId,
+      // LGPD: o texto livre escrito pelo titular some; as denúncias contra ele ficam.
+      text: r.reporterId === id ? null : r.text,
     }));
     return true;
+  }
+
+  async countReportsAgainst(rawId: string, since: Date): Promise<number> {
+    const id = normalizeId(rawId);
+    return this.store.reports.filter(
+      (r) => r.reportedId === id && !r.throttled && r.createdAt.getTime() >= since.getTime(),
+    ).length;
+  }
+
+  async sharedMatchSince(userA: string, userB: string, since: Date): Promise<boolean> {
+    const a = normalizeId(userA);
+    const b = normalizeId(userB);
+    return this.store.matches.some(
+      (m) =>
+        m.input.endedAt.getTime() >= since.getTime() &&
+        m.input.players.some((p) => p.userId === a) &&
+        m.input.players.some((p) => p.userId === b),
+    );
   }
 
   async createReport(input: NewReportInput): Promise<ReportRecord> {
@@ -285,6 +307,15 @@ export class MemoryUserRepository implements UserRepository {
     if (matchId !== null && !this.store.matches.some((m) => m.id === matchId)) {
       throw new InvalidInputError('Usuário ou partida inexistente.');
     }
+    // Espelha UNIQUE (reporter_id, reported_id, match_id): com match_id nulo o SQL não tem unicidade.
+    if (
+      matchId !== null &&
+      this.store.reports.some(
+        (r) => r.reporterId === reporterId && r.reportedId === reportedId && r.matchId === matchId,
+      )
+    ) {
+      throw new InvalidInputError('Registro duplicado.');
+    }
     const report: ReportRecord = {
       id: randomUUID(),
       reporterId,
@@ -294,6 +325,7 @@ export class MemoryUserRepository implements UserRepository {
       text: input.text ?? null,
       status: 'open',
       createdAt: new Date(),
+      throttled: input.throttled === true,
     };
     this.store.reports.push(report);
     return report;

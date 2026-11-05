@@ -4,33 +4,48 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
-### Fase 6, blocos 6A e 6B: contrato, bloqueio, denúncia, histórico e apagar conta (2026-11-04), em andamento, branch `feat/fase-6b-social`
+### Fase 6: contas, perfil, conquistas e missões (2026-11-05), concluída com ressalvas
 
-Ressalvas: login Google e Apple (6F), conquistas, missões e estatísticas (6C a 6E) ainda não entraram. Bloquear e denunciar só a partir do histórico (o assento na mesa não tem `userId` público). Não validado em aparelho iOS ou Android, com leitor de tela, nem por E2E novo de histórico, bloqueio e apagar conta. Plano e status em `docs/specs/2026-11-04-fase-6-plano.md` (seção 7); contrato em `docs/protocolo-servidor.md`.
+Ressalvas: **nenhum login social real** (Google e Apple): o app não registra SDK e o servidor ainda não emite nonce (pendência obrigatória antes de `GOOGLE_CLIENT_IDS` / `APPLE_CLIENT_IDS` em produção). Bloquear e denunciar só a partir do histórico (o assento na mesa não tem `userId` público). Limites anti-farm são padrões a recalibrar no beta. E2E web: 23 de 24; `progress.spec.ts:38` ("quem vence recebe o aviso e a medalha") falha em duas execuções, e a causa não está identificada (suspeita: regra 6I não commitada). Nada validado em iOS, Android, leitor de tela ou Safari. Plano e status em `docs/specs/2026-11-04-fase-6-plano.md` (seção 7); relatório em `docs/specs/2026-11-05-fase-6-relatorio.md`.
 
 #### Adicionado
 
-- 6A (`d1dcbc7`): contrato em `packages/protocol` para login social, vínculo, `GET /matches`, perfil público, bloqueio, denúncia, conquistas e missões (`gamification.ts`). `PROTOCOL_VERSION` 6.
-- Servidor: `GET /matches` (paginação por cursor, só partidas do próprio usuário); `GET` e `POST /me/blocks` e `DELETE /me/blocks/:userId`; `POST /reports` (5 por usuário por hora); `DELETE /me` (apaga a conta, anonimiza as partidas, revoga as sessões e derruba os sockets). CORS libera `DELETE`.
-- Servidor: bloqueio vale nos dois sentidos na fila pública (a mesma mesa não recebe bloqueados) e na mesa privada (entrar com bloqueio responde `TABLE_UNAVAILABLE`, o mesmo erro de código inexistente). Chat da mesa entre bloqueados é descartado em silêncio.
-- Cliente: histórico de partidas em `/profile` ("Carregar mais"); bloquear e denunciar um jogador a partir de uma partida do histórico; lista de bloqueados com "Desbloquear" em Configurações; apagar conta em dois passos de confirmação.
-- `SessionUser.provider` (lido de `GET /me` por `loadProvider()`).
+- Contrato (6A, `d1dcbc7`): login social, vínculo, `GET /matches`, perfil público, bloqueio, denúncia, conquistas e missões em `packages/protocol` (`gamification.ts`: 9 conquistas, 6 missões). `PROTOCOL_VERSION` 6.
+- Histórico, bloqueio, denúncia e apagar conta (6B, `c401a03`): `GET /matches` (paginação por cursor); `GET` e `POST /me/blocks`, `DELETE /me/blocks/:userId`; `POST /reports`; `DELETE /me` (anonimiza as partidas, revoga as sessões e derruba os sockets). Filtro de bloqueio nos dois sentidos na fila pública e na mesa privada (`TABLE_UNAVAILABLE`). Chat da mesa entre bloqueados é descartado em silêncio.
+- Progressão no banco (6C, `c692afc`): migração `20261105140000_fase6_progressao` com `user_achievements`, `user_missions`, `user_stats`, `progression_applied` e `users.linked_at`. Idempotência por partida (ADR 0009).
+- Avaliação e rotas de perfil (6D e 6E, `6f6297e`): conquistas e missões avaliadas a partir do log da partida, depois de `saveMatch`; `period_key` em `America/Sao_Paulo`, sem job. Rotas `GET /me/achievements`, `GET /me/missions`, `GET /users/:id` (sem histórico, provedor nem datas) e `stats` em `GET /me`.
+- Login social e vínculo (6F, `d2738ab`): `POST /auth/google`, `POST /auth/apple` e `POST /auth/link`, com validação de `iss`, `aud`, `exp` e `nonce` por JWKS (`jose`) e uso único do idToken. `SOCIAL_LOGIN_DISABLED` sem client ID. `GET /health` lista `socialProviders`. Verificador de teste só em dev e test (`AUTH_TEST_IDENTITY`).
+- Cliente (6B e 6G, `c401a03`, `d2738ab`): `/profile` com histórico ("Carregar mais"), `/profile/[id]` (perfil público), `/achievements`, `/missions`, `/login`; "Vincular conta" em Configurações; conquistas desbloqueadas em `FinishedView`; missões em `HomeView`; lista de bloqueados e apagar conta em dois passos em Configurações.
+- Testes (6H, `a37c759`): 11 cenários E2E novos (`account.spec.ts`, `progress.spec.ts`); `test:int` de vínculo com Redis real; `PENDING_PHASE6` vazio.
+- Migração de unicidade (6I, sem commit ainda): `UNIQUE (reporter_id, reported_id, match_id)` em `reports` (`20261106100000_reports_unique`).
 
 #### Alterado
 
-- `GET /me` traz `stats` (zeros até o 6E).
+- `GET /me` passa a trazer `stats` (aditivo; zeros até o 6E).
+- `POST /auth/link`, `/auth/google` e `/auth/apple` deixam de responder `501` e passam a ter o contrato real.
+- `DELETE` liberado no CORS.
+- `SessionUser.provider` vem de `GET /me`; o aviso de convidado do combinado usa o provedor da sessão.
+- Auditoria 6I (sem commit ainda): anti-farm por conluio (mínimo de 4 mãos e 3 min; mesa privada só de convidados não pontua; teto de 5 partidas pontuadas por par em 24 h); denúncia sem partida exige partida terminada em comum nos últimos 7 dias; teto de 10 denúncias por hora contra o mesmo denunciado; `POST /me/blocks` responde `204` também para alvo inexistente; `DELETE /me` anula o texto livre das denúncias escritas pelo titular.
 
 #### Corrigido
 
-- Aviso de convidado do combinado de sinais aparecia para todos (`guest: true` fixo). Agora lê o provedor da sessão.
-- Revisão (Rita-C, Claude opus): 1 P2 e 6 P3, todos corrigidos ou aceitos e registrados em `apps/server/README.md`. Auditoria (Vitor): 6 baixas, nenhum achado crítico, alto ou médio.
+- Aviso de convidado do combinado aparecia para todos (`guest: true` fixo). Agora lê o provedor da sessão (6B).
+- Denúncia repetida com a mesma partida podia ser gravada duas vezes numa corrida (6I, índice único).
+- Revisão 6B (Rita-C): 1 P2 e 6 P3, corrigidos ou aceitos e registrados em `apps/server/README.md`.
+- Revogação de sessões depois do vínculo: se o Redis falhar, a revogação é reagendada e o cliente retoma pelo mesmo idToken (6F).
 
 #### Divergências conhecidas
 
-- Bloquear o parceiro, ou alguém já sentado, não tira ninguém da partida em andamento. Mesa de fila já formada não reavalia bloqueio feito depois do sorteio.
-- Denúncia repetida e o teto de 200 bloqueios não são atômicos (falta `UNIQUE` em `reports` e checagem atômica; `dalva-dba`).
-- `blockBus`, a lista evitada da fila e a derrubada de sockets valem só para um processo.
-- No aparelho, `trucaco.muted.v1` e o `sessionStorage` continuam depois de apagar a conta.
+- Login Google e Apple (6G): o plano previa Google na web com `expo-auth-session`. O pacote não existe e nenhum provedor é registrado; os botões ficam indisponíveis.
+- Bloquear e denunciar pelo menu do assento: fora (decisão pendente; `PublicPlayer` sem `userId`).
+- Tabelas `achievements` e `missions` do esboço: o catálogo fica em código (ADR 0009).
+- Cookie httpOnly no web: movido para a Fase 7 (decisão 8 do plano). `entitlements` na Fase 10.
+- Partida com bot ou conta repetida não pontua para ninguém (griefing por conta apagada ou bot, pendente).
+- Limitadores, `blockBus` e lista evitada da fila são em memória de processo (multi-instância pede Redis).
+
+#### Removido
+
+- Nenhum item removido.
 
 ### Fase 5b: áudio, vozes dos avatares e efeitos (2026-11-04), concluída com ressalvas, branch `feat/audio-5b`, mesclada (PR #20)
 
@@ -391,3 +406,6 @@ Assumidas por padrão nas fases acima. Cada uma precisa de confirmação do usu�
 - **Vozes e efeitos placeholder até a licença**: a 5b entrega o sistema com arquivos silenciosos; serviço de voz e fonte dos efeitos a definir pelo usuário (5b).
 - **Vozes sem arquivo tocam a do mesmo grupo** (`resolveVoice`), e não ficam mudas (5b).
 - **Textos das falas**: a revisão do usuário cobre as falas da `rai-avatar` listadas na seção de divergências da 5b (5b).
+- **Limites anti-farm da progressão** (mínimo de 4 mãos e 3 min, teto de 5 partidas pontuadas por par em 24 h, mesa privada só de convidados não pontua) (Fase 6, 6I): padrões da auditoria, a recalibrar no beta (ADR 0010).
+- **Limites de denúncia** (janela de 7 dias para denúncia sem partida, 10 denúncias por hora contra o mesmo denunciado, 5 por usuário por hora) (Fase 6, 6B e 6I; ADR 0010).
+- **Bloqueio impede entrar por código na mesa privada do bloqueador** com `TABLE_UNAVAILABLE`, sem oráculo (Fase 6, 6B): padrão da decisão 5 do plano.

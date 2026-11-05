@@ -3,6 +3,7 @@
  * UM `Server` por arquivo (o matchmaker é global). Variações de configuração do SERVIDOR (semente,
  * prazo, placar inicial) entram como nomes de sala extras; o cliente nunca as controla.
  */
+import { NO_EFFORT_POLICY } from '../progression/achievements';
 import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
@@ -64,6 +65,9 @@ const progressRepo = {
     return Promise.resolve({ applied: true, unlocked: [], missionsCompleted: [] });
   },
   countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
   listAchievements: () => Promise.resolve([]),
 } as unknown as ProgressionRepository;
 const failingCalls: (readonly UserProgressDelta[])[] = [];
@@ -73,6 +77,9 @@ const failingProgressRepo = {
     return Promise.reject(new Error('banco fora'));
   },
   countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
   listAchievements: () => Promise.resolve([]),
 } as unknown as ProgressionRepository;
 
@@ -86,6 +93,9 @@ const gatedProgressRepo = {
       });
     }),
   countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
   listAchievements: () => Promise.resolve([]),
 } as unknown as ProgressionRepository;
 
@@ -202,6 +212,7 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     signalCooldownMs: 50,
     matches: fakeRepo,
     progression: progressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
   },
   'truco-prog-gate': {
     ...FAST,
@@ -212,6 +223,7 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     turnTimeoutMs: 60_000,
     matches: fakeRepo,
     progression: gatedProgressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
   },
   'truco-prog-fail': {
     ...FAST,
@@ -222,6 +234,7 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     turnTimeoutMs: 60_000,
     matches: fakeRepo,
     progression: failingProgressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
   },
   'truco-rematch-short': {
     ...FAST,

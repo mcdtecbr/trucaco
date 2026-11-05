@@ -444,6 +444,93 @@ export function progressionContract(name: string, harness: () => ProgressionHarn
       });
     });
 
+    describe('countMatchesTogether e countGuests (anti-farm)', () => {
+      it('conta só partidas aplicadas, de qualquer assento, na janela [since, until)', async () => {
+        await setup();
+        const a = await user('Ana');
+        const b = await user('Beto');
+        const c = await user('Caio');
+        const d = await user('Duda');
+        const four = [a.id, b.id, c.id, d.id];
+        const m1 = await match(four);
+        await match(four); // gravada, não aplicada: não conta
+        await h.progression.applyMatchProgress(m1, [delta(a.id)]);
+        const since = new Date('2026-11-04T00:00:00Z');
+        const until = new Date('2026-11-05T00:00:00Z');
+        // adversários (Ana e Beto) e dupla (Ana e Caio): ambos contam
+        expect(await h.progression.countMatchesTogether(a.id, b.id, since, until)).toBe(1);
+        expect(await h.progression.countMatchesTogether(c.id, a.id, since, until)).toBe(1);
+        // fora da janela (until exclusivo no fim da partida)
+        expect(
+          await h.progression.countMatchesTogether(
+            a.id,
+            b.id,
+            since,
+            new Date('2026-11-04T12:00:00Z'),
+          ),
+        ).toBe(0);
+        expect(
+          await h.progression.countMatchesTogether(
+            a.id,
+            b.id,
+            new Date('2026-11-04T12:00:01Z'),
+            until,
+          ),
+        ).toBe(0);
+        expect(await h.progression.countMatchesTogether(a.id, a.id, since, until)).toBe(0);
+        expect(await h.progression.countMatchesTogether(a.id, GHOST, since, until)).toBe(0);
+      });
+
+      it('partida aplicada com scored:false conta em user_stats, mas sai de todas as contagens anti-farm', async () => {
+        await setup();
+        const a = await user('Ana');
+        const b = await user('Beto');
+        const c = await user('Caio');
+        const d = await user('Duda');
+        const four = [a.id, b.id, c.id, d.id];
+        const since = new Date('2026-11-04T00:00:00Z');
+        const until = new Date('2026-11-05T00:00:00Z');
+        const privateMatch = async (): Promise<string> =>
+          h.matches.saveMatch({ ...(await matchInput(four)), visibility: 'private' });
+        const scored = await privateMatch();
+        const unscored = await privateMatch();
+        await h.progression.applyMatchProgress(scored, [delta(a.id)]);
+        const first = await h.progression.applyMatchProgress(unscored, [delta(a.id)], {
+          scored: false,
+        });
+        expect(first.applied).toBe(true);
+        // idempotente: repetir (mesmo com scored diferente) não soma de novo
+        const again = await h.progression.applyMatchProgress(unscored, [delta(a.id)], {
+          scored: true,
+        });
+        expect(again.applied).toBe(false);
+        expect(await h.progression.getStats(a.id)).toEqual([
+          { variant: 'paulista', played: 2, won: 2 },
+        ]);
+        expect(await h.progression.countMatchesTogether(a.id, b.id, since, until)).toBe(1);
+        expect(await h.progression.countScoredPrivateMatches(a.id, since, until)).toBe(1);
+        expect(await h.progression.countScoredPrivateMatches(a.id, until, until)).toBe(0);
+        expect(await h.progression.countWinsTogether(a.id, c.id)).toBe(1);
+        // pública aplicada não entra no teto privado
+        await h.progression.applyMatchProgress(await match(four), [delta(a.id)]);
+        expect(await h.progression.countScoredPrivateMatches(a.id, since, until)).toBe(1);
+        expect(await h.progression.countScoredPrivateMatches(GHOST, since, until)).toBe(0);
+      });
+
+      it('countGuests conta só convidados existentes', async () => {
+        await setup();
+        const a = await user('Ana');
+        const b = await h.users.createSocialUser({
+          provider: 'google',
+          providerSubject: `soc-${++seq}`,
+          nickname: 'Social',
+        });
+        expect(await h.progression.countGuests([a.id, b.id])).toBe(1);
+        expect(await h.progression.countGuests([a.id, a.id, GHOST])).toBe(1);
+        expect(await h.progression.countGuests([])).toBe(0);
+      });
+    });
+
     describe('usuário apagado no meio', () => {
       it('um usuário inexistente recusa a aplicação inteira (quem chama refaz sem ele)', async () => {
         await setup();

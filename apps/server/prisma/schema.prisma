@@ -200,6 +200,8 @@ model Report {
   status     ReportStatus @default(open)
   createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   reviewedAt DateTime?    @map("reviewed_at") @db.Timestamptz(3)
+  // true = gravada acima do teto por denunciado/hora (auditoria 6I): fica para consulta, fora da fila prioritária.
+  throttled  Boolean       @default(false)
 
   reporter User?  @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   reported User?  @relation("ReportReported", fields: [reportedId], references: [id], onDelete: SetNull)
@@ -210,6 +212,9 @@ model Report {
   @@index([reportedId, createdAt])
   @@index([reporterId, createdAt])
   @@index([matchId])
+  // Uma denúncia por (denunciante, denunciado, partida). NULL não colide (denúncias sem partida e
+  // linhas anonimizadas); as sem partida têm janela de 24 h na aplicação.
+  @@unique([reporterId, reportedId, matchId])
   @@map("reports")
 }
 
@@ -289,6 +294,8 @@ model UserStat {
 model ProgressionApplied {
   matchId   String   @id @map("match_id") @db.Uuid
   appliedAt DateTime @default(now()) @map("applied_at") @db.Timestamptz(3)
+  // false = só estatística (user_stats): o anti-farm barrou conquistas e missões desta partida.
+  scored    Boolean  @default(true)
 
   match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
 
