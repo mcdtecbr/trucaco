@@ -9,25 +9,38 @@
  *   nos lados, eu embaixo; mão ao centro, sinais à esquerda dela e aposta no canto direito.
  */
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { betCry } from '@trucaco/protocol';
 import type { LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
   BetButtons,
+  betButtons,
+  betCorner as betCornerSpecs,
+  cornerMinWidth,
   Card,
   CardBacks,
+  cardSizes,
   ChatBubble,
   SpeechBubble,
   HandFan,
   MIN_TOUCH,
+  PEEK_PX,
   PlayedCards,
+  SEAT_NAME_GAP,
   ScoreHistoryList,
   ScoreLayers,
-  SUIT_SYMBOL,
   TurnTimer,
-  Vira,
   canCover,
   colors,
   fontSize,
@@ -49,21 +62,42 @@ import type {
 } from '../table/tableStore';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
+import { ChatDock } from './ChatDock';
+import type { ChatDockProps } from './ChatDock';
 import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
 import { DealOverlay, useDealSequence } from '../table/DealOverlay';
+import { DeckGroup } from '../table/DeckGroup';
 import { ScoreAd } from '../table/ScoreAd';
 import {
+  CHAT_CORNER_MIN_WIDTH,
+  DECK_GROUP_W,
+  DECK_H,
+  DOCK_PAD_X,
+  DECK_IN_X,
+  DECK_W,
   FELT_PAD,
   PHONE_SIDE_SHIFT,
+  RING_PX,
   estimateArena,
+  flexZones,
+  landscapeDockPlan,
   landscapeGeometry,
+  phoneDockPlan,
+  trickFitScale,
 } from '../table/tableGeometry';
 import { TableFelt } from '../table/TableFelt';
 import type { TableAd } from '../table/ad';
-import { SEAT_AVATAR_SIZE, SeatAvatar, seatRingRadius } from './SeatAvatar';
+import {
+  SEAT_AVATAR_SIZE,
+  SEAT_AVATAR_TIGHT,
+  SHORT_PHONE_HEIGHT,
+  SeatAvatar,
+  TIGHT_LANDSCAPE_HEIGHT,
+  seatRingRadius,
+} from './SeatAvatar';
 import { SignalGrid, SignalToggle, useSignalPanel } from './SignalPanel';
 
 export interface TableViewProps {
@@ -88,6 +122,8 @@ export interface TableViewProps {
   probe: boolean;
   /** Painel de chat aberto (props prontas) ou null. */
   chatPanel: ChatPanelProps | null;
+  /** Chat fixo da mesa (campo + últimas mensagens). Omitido = só o botão do chat na barra. */
+  chatDock?: Omit<ChatDockProps, 'variant'>;
   chatUnreadTotal: number;
   /** Combinado da dupla (só a minha dupla o tem): aparece sob cada sinal no painel de sinais. */
   codes?: Readonly<Partial<Record<SignalId, string>>>;
@@ -151,7 +187,7 @@ export interface TableMetrics {
   readonly peek: Readonly<Record<'partner' | 'left' | 'right', PeekDirection>>;
 }
 
-export function metricsFor(layout: TableLayout): TableMetrics {
+export function metricsFor(layout: TableLayout, windowHeight?: number): TableMetrics {
   switch (layout) {
     case 'wide':
       return {
@@ -164,7 +200,10 @@ export function metricsFor(layout: TableLayout): TableMetrics {
       };
     case 'landscape':
       return {
-        avatar: SEAT_AVATAR_SIZE.landscape,
+        avatar:
+          windowHeight !== undefined && windowHeight < TIGHT_LANDSCAPE_HEIGHT
+            ? SEAT_AVATAR_TIGHT
+            : SEAT_AVATAR_SIZE.landscape,
         hand: 'md',
         played: 'sm',
         trickScale: 1,
@@ -173,8 +212,11 @@ export function metricsFor(layout: TableLayout): TableMetrics {
       };
     default:
       return {
-        avatar: SEAT_AVATAR_SIZE.phone,
-        hand: 'lg',
+        avatar:
+          windowHeight !== undefined && windowHeight < SHORT_PHONE_HEIGHT
+            ? SEAT_AVATAR_TIGHT + 4
+            : SEAT_AVATAR_SIZE.phone,
+        hand: windowHeight !== undefined && windowHeight < SHORT_PHONE_HEIGHT ? 'md' : 'lg',
         played: 'sm',
         trickScale: 1,
         trick: 'cross',
@@ -311,7 +353,9 @@ function Seat({
         active={s.isTurn}
         caption={own === true ? 'você' : seatCaption(s, vm)}
         layout="column"
-        nameOverlay
+        nameBelow
+        nameWidth={fx.avatarSize + 2 * RING_PX}
+        {...(peek === 'down' ? { nameGap: PEEK_PX + SEAT_NAME_GAP } : {})}
         ringRadius={seatRingRadius(fx.avatarSize)}
         avatar={
           <SeatAvatar
@@ -436,8 +480,10 @@ function BarIcon({
 export function TableView(p: TableViewProps) {
   const { vm } = p;
   const horizontal = isHorizontalTable(p.layout);
-  const m = metricsFor(p.layout);
-  const win = useWindowDimensions();
+  const rawWin = useWindowDimensions();
+  // Sem medida (renderização estática, testes): janela de 1024 px, como um tablet.
+  const win = rawWin.width > 0 ? rawWin : { ...rawWin, width: 1024 };
+  const m = metricsFor(p.layout, win.height);
   const [menuOpen, setMenuOpen] = useState(p.defaultMenuOpen === true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [barH, setBarH] = useState(0);
@@ -570,22 +616,13 @@ export function TableView(p: TableViewProps) {
     </View>
   );
 
-  const viraBox = (
-    <View
-      style={[styles.viraBox, deal.viraHidden ? styles.hidden : undefined]}
-      pointerEvents="none"
-    >
-      <Vira
-        viraRank={vm.vira.rank}
-        viraSuit={vm.vira.suit}
-        {...(vm.manilhaLabel !== undefined ? { manilhaLabel: vm.manilhaLabel } : {})}
-      />
-      {vm.variant === 'mineiro' && vm.manilhas.length > 0 ? (
-        <Text style={styles.muted} testID="manilhas">
-          Manilhas: {vm.manilhas.map((x) => `${x.rank}${SUIT_SYMBOL[x.suit]}`).join(' ')}
-        </Text>
-      ) : null}
-    </View>
+  const deckGroup = (
+    <DeckGroup
+      viraRank={vm.vira.rank}
+      viraSuit={vm.vira.suit}
+      manilhaLabel={vm.manilhaLabel}
+      viraHidden={deal.viraHidden}
+    />
   );
 
   const showLinger = vm.current.length === 0 && p.lingering !== null;
@@ -599,7 +636,9 @@ export function TableView(p: TableViewProps) {
   const showPartner = vm.handPhase === 'specialDecision' && vm.partnerCards.length > 0;
 
   // Faixa do topo do pano ocupada pelo parceiro (avatar + borda + costas das cartas que saem abaixo).
-  const partnerZone = m.avatar + 6 + (m.peek.partner === 'down' ? 24 : 0) + spacing.xs;
+  // Faixa de baixo: meu avatar, no centro (de frente para o parceiro).
+  const zones = flexZones(m.avatar, m.peek.partner === 'down');
+  const { partnerZone } = zones;
   const sideSeatStyle = (side: 'left' | 'right'): StyleProp<ViewStyle> => [
     styles.sideSeat,
     p.layout === 'phone' ? { top: PHONE_SIDE_SHIFT * 2 } : null,
@@ -647,6 +686,7 @@ export function TableView(p: TableViewProps) {
           <Text
             style={[styles.turn, vm.canAct && styles.turnMine]}
             testID="turn-text"
+            numberOfLines={2}
             accessibilityLiveRegion="polite"
           >
             {turn}
@@ -747,14 +787,8 @@ export function TableView(p: TableViewProps) {
           {trickCards}
           {winnerText}
         </View>
-        <View
-          style={[
-            abs(geo.viraBox),
-            { width: geo.viraBox.w, transform: [{ scale: geo.viraScale }] },
-          ]}
-          pointerEvents="none"
-        >
-          {viraBox}
+        <View style={abs(geo.deckGroup)} pointerEvents="none">
+          {deckGroup}
         </View>
         {statusNode !== null ? (
           <View
@@ -775,8 +809,31 @@ export function TableView(p: TableViewProps) {
       </View>
     ) : null;
 
+  // Retrato: o aviso da vez fica no canto esquerdo, entre o monte e o avatar do parceiro (pequeno, em
+  // até duas linhas).
+  const phoneStatusW = Math.max(
+    48,
+    ((arena?.w ?? est.w) - (m.avatar + 2 * RING_PX)) / 2 - DECK_GROUP_W - spacing.xs - 4,
+  );
+  // Telas baixas: a cruz da vaza encolhe para caber entre o parceiro (em cima) e o meu avatar (embaixo).
+  const trickFit = trickFitScale(
+    arena?.h ?? est.h,
+    zones,
+    cardSizes[m.played].height,
+    m.trickScale,
+  );
+
   const flexArena = (
-    <View style={styles.arena} pointerEvents="box-none">
+    <View
+      style={styles.arena}
+      pointerEvents="box-none"
+      onLayout={(e) => {
+        const { width, height } = e.nativeEvent.layout;
+        setArena((a) =>
+          a !== null && a.w === width && a.h === height ? a : { w: width, h: height },
+        );
+      }}
+    >
       <View style={styles.partnerSeat} pointerEvents="box-none">
         {seatNode(vm.byPosition.partner, m.peek.partner, {
           below: true,
@@ -798,10 +855,13 @@ export function TableView(p: TableViewProps) {
       <View style={styles.mySeat} pointerEvents="box-none">
         {seatNode(mineSeat, undefined, { anchor: 'start', testID: 'my-seat', own: true })}
       </View>
-      <View style={[styles.trickZone, { paddingTop: partnerZone }]} pointerEvents="box-none">
+      <View
+        style={[styles.trickZone, { paddingTop: partnerZone, paddingBottom: zones.mineZone }]}
+        pointerEvents="box-none"
+      >
         <View style={styles.center} testID="trick" pointerEvents="box-none">
           <View
-            style={m.trickScale !== 1 ? { transform: [{ scale: m.trickScale }] } : undefined}
+            style={trickFit !== 1 ? { transform: [{ scale: trickFit }] } : undefined}
             pointerEvents="box-none"
           >
             {trickCards}
@@ -809,14 +869,14 @@ export function TableView(p: TableViewProps) {
           {winnerText}
         </View>
       </View>
-      <View style={styles.viraCorner} pointerEvents="none">
-        {viraBox}
+      <View style={styles.deckCorner} pointerEvents="none">
+        {deckGroup}
       </View>
       {statusNode !== null ? (
         <View
           style={[
             styles.status,
-            horizontal ? styles.statusCorner : [styles.statusPhone, { top: partnerZone }],
+            horizontal ? styles.statusCorner : [styles.statusPhone, { width: phoneStatusW }],
           ]}
           pointerEvents="none"
         >
@@ -840,14 +900,14 @@ export function TableView(p: TableViewProps) {
           plan={deal.run.plan}
           mySeat={vm.mySeat}
           avatarSize={m.avatar}
-          {...(geo !== null
-            ? {
-                deckAt: {
+          deckAt={
+            geo !== null
+              ? {
                   x: FELT_PAD + geo.deck.x + geo.deck.w / 2,
                   y: FELT_PAD + geo.deck.y + geo.deck.h / 2,
-                },
-              }
-            : {})}
+                }
+              : { x: FELT_PAD + DECK_IN_X + DECK_W / 2, y: FELT_PAD + DECK_H / 2 }
+          }
         />
       ) : null}
     </TableFelt>
@@ -893,6 +953,18 @@ export function TableView(p: TableViewProps) {
     />
   );
 
+  // Botões de aposta (só para medir largura: o desenho vem de `betCorner` abaixo).
+  const betSpecs = betCornerSpecs(
+    betButtons(legal, {
+      raising: vm.pending !== null,
+      nextValue: vm.nextBetValue,
+      pendingValue: vm.pendingValue,
+    }),
+  );
+  const betNeed = cornerMinWidth(betSpecs.side.length, betSpecs.main !== null);
+  const landDock = landscapeDockPlan(win.width, m.avatar + 2 * RING_PX, betNeed);
+  const phonePlan = phoneDockPlan(win.width - DOCK_PAD_X, m.hand, betNeed);
+  const handSize = landscape ? landDock.hand : m.hand;
   const hand = (
     <View
       testID="my-hand"
@@ -906,7 +978,7 @@ export function TableView(p: TableViewProps) {
         coverMode={p.coverMode}
         manilhas={vm.manilhas}
         selectedAction={p.selected}
-        size={m.hand}
+        size={handSize}
         onPress={p.on.pressCard}
       />
     </View>
@@ -916,6 +988,17 @@ export function TableView(p: TableViewProps) {
    * Dock inferior, ao alcance do polegar. Retrato: mão, e logo abaixo sinais (e cobrir) à esquerda e o
    * botão de aposta no canto direito. Horizontal: sinais, mão e aposta numa linha só, com a mão ao centro.
    */
+  const chatInDock = p.chatDock !== undefined && p.chatPanel === null;
+  const dockChat = (variant: ChatDockProps['variant'], maxLines?: number) =>
+    chatInDock && p.chatDock !== undefined ? (
+      <ChatDock
+        variant={variant}
+        {...(maxLines !== undefined ? { maxLines } : {})}
+        {...p.chatDock}
+      />
+    ) : null;
+  // Web largo e estreito (< `CHAT_CORNER_MIN_WIDTH`): o chat compacto entra na fileira da dock.
+  const wideChatInRow = p.layout === 'wide' && chatInDock && win.width < CHAT_CORNER_MIN_WIDTH;
   const dock = horizontal ? (
     <View
       style={styles.dock}
@@ -923,20 +1006,33 @@ export function TableView(p: TableViewProps) {
       onLayout={(e) => setDockH(Math.round(e.nativeEvent.layout.height))}
     >
       {landscape ? null : dockExtras}
-      <View style={[styles.dockRow, landscape && styles.dockRowLand]}>
-        {landscape ? (
+      {landscape ? (
+        // Meu avatar no centro da mesa (mesma coluna do parceiro); sinais e chat à esquerda; a mão
+        // fica logo à direita dele, com o botão de aposta colado nela.
+        <View style={[styles.dockRow, styles.dockRowLand]}>
+          <View style={styles.dockHalfStart}>
+            {signalButtons}
+            {landDock.showChat ? (
+              <View style={styles.dockChat}>{dockChat('compact', 1)}</View>
+            ) : null}
+          </View>
           <View style={styles.dockMine}>
             {seatNode(mineSeat, undefined, { anchor: 'start', testID: 'my-seat', own: true })}
-            <View style={styles.dockStack}>{signalButtons}</View>
           </View>
-        ) : (
-          <View style={[styles.dockSide, styles.dockSideStart]}>{signalButtons}</View>
-        )}
-        {hand}
-        <View style={landscape ? styles.dockBet : [styles.dockSide, styles.dockSideEnd]}>
-          {betCorner}
+          <View style={[styles.dockHalfEnd, { minWidth: landDock.rightMin }]}>
+            {hand}
+            <View style={styles.dockBet}>{betCorner}</View>
+          </View>
         </View>
-      </View>
+      ) : (
+        // Web largo: sinais, mão e botão de aposta num grupo só, centralizado (o avatar fica no pano).
+        <View style={[styles.dockRow, styles.dockRowWide]}>
+          {wideChatInRow ? <View style={styles.dockChatWide}>{dockChat('compact', 1)}</View> : null}
+          {signalButtons}
+          {hand}
+          <View style={styles.dockBet}>{betCorner}</View>
+        </View>
+      )}
     </View>
   ) : (
     <View
@@ -945,13 +1041,27 @@ export function TableView(p: TableViewProps) {
       onLayout={(e) => setDockH(Math.round(e.nativeEvent.layout.height))}
     >
       {dockExtras}
-      {hand}
+      <View style={styles.dockHandRow}>
+        {hand}
+        {phonePlan === 'inline' ? <View style={styles.dockBet}>{betCorner}</View> : null}
+      </View>
       <View style={styles.dockActions}>
         <View style={styles.dockStart}>{signalButtons}</View>
-        {betCorner}
+        {phonePlan === 'inline' ? (
+          <View style={styles.dockChat}>{dockChat('compact', 1)}</View>
+        ) : (
+          <View style={styles.dockBet}>{betCorner}</View>
+        )}
       </View>
     </View>
   );
+
+  const cornerChat =
+    p.layout === 'wide' && chatInDock && win.width >= CHAT_CORNER_MIN_WIDTH ? (
+      <View style={styles.chatCorner} pointerEvents="box-none">
+        {dockChat('corner')}
+      </View>
+    ) : null;
 
   const menuWidth = Math.min(320, Math.max(220, win.width - spacing.md));
   const menu = menuOpen ? (
@@ -1106,10 +1216,14 @@ export function TableView(p: TableViewProps) {
           <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
         </View>
         <Banner banner={p.banner} onLeave={p.on.leave} />
-        <View style={[styles.main, p.layout === 'wide' && styles.mainWide]}>
+        <KeyboardAvoidingView
+          behavior={Platform.select({ ios: 'padding', default: undefined })}
+          style={[styles.main, p.layout === 'wide' && styles.mainWide]}
+        >
           <View style={styles.boardBox}>{board}</View>
           {dock}
-        </View>
+          {cornerChat}
+        </KeyboardAvoidingView>
         {signalSheet}
       </View>
       {p.presenceNote !== null ? (
@@ -1191,13 +1305,17 @@ const styles = StyleSheet.create({
   sideSeat: { position: 'absolute', top: 0, bottom: 0, justifyContent: 'center' },
   sideLeft: { left: 0, alignItems: 'flex-start' },
   sideRight: { right: 0, alignItems: 'flex-end' },
-  mySeat: { position: 'absolute', left: 0, bottom: 0 },
+  mySeat: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
   trickZone: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   center: { alignItems: 'center', justifyContent: 'center' },
-  viraCorner: { position: 'absolute', top: 0, right: 0 },
-  viraBox: { alignItems: 'center', gap: 2, maxWidth: 120 },
+  deckCorner: { position: 'absolute', top: 0, left: 0 },
   status: { position: 'absolute', alignItems: 'center', paddingVertical: 2 },
-  statusPhone: { left: spacing.xl * 3, right: spacing.xl * 3 },
+  statusPhone: {
+    top: 4,
+    overflow: 'hidden',
+    left: DECK_GROUP_W + spacing.xs,
+    alignItems: 'flex-start',
+  },
   statusLand: { alignItems: 'flex-start' },
   extrasLand: {
     position: 'absolute',
@@ -1207,7 +1325,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 3,
   },
-  statusCorner: { top: 4, left: 64, maxWidth: 170, alignItems: 'flex-start' },
+  statusCorner: {
+    top: 4,
+    left: DECK_GROUP_W + spacing.xs,
+    maxWidth: 170,
+    alignItems: 'flex-start',
+  },
   turn: {
     color: colors.text,
     fontSize: fontSize.small,
@@ -1256,9 +1379,35 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   dockRowLand: { justifyContent: 'space-between', gap: spacing.sm },
-  dockMine: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, flexShrink: 0 },
-  dockStack: { gap: spacing.xs },
-  dockBet: { flexShrink: 1, alignItems: 'flex-end' },
+  dockRowWide: { justifyContent: 'center', gap: spacing.md },
+  dockHandRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  dockChat: { flex: 1, minWidth: 0 },
+  dockChatWide: { width: 240 },
+  chatCorner: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
+  dockMine: { alignItems: 'center', flexShrink: 0 },
+  dockHalfStart: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    gap: spacing.xs,
+  },
+  dockHalfEnd: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    gap: spacing.sm,
+  },
+  dockBet: { flexShrink: 1, alignItems: 'flex-start' },
   dockSide: { flex: 1, justifyContent: 'flex-end' },
   dockSideStart: { alignItems: 'flex-end' },
   dockSideEnd: { alignItems: 'flex-end' },

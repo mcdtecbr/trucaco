@@ -4,6 +4,7 @@ import type { TableController } from '../table/tableController';
 import type { ChatEntry } from '../table/tableStore';
 import { MAX_MUTED, normalizeNickname } from '../platform/mutedStorageCore';
 import type { ChatPanelProps, MuteEntry } from './ChatPanel';
+import type { ChatDockLine } from './ChatDock';
 
 export interface ChatPanelInput {
   chatOpen: boolean;
@@ -94,4 +95,21 @@ export function visibleBubbles<T>(
     if (!hidden.includes(Number(k))) out[Number(k)] = v;
   }
   return out;
+}
+
+/** Linhas do chat fixo da mesa: só `scope: 'table'`, sem os jogadores silenciados neste aparelho. */
+export function chatDockLines(
+  chat: readonly ChatEntry[],
+  mySeat: number,
+  nicknameOf: (seat: number) => string,
+  mutes: readonly MuteEntry[],
+): ChatDockLine[] {
+  const hidden = mutes.filter((m) => m.muted).map((m) => m.seat);
+  return chat
+    .filter((c) => c.scope === 'table' && !hidden.includes(c.seat))
+    .map((c) => ({
+      id: String(c.id),
+      author: c.seat === mySeat ? 'Você' : nicknameOf(c.seat) || `Jogador ${c.seat + 1}`,
+      text: c.text,
+    }));
 }

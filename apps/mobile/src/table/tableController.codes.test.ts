@@ -276,7 +276,10 @@ describe('5C: silenciar', () => {
     ctl.onChat({ scope: 'table', seat: 0, text: 'meu', at: 3 });
     expect(store.getState().chat.map((c) => c.text)).toEqual(['oi', 'meu']);
     expect(store.getState().bubbles[1]).toBeUndefined();
-    expect(store.getState().chatUnread.table).toBe(2);
+    // Só a mensagem de outro jogador conta como não lida; a minha não.
+    expect(store.getState().chatUnread.table).toBe(1);
+    ctl.markTableChatSeen();
+    expect(store.getState().chatUnread.table).toBe(0);
   });
 
   it('o parceiro também pode ser silenciado no chat da dupla', () => {
