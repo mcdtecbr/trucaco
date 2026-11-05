@@ -1991,7 +1991,9 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
   });
 
   it('(c) chat da dupla só vai ao parceiro (e eco); adversários nunca, nem em reconexão ou replay', async () => {
-    const game = await startedRec('truco-soc');
+    // Chat da dupla só existe na espera: 3 sentados, o 4º entra depois (e a série começa).
+    const game = await createGame('truco-soc', OPTS, 3);
+    expect(game.server.series).toBeNull();
     const secret = 'segredo-azul-42';
     SECRETS.push(secret);
     try {
@@ -2006,6 +2008,10 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       expect(got).toMatchObject({ scope: 'partner', seat: 0, text: secret });
       await sleep(QUIET_MS);
       expect(inboxOf(game.players[1] as Player).chats).toEqual([]);
+      // o 4º assento entra e a série começa: nada de histórico
+      await joinAgain(game, 3);
+      await until(() => game.server.series !== null, 'série iniciada');
+      await settle(game, 'início');
       expect(inboxOf(game.players[3] as Player).chats).toEqual([]);
       // adversários caem e voltam: nada de replay
       for (const s of [1, 3]) await dropSeat(game, s);
@@ -2055,10 +2061,14 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       );
       await sleep(QUIET_MS);
       expect(inboxOf(p0).chats.map((c) => c.text)).toEqual(['da mesa']);
-      // chat da dupla não é filtrado pelo bloqueio
+      // chat da dupla não existe em jogo: ignorado, sem entrega nem eco
       await sleep(450);
       p0.room.send('chat', { scope: 'partner', text: 'da dupla' });
-      await until(() => inboxOf(p2).chats.some((c) => c.text === 'da dupla'), 'dupla entregue');
+      await sleep(QUIET_MS);
+      for (const p of [p0, p1, p2, p3]) {
+        expect(inboxOf(p).chats.some((c) => c.text === 'da dupla')).toBe(false);
+      }
+      expect(p0.errors).toEqual([]);
       // desbloqueio ao vivo: volta a chegar
       emitBlockChange({ blockerId: 'user-0', blockedId: 'user-2', active: false });
       emitBlockChange({ blockerId: 'user-1', blockedId: 'user-0', active: false });
@@ -2072,14 +2082,14 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
   });
 
   it('(c2) frase rápida da dupla segue a mesma privacidade', async () => {
-    const game = await startedRec('truco-soc');
+    // Na espera, com 3 sentados: seat 2 fala ao parceiro (seat 0); seat 1 é adversário.
+    const game = await createGame('truco-soc', OPTS, 3);
     const phraseId = QUICK_PHRASE_IDS[0] as string;
-    (game.players[1] as Player).room.send('chat', { scope: 'partner', phraseId });
-    await until(() => inboxOf(game.players[3] as Player).chats.length === 1, 'parceiro do 1');
-    expect(inboxOf(game.players[3] as Player).chats[0]).toMatchObject({ seat: 1, phraseId });
+    (game.players[2] as Player).room.send('chat', { scope: 'partner', phraseId });
+    await until(() => inboxOf(game.players[0] as Player).chats.length === 1, 'parceiro do 2');
+    expect(inboxOf(game.players[0] as Player).chats[0]).toMatchObject({ seat: 2, phraseId });
     await sleep(QUIET_MS);
-    expect(inboxOf(game.players[0] as Player).chats).toEqual([]);
-    expect(inboxOf(game.players[2] as Player).chats).toEqual([]);
+    expect(inboxOf(game.players[1] as Player).chats).toEqual([]);
   });
 
   it('(d) chat da mesa chega aos 4, com o assento do remetente', async () => {
@@ -2095,20 +2105,24 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
     // away: janela aberta
     const a = await startedRec('truco-soc');
     await dropSeat(a, 2);
+    // chat da dupla é ignorado em jogo: nem o eco chega; a mesa segue valendo
     (a.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o ausente' });
-    await until(() => inboxOf(a.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    (a.players[1] as Player).room.send('chat', { scope: 'table', text: 'mesa-ausente' });
+    await until(() => inboxOf(a.players[0] as Player).chats.length === 1, 'chat da mesa');
+    expect(inboxOf(a.players[0] as Player).chats[0]).toMatchObject({ scope: 'table' });
     const back = await rejoin(a, 2);
     await until(() => statusOf(a, 2) === 'connected', 'voltou');
     await sleep(QUIET_MS);
     expect(inboxOf(back).chats).toEqual([]);
-    expect(inboxOf(a.players[1] as Player).chats).toEqual([]);
+    expect(inboxOf(a.players[1] as Player).chats.map((c) => c.text)).toEqual(['mesa-ausente']);
     await t.cleanup();
     // bot: janela expirou
     const b = await startedRec('truco-soc-short');
     await dropSeat(b, 2);
     await until(() => (b.server.state.players[2] as { isBot: boolean }).isBot, 'bot assumiu');
     (b.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o bot' });
-    await until(() => inboxOf(b.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    (b.players[1] as Player).room.send('chat', { scope: 'table', text: 'mesa-bot' });
+    await until(() => inboxOf(b.players[0] as Player).chats.length === 1, 'chat da mesa');
     const owner = await joinAgain(b, 2);
     await until(() => statusOf(b, 2) === 'connected', 'dono retomou');
     await sleep(QUIET_MS);
@@ -3040,20 +3054,20 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     assertNoLeaks(game);
   });
 
-  it('chat da dupla em jogo: adversários nunca recebem (nos 4 assentos)', async () => {
+  it('chat da dupla em jogo é ignorado nos 4 assentos (nem eco, nem parceiro, nem adversário)', async () => {
     const game = await started();
     for (let seat = 0; seat < 4; seat++) {
       at(game, seat).room.send('chat', { scope: 'partner', text: `dupla-${seat}` });
       await sleep(80);
     }
-    await until(() => game.players.every((p) => inboxOf(p).chats.length >= 2), 'entregues');
     await sleep(QUIET_MS);
     for (let seat = 0; seat < 4; seat++) {
-      const got = inboxOf(at(game, seat))
-        .chats.map((c) => c.seat)
-        .sort();
-      expect(got).toEqual([seat, (seat + 2) % 4].sort());
+      expect(inboxOf(at(game, seat)).chats).toEqual([]);
+      expect(at(game, seat).errors).toEqual([]);
     }
+    // chat da mesa segue valendo e chega aos 4
+    at(game, 0).room.send('chat', { scope: 'table', text: 'mesa-ok' });
+    await until(() => game.players.every((p) => inboxOf(p).chats.length === 1), 'mesa nos 4');
     assertNoLeaks(game);
   });
 

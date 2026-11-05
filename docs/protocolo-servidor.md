@@ -244,7 +244,7 @@ Confirmado pelo usuário em 2026-11-02: o **rodízio do pé** vale na revanche e
 
 **Bot sinaliza (só bot de verdade).** O bot de ausência (assento de humano que caiu e virou bot, que mantém apelido e avatar do humano) NÃO sinaliza; o cooldown do humano também não é gasto por bot. Ao começar cada mão (`handStarted`), cada assento de bot de vaga (bot desde o início) sorteia com 30 % de chance (`DEFAULT_BOT_SIGNAL_CHANCE`) 1 sinal aleatório de `SIGNAL_IDS` e o transmite como qualquer `signal`, com o `seat` do bot. Respeita o mesmo cooldown de 3 s do assento (em cooldown, não sinaliza) e só vale com a série em jogo. O sorteio não usa o RNG da partida (baralho e replay não mudam). O bot continua sem pedir nem aumentar aposta. **Hoje o sorteio não dispara:** nenhum caminho do servidor cria vaga de bot (`botSeats` só recebe o bot de ausência), então nenhum bot sinaliza.
 
-Sinal e sfx só valem em `playing` (série em andamento); fora disso são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase. O chat da dupla vale na espera (antes da série existir) e em `playing`; depois do fim da série é ignorado. `setCode` vale em qualquer fase com a dupla humana sentada.
+Sinal e sfx só valem em `playing` (série em andamento); fora disso são ignorados em silêncio, sem erro e sem gastar cooldown. O chat da mesa vale em qualquer fase. O chat da dupla (`scope: 'partner'`) só existe na espera (antes da série existir); com a série em andamento (`playing`) ou encerrada é ignorado em silêncio, sem erro e sem gastar cooldown (durante a partida o chat é só da mesa). `setCode` vale em qualquer fase com a dupla humana sentada.
 
 ## 9. Chat e texto livre
 
