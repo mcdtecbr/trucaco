@@ -5,7 +5,7 @@ import { player, priv, snapshot } from '../table/snapshotFixtures';
 import { finishedResult, rematchView, secondsLeft } from '../table/tableRoute';
 import { ChatPanel } from './ChatPanel';
 import { FinishedView } from './FinishedView';
-import { TableView } from './TableView';
+import { TableView, metricsFor } from './TableView';
 import type { TableViewProps } from './TableView';
 
 const noop = vi.fn();
@@ -309,9 +309,9 @@ describe('TableView: 3H2', () => {
   });
 
   it('votar para cancelar: contagem e estado de "já votou"', () => {
-    const out = html(snapshot({ cancelVotes: [1] }));
+    const out = html(snapshot({ cancelVotes: [1] }), { defaultMenuOpen: true });
     expect(out).toContain('Cancelar mesa (1)');
-    const voted = html(snapshot({ cancelVotes: [0] }));
+    const voted = html(snapshot({ cancelVotes: [0] }), { defaultMenuOpen: true });
     expect(voted).toContain('Você já votou');
     expect(voted).toContain('Cancelar: você votou (1)');
   });
@@ -394,7 +394,7 @@ describe('ChatPanel', () => {
   it('o painel aparece na mesa quando aberto', () => {
     const out = html(snapshot(), { chatPanel: props, chatUnreadTotal: 3 });
     expect(out).toContain('chat-panel');
-    expect(out).toContain('Chat (3)');
+    expect(out).toContain('Chat, 3 mensagens novas');
   });
 });
 
@@ -531,5 +531,70 @@ describe('FinishedView: revanche', () => {
     expect(secondsLeft(10_000, 4_000, 3_000)).toBe(3);
     expect(secondsLeft(10_000, 9_500, 0)).toBe(1);
     expect(secondsLeft(10_000, 20_000, 0)).toBe(0);
+  });
+});
+
+describe('TableView: disposição por layout', () => {
+  it('avatares grandes, quadrados e sem mudar com o layout além do tamanho', () => {
+    const phone = metricsFor('phone');
+    expect(phone.avatar).toBeGreaterThanOrEqual(72);
+    expect(phone.avatar).toBeLessThanOrEqual(80);
+    expect(metricsFor('landscape').avatar).toBeGreaterThanOrEqual(64);
+    expect(metricsFor('wide').avatar).toBeGreaterThan(phone.avatar);
+    expect(metricsFor('landscape').trick).toBe('row');
+    expect(metricsFor('phone').trick).toBe('cross');
+  });
+
+  for (const layout of ['phone', 'landscape', 'wide'] as const) {
+    it(`${layout}: placar no topo, quatro assentos, dock com mão, sinais e menu`, () => {
+      const out = html(snapshot(), { layout });
+      expect(out).toContain('score-fixed');
+      expect(out).toContain('data-testid="my-seat"');
+      for (let i = 1; i < 4; i++) expect(out).toContain(`table-seat-${i}`);
+      expect(out).toContain('data-testid="dock"');
+      expect(out).toContain('data-testid="my-hand"');
+      expect(out).toContain('data-testid="signal-toggle"');
+      expect(out).toContain('data-testid="open-chat"');
+      expect(out).toContain('data-testid="leave-table"');
+      expect(out).toContain('data-testid="score-history-toggle"');
+      expect(out).toContain('data-testid="turn-timer"');
+      // Ordem de leitura: placar, mesa (assentos e vez), mão e depois as ações da dock.
+      expect(out.indexOf('score-fixed')).toBeLessThan(out.indexOf('turn-text'));
+      expect(out.indexOf('turn-text')).toBeLessThan(out.indexOf('data-testid="my-hand"'));
+    });
+  }
+
+  it('histórico fica só como ícone no topo, recolhido; o menu fecha por padrão', () => {
+    const out = html(snapshot());
+    expect(out).not.toContain('Histórico das mãos');
+    expect(out).not.toContain('data-testid="table-menu"');
+    expect(html(snapshot(), { defaultMenuOpen: true })).toContain('data-testid="table-menu"');
+  });
+
+  it('o botão de aposta fica sempre no canto, depois de correr e aceitar', () => {
+    const out = html(
+      snapshot({
+        hand: {
+          phase: 'betPending',
+          turn: 0,
+          actingSeat: 1,
+          pending: { fromSeat: 0, fromTeam: 0, toLevel: 1, responderSeat: 1 },
+          pendingValue: 3,
+          nextBetValue: 6,
+        },
+        privates: priv(1, { legalActions: ['accept', 'run', 'bet'] }),
+      }),
+    );
+    expect(out.indexOf('data-testid="bet-run"')).toBeLessThan(out.indexOf('data-testid="bet-bet"'));
+    expect(out.indexOf('data-testid="bet-accept"')).toBeLessThan(
+      out.indexOf('data-testid="bet-bet"'),
+    );
+    expect(out).toContain('Seis!');
+  });
+
+  it('costas das cartas só nos outros três assentos durante a mão', () => {
+    const out = html(snapshot());
+    expect(out.match(/data-testid="card-backs"/g)?.length ?? 0).toBeLessThanOrEqual(3);
+    expect(out).toContain('card-backs');
   });
 });

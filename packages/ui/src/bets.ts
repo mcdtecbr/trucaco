@@ -117,3 +117,30 @@ function spec(kind: BetButtonSpec['kind'], ctx: BetContext): BetButtonSpec {
       };
   }
 }
+
+export interface BetCorner {
+  /** Botão principal (pedir ou aumentar): fica SEMPRE no mesmo canto; `null` = vaga reservada, vazia. */
+  readonly main: BetButtonSpec | null;
+  /** Respostas, de fora para dentro: correr/correr da mão, depois aceitar/jogar a mão. */
+  readonly side: readonly BetButtonSpec[];
+}
+
+const SIDE_ORDER: Readonly<Record<BetButtonSpec['kind'], number>> = {
+  specialRun: 0,
+  run: 1,
+  specialPlay: 2,
+  accept: 3,
+  bet: 4,
+};
+
+/**
+ * Separa o botão principal (pedir ou aumentar a aposta) das respostas, para o canto da dock. Só
+ * reorganiza os botões já derivados de `legalActions`: não decide nada.
+ */
+export function betCorner(specs: readonly BetButtonSpec[]): BetCorner {
+  const main = specs.find((s) => s.kind === 'bet') ?? null;
+  const side = specs
+    .filter((s) => s.kind !== 'bet')
+    .sort((a, b) => SIDE_ORDER[a.kind] - SIDE_ORDER[b.kind]);
+  return { main, side };
+}

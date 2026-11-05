@@ -133,6 +133,7 @@ test.describe('combinado da dupla', () => {
     for (const p of players) {
       await expect(p.page.getByTestId('table')).toBeVisible({ timeout: 30_000 });
     }
+    await a.page.getByTestId('open-menu').click();
     await a.page.getByTestId('open-codes').click();
     await expect(a.page.getByTestId('codes-panel')).toBeVisible();
     await a.page.getByTestId('code-option-nod-copas').click();
@@ -154,6 +155,7 @@ test.describe('combinado da dupla', () => {
     await a.page.getByTestId('open-chat').click();
     await expect(a.page.getByTestId('chat-tab-partner')).toHaveCount(0);
     await a.page.getByTestId('chat-close').click();
+    await a.page.getByTestId('open-menu').click();
     await a.page.getByTestId('open-codes').click();
     await a.page.getByTestId('codes-close').click();
     await expect(a.page.getByTestId('codes-panel')).toHaveCount(0);

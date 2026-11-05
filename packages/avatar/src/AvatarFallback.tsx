@@ -35,7 +35,18 @@ export interface AvatarFallbackProps {
   readonly highlight: boolean;
   readonly accessibilityLabel: string;
   readonly testID?: string | undefined;
+  /**
+   * `circle` (padrão): disco com cabeça e ombros. `square`: quadrado de cantos arredondados com o
+   * desenho ampliado (`SQUARE_ZOOM`) para o rosto ocupar quase todo o quadro (sinais legíveis).
+   */
+  readonly shape?: 'circle' | 'square' | undefined;
 }
+
+/** Ampliação do desenho no formato quadrado e o quanto ele desce (fração do lado) para centrar o rosto. */
+export const SQUARE_ZOOM = 1.28;
+const SQUARE_SHIFT_Y = 0.05;
+/** Raio dos cantos do formato quadrado (fração do lado). */
+export const SQUARE_RADIUS = 0.18;
 
 const INK = '#1E1A1A';
 const LIP = '#B4443A';
@@ -174,6 +185,13 @@ export function AvatarFallback(props: AvatarFallbackProps) {
       </Svg>
     );
   };
+  const square = props.shape === 'square';
+  const inner: ViewStyle = square
+    ? {
+        ...StyleSheet.absoluteFill,
+        transform: [{ translateY: props.size * SQUARE_SHIFT_Y }, { scale: SQUARE_ZOOM }],
+      }
+    : StyleSheet.absoluteFill;
   const at = (region: Region): ViewStyle => ({
     position: 'absolute',
     left: region[0] * k,
@@ -246,129 +264,131 @@ export function AvatarFallback(props: AvatarFallbackProps) {
       style={{
         width: props.size,
         height: props.size,
-        borderRadius: props.size / 2,
+        borderRadius: square ? props.size * SQUARE_RADIUS : props.size / 2,
         backgroundColor: bg,
         overflow: 'hidden',
       }}
     >
-      {/* cabelo de trás e orelhas: acompanham a cabeça, mas ficam atrás do pescoço e da roupa */}
-      <Animated.View style={headStyle}>
-        <View style={at(FULL)}>{layer('headBack', FULL)}</View>
-      </Animated.View>
-
-      {/* pescoço, ombros e roupa (o fundo é a cor do círculo) */}
-      <Animated.View
-        style={[at(FULL), { transform: [{ translateY: shoulderY as unknown as number }] }]}
-      >
-        {layer('body', FULL)}
-      </Animated.View>
-
-      {/* cabeça e tudo que acompanha o rosto */}
-      <Animated.View style={headStyle}>
-        <View style={at(FULL)}>{layer('head', FULL)}</View>
-        <Animated.View
-          style={[
-            at(REGIONS.nose),
-            {
-              transform: [
-                { translateX: ch('noseX', u) as number },
-                { scaleX: ch('noseScale') as number },
-              ],
-            },
-          ]}
-        >
-          {layer('nose', REGIONS.nose)}
+      <View style={inner}>
+        {/* cabelo de trás e orelhas: acompanham a cabeça, mas ficam atrás do pescoço e da roupa */}
+        <Animated.View style={headStyle}>
+          <View style={at(FULL)}>{layer('headBack', FULL)}</View>
         </Animated.View>
-        {has('puffOpacity') ? (
-          <>
-            {puff(34)}
-            {puff(66)}
-          </>
-        ) : null}
-        {eye('eyeL', eyeLScale)}
-        {eye('eyeR', eyeRScale)}
-        {brow('browL')}
-        {brow('browR')}
-        {/* boca: gira em torno do próprio centro; esmaece quando o sorriso entra */}
+
+        {/* pescoço, ombros e roupa (o fundo é a cor do círculo) */}
         <Animated.View
-          style={[
-            at(REGIONS.mouth),
-            {
-              opacity: baseMouthOp as number,
-              transform: [{ rotate: rot('mouthRot') as string }],
-            },
-          ]}
+          style={[at(FULL), { transform: [{ translateY: shoulderY as unknown as number }] }]}
         >
-          {layer('mouth', REGIONS.mouth)}
+          {layer('body', FULL)}
         </Animated.View>
-        {has('smileOpacity') ? (
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              box(u, 50, 63.5, 18, 9),
-              {
-                opacity: smileOp as number,
-                borderBottomLeftRadius: 9 * u,
-                borderBottomRightRadius: 9 * u,
-                borderBottomWidth: 3 * u,
-                borderLeftWidth: 3 * u,
-                borderRightWidth: 3 * u,
-                borderColor: LIP,
-              },
-            ]}
-          />
-        ) : null}
-        {has('biteOpacity') ? (
+
+        {/* cabeça e tudo que acompanha o rosto */}
+        <Animated.View style={headStyle}>
+          <View style={at(FULL)}>{layer('head', FULL)}</View>
           <Animated.View
             style={[
-              box(u, 50, 64, 12, 4),
+              at(REGIONS.nose),
               {
-                opacity: ch('biteOpacity') as number,
-                backgroundColor: '#F5F1E6',
-                borderRadius: 2 * u,
-                borderWidth: 0.8 * u,
-                borderColor: INK,
+                transform: [
+                  { translateX: ch('noseX', u) as number },
+                  { scaleX: ch('noseScale') as number },
+                ],
               },
             ]}
-          />
-        ) : null}
-        {/* boca aberta (lábios, interior e dentes) e línguas: ocultas no rig, só aparecem nos sinais
+          >
+            {layer('nose', REGIONS.nose)}
+          </Animated.View>
+          {has('puffOpacity') ? (
+            <>
+              {puff(34)}
+              {puff(66)}
+            </>
+          ) : null}
+          {eye('eyeL', eyeLScale)}
+          {eye('eyeR', eyeRScale)}
+          {brow('browL')}
+          {brow('browR')}
+          {/* boca: gira em torno do próprio centro; esmaece quando o sorriso entra */}
+          <Animated.View
+            style={[
+              at(REGIONS.mouth),
+              {
+                opacity: baseMouthOp as number,
+                transform: [{ rotate: rot('mouthRot') as string }],
+              },
+            ]}
+          >
+            {layer('mouth', REGIONS.mouth)}
+          </Animated.View>
+          {has('smileOpacity') ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                box(u, 50, 63.5, 18, 9),
+                {
+                  opacity: smileOp as number,
+                  borderBottomLeftRadius: 9 * u,
+                  borderBottomRightRadius: 9 * u,
+                  borderBottomWidth: 3 * u,
+                  borderLeftWidth: 3 * u,
+                  borderRightWidth: 3 * u,
+                  borderColor: LIP,
+                },
+              ]}
+            />
+          ) : null}
+          {has('biteOpacity') ? (
+            <Animated.View
+              style={[
+                box(u, 50, 64, 12, 4),
+                {
+                  opacity: ch('biteOpacity') as number,
+                  backgroundColor: '#F5F1E6',
+                  borderRadius: 2 * u,
+                  borderWidth: 0.8 * u,
+                  borderColor: INK,
+                },
+              ]}
+            />
+          ) : null}
+          {/* boca aberta (lábios, interior e dentes) e línguas: ocultas no rig, só aparecem nos sinais
             `mouth_open` (língua centrada) e `tongue` (língua de lado) */}
-        {has('mouthOpenOpacity') ? (
-          <Animated.View
-            style={[at(REGIONS.mouthOpen), { opacity: ch('mouthOpenOpacity') as number }]}
-          >
-            {layer('mouthOpen', REGIONS.mouthOpen, true)}
-          </Animated.View>
-        ) : null}
-        {has('tongueCenterOpacity') ? (
-          <Animated.View
-            style={[
-              at(REGIONS.tongueCenter),
-              {
-                opacity: ch('tongueCenterOpacity') as number,
-                transform: [{ translateY: ch('tongueY', u) as number }],
-              },
-            ]}
-          >
-            {layer('tongueCenter', REGIONS.tongueCenter, true)}
-          </Animated.View>
-        ) : null}
-        {has('tongueSideOpacity') ? (
-          <Animated.View
-            style={[
-              at(REGIONS.tongueSide),
-              {
-                opacity: ch('tongueSideOpacity') as number,
-                transform: [{ translateY: ch('tongueY', u) as number }],
-              },
-            ]}
-          >
-            {layer('tongueSide', REGIONS.tongueSide, true)}
-          </Animated.View>
-        ) : null}
-        <View style={at(FULL)}>{layer('front', FULL)}</View>
-      </Animated.View>
+          {has('mouthOpenOpacity') ? (
+            <Animated.View
+              style={[at(REGIONS.mouthOpen), { opacity: ch('mouthOpenOpacity') as number }]}
+            >
+              {layer('mouthOpen', REGIONS.mouthOpen, true)}
+            </Animated.View>
+          ) : null}
+          {has('tongueCenterOpacity') ? (
+            <Animated.View
+              style={[
+                at(REGIONS.tongueCenter),
+                {
+                  opacity: ch('tongueCenterOpacity') as number,
+                  transform: [{ translateY: ch('tongueY', u) as number }],
+                },
+              ]}
+            >
+              {layer('tongueCenter', REGIONS.tongueCenter, true)}
+            </Animated.View>
+          ) : null}
+          {has('tongueSideOpacity') ? (
+            <Animated.View
+              style={[
+                at(REGIONS.tongueSide),
+                {
+                  opacity: ch('tongueSideOpacity') as number,
+                  transform: [{ translateY: ch('tongueY', u) as number }],
+                },
+              ]}
+            >
+              {layer('tongueSide', REGIONS.tongueSide, true)}
+            </Animated.View>
+          ) : null}
+          <View style={at(FULL)}>{layer('front', FULL)}</View>
+        </Animated.View>
+      </View>
 
       {props.activeId !== null ? (
         <View
@@ -384,7 +404,7 @@ export function AvatarFallback(props: AvatarFallbackProps) {
         style={[
           StyleSheet.absoluteFill,
           {
-            borderRadius: props.size / 2,
+            borderRadius: square ? props.size * SQUARE_RADIUS : props.size / 2,
             borderWidth: Math.max(2, 4 * u),
             borderColor: props.highlight ? '#FFFFFF' : 'transparent',
           },

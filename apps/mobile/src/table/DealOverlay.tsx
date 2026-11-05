@@ -70,7 +70,7 @@ export function useDealSequence(opts: {
   return seq;
 }
 
-interface Point {
+export interface Point {
   readonly x: number;
   readonly y: number;
 }
@@ -78,26 +78,48 @@ interface Point {
 const CARD = cardSizes.sm;
 const useNative = Platform.OS !== 'web';
 
-/** Centro de cada posição na área do pano (coordenadas locais). */
-function targets(w: number, h: number): Record<ScreenPosition, Point> {
+/** Margem do pano (madeira + folga) até a arena onde ficam os assentos. */
+export const FELT_INSET = 10;
+/** Raio da borda do avatar somada ao anel de time. */
+const RING = 3;
+
+/**
+ * Centro de cada posição na área do pano (coordenadas locais): os adversários e o parceiro nas
+ * bordas, onde estão os avatares (`avatarSize`), e eu embaixo, em direção à mão na dock.
+ */
+export function dealTargets(
+  w: number,
+  h: number,
+  avatarSize: number,
+  deck?: Point,
+): Record<ScreenPosition, Point> & { deck: Point } {
+  const half = avatarSize / 2 + RING;
   return {
-    partner: { x: w / 2, y: CARD.height / 2 + 6 },
-    left: { x: CARD.width / 2 + 6, y: h / 2 },
-    right: { x: w - CARD.width / 2 - 6, y: h / 2 },
+    partner: { x: w / 2, y: FELT_INSET + half },
+    left: { x: FELT_INSET + half, y: h / 2 },
+    right: { x: w - FELT_INSET - half, y: h / 2 },
     self: { x: w / 2, y: h - CARD.height / 2 - 6 },
+    deck: deck ?? { x: CARD.width / 2 + 6, y: CARD.height / 2 + 6 },
   };
 }
 
+const DEFAULT_DEAL_AVATAR = 76;
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
 
 export function DealOverlay({
   runId,
   plan,
   mySeat,
+  avatarSize = DEFAULT_DEAL_AVATAR,
+  deckAt,
 }: {
   runId: number;
   plan: DealPlan;
   mySeat: number;
+  /** Lado do avatar dos assentos (px): as cartas voam até o avatar de cada um. */
+  avatarSize?: number;
+  /** Centro do monte (coordenadas do overlay). Omitido = canto superior esquerdo. */
+  deckAt?: Point;
 }) {
   const [box, setBox] = useState({ w: 0, h: 0 });
   const clock = useRef(new Animated.Value(0)).current;
@@ -118,8 +140,10 @@ export function DealOverlay({
     return () => anim.stop();
   }, [clock, runId, plan.endMs]);
 
-  const deck: Point = useMemo(() => ({ x: CARD.width / 2 + 6, y: CARD.height / 2 + 6 }), []);
-  const tg = useMemo(() => targets(box.w, box.h), [box.w, box.h]);
+  const tg = useMemo(
+    () => dealTargets(box.w, box.h, avatarSize, deckAt),
+    [box.w, box.h, avatarSize, deckAt?.x, deckAt?.y],
+  );
 
   const place = (
     anchor: Point,
@@ -135,6 +159,7 @@ export function DealOverlay({
     transform: [{ translateX: dx }, { translateY: dy }, { rotate: rot }],
   });
 
+  const deck = tg.deck;
   const ready = box.w > 0 && box.h > 0;
   const shuffleStart = plan.collectMs;
   const shuffleEnd = plan.collectMs + plan.shuffleMs;

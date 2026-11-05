@@ -11,6 +11,7 @@ export * from './announcements';
 export * from './useAnnouncer';
 export * from './LiveRegion';
 export * from './Card';
+export * from './CardBacks';
 export * from './HandFan';
 export * from './PlayedCards';
 export * from './Vira';

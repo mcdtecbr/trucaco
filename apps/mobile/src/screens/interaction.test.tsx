@@ -73,6 +73,7 @@ function Screen({ h }: { h: Harness }) {
     <TableView
       vm={vm}
       layout="phone"
+      defaultMenuOpen
       banner={null}
       connected
       busy={s.busy}
