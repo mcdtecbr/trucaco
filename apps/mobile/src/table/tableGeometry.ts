@@ -31,6 +31,8 @@ export const STATUS_MAX_W = 170;
 /** Altura do aviso "Vaza de fulano" sob a fileira da vaza. */
 export const WINNER_H = 17;
 const GAP = 8;
+/** Folga minima entre o painel de status e os avatares vizinhos quando falta largura. */
+const TIGHT = 4;
 /** Retrato: adversarios das bordas descem este tanto do centro para a vira (com manilha em 2 linhas) nao encostar. */
 export const PHONE_SIDE_SHIFT = 8;
 
@@ -67,17 +69,37 @@ export interface LandscapeGeometry {
   readonly partner: SeatRects;
   readonly left: SeatRects;
   readonly right: SeatRects;
+  /** Retangulo VISUAL da vaza (ja reduzido por `trickScale`). */
   readonly trick: Rect;
+  /** Caixa de layout da vaza (tamanho cheio); desenhar com `scale: trickScale` (centro igual ao visual). */
+  readonly trickBox: Rect;
+  readonly trickScale: number;
   readonly deck: Rect;
+  /** Retangulo visual da vira e a caixa/escala para desenha-la. */
   readonly vira: Rect;
+  readonly viraBox: Rect;
+  readonly viraScale: number;
   readonly status: Rect;
 }
 
 /** Fileira da vaza: quatro cartas `sm` com margem lateral de 4 px. */
 const TRICK_W = 4 * (cardSizes.sm.width + 8);
 const TRICK_H = cardSizes.sm.height + WINNER_H;
+/** Largura minima do painel de status (abaixo disso o texto fica ilegivel). */
+export const STATUS_MIN_W = 90;
+const SCALES = [1, 0.9, 0.8, 0.7, 0.6, 0.5] as const;
 
-export function landscapeGeometry(w: number, h: number, avatar: number): LandscapeGeometry {
+/** Retangulo de caixa (tamanho cheio) cujo centro coincide com o do retangulo visual reduzido. */
+function boxOf(visual: Rect, fullW: number, fullH: number): Rect {
+  return {
+    x: visual.x + (visual.w - fullW) / 2,
+    y: visual.y + (visual.h - fullH) / 2,
+    w: fullW,
+    h: fullH,
+  };
+}
+
+function build(w: number, h: number, avatar: number, k: number): LandscapeGeometry {
   const box = avatar + RING_PX * 2;
   const partnerAvatar: Rect = { x: (w - box) / 2, y: 0, w: box, h: box };
   const leftAvatar: Rect = { x: 0, y: (h - box) / 2, w: box, h: box };
@@ -92,35 +114,88 @@ export function landscapeGeometry(w: number, h: number, avatar: number): Landsca
     avatar: rightAvatar,
     all: { ...rightAvatar, x: rightAvatar.x - PEEK_PX, w: box + PEEK_PX },
   };
+  const tw = TRICK_W * k;
+  const th = TRICK_H * k;
   const trickTop = box + 4;
   const trick: Rect = {
-    x: (w - TRICK_W) / 2,
-    y: trickTop + Math.max(0, (h - trickTop - TRICK_H) / 2),
-    w: TRICK_W,
-    h: TRICK_H,
+    x: (w - tw) / 2,
+    y: trickTop + Math.max(0, (h - trickTop - th) / 2),
+    w: tw,
+    h: th,
   };
   const leftX = left.all.x + left.all.w + GAP;
-  const leftRoom = trick.x - GAP - leftX;
-  const rightX = trick.x + trick.w + GAP;
-  const together = leftRoom >= DECK_W + 6 + VIRA_LAND_W;
+  // Monte, vira e status ficam fora da faixa do parceiro (que vai ate o fim das costas das cartas).
+  const leftRoom = Math.min(trick.x, partner.all.x) - GAP - leftX;
+  const rightX = Math.max(trick.x + trick.w + GAP, partner.all.x + partner.all.w + TIGHT);
+  const vw = VIRA_LAND_W * k;
+  const together = leftRoom >= DECK_W + 6 + vw;
   // Monte e vira no centro-esquerdo, longe dos avatares; sem largura para os dois, o monte vai a direita.
-  const deck: Rect = together
-    ? { x: leftX, y: 0, w: DECK_W, h: DECK_H }
-    : { x: rightX, y: 0, w: DECK_W, h: DECK_H };
+  const deck: Rect = { x: together ? leftX : rightX, y: 0, w: DECK_W, h: DECK_H };
   const vira: Rect = {
     x: together ? leftX + DECK_W + 6 : leftX,
     y: 0,
-    w: VIRA_LAND_W,
-    h: VIRA_LAND_H,
+    w: vw,
+    h: VIRA_LAND_H * k,
   };
   const statusY = together ? 0 : DECK_H + 4;
   const status: Rect = {
     x: rightX,
     y: statusY,
-    w: Math.min(STATUS_MAX_W, right.all.x - GAP - rightX),
-    h: STATUS_H,
+    w: Math.min(STATUS_MAX_W, right.all.x - TIGHT - rightX),
+    h: Math.max(0, Math.min(STATUS_H, h + FELT_PAD - statusY)),
   };
-  return { partner, left, right, trick, deck, vira, status };
+  return {
+    partner,
+    left,
+    right,
+    trick,
+    trickBox: boxOf(trick, TRICK_W, TRICK_H),
+    trickScale: k,
+    deck,
+    vira,
+    viraBox: boxOf(vira, VIRA_LAND_W, VIRA_LAND_H),
+    viraScale: k,
+    status,
+  };
+}
+
+/** Retangulos que nao podem se sobrepor entre si. */
+export function landscapeParts(g: LandscapeGeometry): [string, Rect][] {
+  return [
+    ['parceiro', g.partner.all],
+    ['esquerda', g.left.all],
+    ['direita', g.right.all],
+    ['vaza', g.trick],
+    ['monte', g.deck],
+    ['vira', g.vira],
+    ['status', g.status],
+  ];
+}
+
+export function landscapeFits(g: LandscapeGeometry, h: number): boolean {
+  const parts = landscapeParts(g);
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      if (overlaps((parts[i] as [string, Rect])[1], (parts[j] as [string, Rect])[1], 2)) {
+        return false;
+      }
+    }
+  }
+  const limit = h + FELT_PAD;
+  return g.status.w >= STATUS_MIN_W && g.trick.y + g.trick.h <= limit && g.vira.h <= limit;
+}
+
+/**
+ * Posicoes do pano deitado. Tenta a escala cheia e vai reduzindo vaza e vira (ate metade) ate nada
+ * colidir, o painel de status ter ao menos `STATUS_MIN_W` e a vaza caber sem descer sobre a madeira.
+ */
+export function landscapeGeometry(w: number, h: number, avatar: number): LandscapeGeometry {
+  let last = build(w, h, avatar, 1);
+  for (const k of SCALES) {
+    last = build(w, h, avatar, k);
+    if (landscapeFits(last, h)) return last;
+  }
+  return last;
 }
 
 /** Retangulos do retrato (flex): so para conferir que a vira nao encosta nos avatares das bordas. */

@@ -1,13 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { SEAT_AVATAR_SIZE } from '../screens/SeatAvatar';
 import { dealTargets, FELT_INSET } from './DealOverlay';
-import { FELT_PAD, estimateArena, landscapeGeometry, overlaps, phoneRects } from './tableGeometry';
+import {
+  FELT_PAD,
+  STATUS_MIN_W,
+  estimateArena,
+  landscapeFits,
+  landscapeGeometry,
+  landscapeParts,
+  overlaps,
+  phoneRects,
+} from './tableGeometry';
 import type { Rect } from './tableGeometry';
 
 const LANDSCAPES: readonly (readonly [number, number])[] = [
   [844, 390],
   [667, 375],
   [740, 360],
+  [640, 360],
+  [568, 320],
 ];
 
 describe('geometria do celular deitado', () => {
@@ -17,15 +28,7 @@ describe('geometria do celular deitado', () => {
     const g = landscapeGeometry(w, h, a);
 
     it(`${W}x${H}: parceiro, adversarios, vaza, vira, monte e status nao colidem`, () => {
-      const named: [string, Rect][] = [
-        ['parceiro', g.partner.all],
-        ['esquerda', g.left.all],
-        ['direita', g.right.all],
-        ['vaza', g.trick],
-        ['monte', g.deck],
-        ['vira', g.vira],
-        ['status', g.status],
-      ];
+      const named: [string, Rect][] = landscapeParts(g);
       for (let i = 0; i < named.length; i++) {
         for (let j = i + 1; j < named.length; j++) {
           const [na, ra] = named[i] as [string, Rect];
@@ -43,7 +46,8 @@ describe('geometria do celular deitado', () => {
         expect(r.y + r.h).toBeLessThanOrEqual(h + FELT_PAD);
       }
       expect(g.trick.y + g.trick.h).toBeLessThanOrEqual(h + FELT_PAD);
-      expect(g.status.w).toBeGreaterThanOrEqual(90);
+      expect(g.status.w).toBeGreaterThanOrEqual(STATUS_MIN_W);
+      expect(landscapeFits(g, h)).toBe(true);
     });
 
     it(`${W}x${H}: a distribuicao mira o avatar e o monte da geometria`, () => {
@@ -57,6 +61,21 @@ describe('geometria do celular deitado', () => {
       expect(t.left.y).toBeCloseTo(FELT_INSET + g.left.avatar.y + g.left.avatar.h / 2, 5);
     });
   }
+});
+
+describe('geometria deitada com pouca altura', () => {
+  it('reduz vaza e vira em vez de descer sobre a madeira ou a dock', () => {
+    for (const [W, H] of LANDSCAPES) {
+      const { w, h } = estimateArena('landscape', W, H);
+      for (const cut of [0, 16, 32]) {
+        const g = landscapeGeometry(w, h - cut, SEAT_AVATAR_SIZE.landscape);
+        if (cut > 0 && h - cut < 120) continue;
+        expect(g.trickScale, `${W}x${H} -${cut}`).toBeGreaterThanOrEqual(0.5);
+        expect(g.trick.y + g.trick.h).toBeLessThanOrEqual(h - cut + FELT_PAD);
+        expect(g.status.w).toBeGreaterThanOrEqual(STATUS_MIN_W);
+      }
+    }
+  });
 });
 
 describe('retrato 360x640', () => {

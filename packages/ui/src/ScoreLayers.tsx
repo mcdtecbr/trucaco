@@ -50,6 +50,12 @@ export interface ScoreLayersProps {
   readonly bar?: boolean;
   /** Botões à direita da barra (só com `bar`). */
   readonly actions?: ReactNode;
+  /**
+   * Histórico controlado de fora (só com `bar`): o chamador desenha a lista numa camada de tela com
+   * `ScoreHistoryList`, porque um dropdown fora dos limites do pai não recebe toque no Android.
+   */
+  readonly historyOpen?: boolean;
+  readonly onHistoryOpenChange?: (open: boolean) => void;
   /** Faixa discreta sob os números (só na versão compacta); o chamador decide o conteúdo. */
   readonly adSlot?: ReactNode;
 }
@@ -74,18 +80,18 @@ export function ScoreLayers(p: ScoreLayersProps) {
   const label = scoreSummary({ ...p, names, tricks: p.tricks }, p.variant);
 
   if (p.bar === true) {
-    const historyView = open ? (
-      <View
-        style={[styles.history, styles.dropdown, styles.barDropdown]}
-        accessibilityLabel="Histórico das mãos"
-        accessibilityRole="list"
-        testID="score-history"
-      >
-        <ScrollView style={styles.dropdownScroll} nestedScrollEnabled>
-          <HistoryLines p={p} names={names} history={history} currentLog={currentLog} />
-        </ScrollView>
-      </View>
-    ) : null;
+    const layered = p.onHistoryOpenChange !== undefined;
+    const isOpen = layered ? p.historyOpen === true : open;
+    const toggle = (): void => {
+      if (layered) p.onHistoryOpenChange?.(!isOpen);
+      else setOpen((o) => !o);
+    };
+    const historyView =
+      !layered && isOpen ? (
+        <View style={[styles.history, styles.dropdown, styles.barDropdown]} testID="score-history">
+          <ScoreHistoryList {...p} />
+        </View>
+      ) : null;
     return (
       <View style={styles.barWrap} testID="score-compact">
         <View style={styles.barRow}>
@@ -139,12 +145,12 @@ export function ScoreLayers(p: ScoreLayersProps) {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={
-                open ? 'Histórico das jogadas, aberto' : 'Histórico das jogadas, fechado'
+                isOpen ? 'Histórico das jogadas, aberto' : 'Histórico das jogadas, fechado'
               }
-              accessibilityHint={open ? 'Recolher o histórico' : 'Expandir o histórico'}
-              accessibilityState={{ expanded: open }}
-              aria-expanded={open}
-              onPress={() => setOpen((o) => !o)}
+              accessibilityHint={isOpen ? 'Recolher o histórico' : 'Expandir o histórico'}
+              accessibilityState={{ expanded: isOpen }}
+              aria-expanded={isOpen}
+              onPress={toggle}
               style={styles.barIcon}
               testID="score-history-toggle"
             >
@@ -297,6 +303,21 @@ export function ScoreLayers(p: ScoreLayersProps) {
         </View>
       ) : null}
     </View>
+  );
+}
+
+/** Lista do histórico (rolável) para uma camada de tela; mesmo conteúdo do dropdown da barra. */
+export function ScoreHistoryList(p: ScoreLayersProps) {
+  const names = p.teamNames ?? defaultTeamNames(p.myTeam);
+  return (
+    <ScrollView
+      style={styles.dropdownScroll}
+      nestedScrollEnabled
+      accessibilityRole="list"
+      accessibilityLabel="Histórico das mãos"
+    >
+      <HistoryLines p={p} names={names} history={p.history ?? []} currentLog={p.currentLog ?? []} />
+    </ScrollView>
   );
 }
 

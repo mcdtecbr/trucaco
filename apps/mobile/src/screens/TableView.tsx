@@ -8,7 +8,7 @@
  * - `landscape` (celular deitado) e `wide` (web largo): mesa horizontal; parceiro em cima, adversários
  *   nos lados, eu embaixo; mão ao centro, sinais à esquerda dela e aposta no canto direito.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { betCry } from '@trucaco/protocol';
@@ -23,6 +23,7 @@ import {
   HandFan,
   MIN_TOUCH,
   PlayedCards,
+  ScoreHistoryList,
   ScoreLayers,
   SUIT_SYMBOL,
   TurnTimer,
@@ -438,6 +439,7 @@ export function TableView(p: TableViewProps) {
   const m = metricsFor(p.layout);
   const win = useWindowDimensions();
   const [menuOpen, setMenuOpen] = useState(p.defaultMenuOpen === true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [barH, setBarH] = useState(0);
   const [dockH, setDockH] = useState(0);
   const [arena, setArena] = useState<{ w: number; h: number } | null>(null);
@@ -448,6 +450,22 @@ export function TableView(p: TableViewProps) {
     connected: p.connected && !modalOpen,
     onSend: p.on.sendSignal,
   });
+  // Uma camada por vez: abrir os sinais fecha menu e histórico; o diálogo de sair fecha todas.
+  const signalsOpen = signalPanel.open;
+  const closeSignals = signalPanel.setOpen;
+  useEffect(() => {
+    if (signalsOpen) {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+    }
+  }, [signalsOpen]);
+  useEffect(() => {
+    if (modalOpen) {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+      closeSignals(false);
+    }
+  }, [modalOpen, closeSignals]);
   const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
   const legal = p.connected && !modalOpen ? vm.legalActions : [];
   const pending = pendingText(vm);
@@ -500,6 +518,14 @@ export function TableView(p: TableViewProps) {
         history={p.history}
         currentLog={p.handLog}
         variant={vm.variant}
+        historyOpen={historyOpen}
+        onHistoryOpenChange={(open) => {
+          if (open) {
+            setMenuOpen(false);
+            closeSignals(false);
+          }
+          setHistoryOpen(open);
+        }}
         {...(landscape
           ? {}
           : {
@@ -522,7 +548,13 @@ export function TableView(p: TableViewProps) {
             <BarIcon
               icon={'⋯'}
               label={menuOpen ? 'Fechar menu da mesa' : 'Abrir menu da mesa'}
-              onPress={() => setMenuOpen((o) => !o)}
+              onPress={() => {
+                if (!menuOpen) {
+                  setHistoryOpen(false);
+                  closeSignals(false);
+                }
+                setMenuOpen((o) => !o);
+              }}
               testID="open-menu"
               on={menuOpen}
             />
@@ -628,6 +660,39 @@ export function TableView(p: TableViewProps) {
       </>
     ) : null;
 
+  const dockExtras = (
+    <>
+      {p.errorText !== null ? (
+        <Pressable
+          accessibilityRole="alert"
+          accessibilityLabel={`${p.errorText} Toque para dispensar.`}
+          onPress={p.on.dismissError}
+          style={styles.error}
+          testID="table-error"
+        >
+          <Text style={styles.errorText}>{p.errorText}</Text>
+        </Pressable>
+      ) : null}
+      {showPartner ? (
+        <View testID="partner-cards" accessibilityLabel="Cartas do seu parceiro">
+          <Text style={styles.muted}>Cartas do seu parceiro</Text>
+          <View style={styles.partnerRow}>
+            {vm.partnerCards.map((c, i) => {
+              const face = parseFace(c);
+              return (
+                <Card
+                  key={i}
+                  size="sm"
+                  {...(face !== null ? { rank: face.rank, suit: face.suit } : {})}
+                />
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+    </>
+  );
+
   const abs = (r: { x: number; y: number }): ViewStyle => ({
     position: 'absolute',
     left: r.x,
@@ -668,24 +733,45 @@ export function TableView(p: TableViewProps) {
           })}
         </View>
         <View
-          style={[abs(geo.trick), { width: geo.trick.w, alignItems: 'center' }]}
+          style={[
+            abs(geo.trickBox),
+            {
+              width: geo.trickBox.w,
+              alignItems: 'center',
+              transform: [{ scale: geo.trickScale }],
+            },
+          ]}
           testID="trick"
           pointerEvents="box-none"
         >
           {trickCards}
           {winnerText}
         </View>
-        <View style={abs(geo.vira)} pointerEvents="none">
+        <View
+          style={[
+            abs(geo.viraBox),
+            { width: geo.viraBox.w, transform: [{ scale: geo.viraScale }] },
+          ]}
+          pointerEvents="none"
+        >
           {viraBox}
         </View>
         {statusNode !== null ? (
           <View
-            style={[abs(geo.status), { width: geo.status.w, alignItems: 'flex-start' }]}
+            style={[
+              abs(geo.status),
+              { width: geo.status.w, maxHeight: geo.status.h, overflow: 'hidden' },
+              styles.statusLand,
+            ]}
             pointerEvents="none"
           >
             {statusNode}
           </View>
         ) : null}
+        {/* Avisos de erro e cartas do parceiro: sobre o pano (no deitado, a dock nao cresce e a geometria vale). */}
+        <View style={styles.extrasLand} pointerEvents="box-none">
+          {dockExtras}
+        </View>
       </View>
     ) : null;
 
@@ -826,39 +912,6 @@ export function TableView(p: TableViewProps) {
     </View>
   );
 
-  const dockExtras = (
-    <>
-      {p.errorText !== null ? (
-        <Pressable
-          accessibilityRole="alert"
-          accessibilityLabel={`${p.errorText} Toque para dispensar.`}
-          onPress={p.on.dismissError}
-          style={styles.error}
-          testID="table-error"
-        >
-          <Text style={styles.errorText}>{p.errorText}</Text>
-        </Pressable>
-      ) : null}
-      {showPartner ? (
-        <View testID="partner-cards" accessibilityLabel="Cartas do seu parceiro">
-          <Text style={styles.muted}>Cartas do seu parceiro</Text>
-          <View style={styles.partnerRow}>
-            {vm.partnerCards.map((c, i) => {
-              const face = parseFace(c);
-              return (
-                <Card
-                  key={i}
-                  size="sm"
-                  {...(face !== null ? { rank: face.rank, suit: face.suit } : {})}
-                />
-              );
-            })}
-          </View>
-        </View>
-      ) : null}
-    </>
-  );
-
   /**
    * Dock inferior, ao alcance do polegar. Retrato: mão, e logo abaixo sinais (e cobrir) à esquerda e o
    * botão de aposta no canto direito. Horizontal: sinais, mão e aposta numa linha só, com a mão ao centro.
@@ -869,7 +922,7 @@ export function TableView(p: TableViewProps) {
       testID="dock"
       onLayout={(e) => setDockH(Math.round(e.nativeEvent.layout.height))}
     >
-      {dockExtras}
+      {landscape ? null : dockExtras}
       <View style={[styles.dockRow, landscape && styles.dockRowLand]}>
         {landscape ? (
           <View style={styles.dockMine}>
@@ -905,13 +958,14 @@ export function TableView(p: TableViewProps) {
     <View
       style={[styles.menuSheet, { top: barH, width: menuWidth }]}
       testID="table-menu"
+      accessibilityRole="menu"
       accessibilityLabel="Menu da mesa"
     >
       <ScrollView style={{ maxHeight: Math.max(160, win.height * 0.6) }} nestedScrollEnabled>
         <View style={styles.menuList}>
           {p.on.openCodes !== undefined && vm.mySeat >= 0 ? (
             <Pressable
-              accessibilityRole="button"
+              accessibilityRole="menuitem"
               accessibilityLabel="Combinar sinais com o parceiro"
               onPress={() => {
                 setMenuOpen(false);
@@ -932,7 +986,7 @@ export function TableView(p: TableViewProps) {
           ) : null}
           {p.sound !== undefined ? (
             <Pressable
-              accessibilityRole="button"
+              accessibilityRole="menuitem"
               accessibilityLabel={
                 p.sound.muted ? 'Som desligado. Ligar o som' : 'Som ligado. Desligar o som'
               }
@@ -948,7 +1002,7 @@ export function TableView(p: TableViewProps) {
             </Pressable>
           ) : null}
           <Pressable
-            accessibilityRole="button"
+            accessibilityRole="menuitem"
             accessibilityLabel={cancelLabel}
             aria-disabled={vm.iVotedCancel || !p.connected}
             disabled={vm.iVotedCancel || !p.connected}
@@ -974,6 +1028,42 @@ export function TableView(p: TableViewProps) {
           />
         </View>
       </View>
+    ) : null;
+
+  const closeLayers = (): void => {
+    setMenuOpen(false);
+    setHistoryOpen(false);
+  };
+  const historySheet = historyOpen ? (
+    <View style={[styles.historySheet, { top: barH }]} testID="score-history">
+      <ScoreHistoryList
+        myTeam={vm.myTeam}
+        series={vm.series}
+        scores={vm.scores}
+        handNumber={vm.handNumber}
+        handValue={vm.handValue}
+        special={vm.special}
+        tricks={vm.tricks}
+        history={p.history}
+        currentLog={p.handLog}
+        variant={vm.variant}
+      />
+    </View>
+  ) : null;
+  // Logo depois da barra na ordem de leitura. O fundo transparente fecha ao tocar fora.
+  const layers =
+    menuOpen || historyOpen ? (
+      <>
+        <Pressable
+          style={[styles.backdrop, { top: barH }]}
+          onPress={closeLayers}
+          accessible={false}
+          importantForAccessibility="no"
+          testID="layer-backdrop"
+        />
+        {menu}
+        {historySheet}
+      </>
     ) : null;
 
   const confirm = p.leaveConfirm ? (
@@ -1011,6 +1101,7 @@ export function TableView(p: TableViewProps) {
         importantForAccessibility={modalOpen ? 'no-hide-descendants' : 'auto'}
       >
         {scoreBar}
+        {layers}
         <View style={styles.timerStrip} testID="turn-timer">
           <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
         </View>
@@ -1019,7 +1110,6 @@ export function TableView(p: TableViewProps) {
           <View style={styles.boardBox}>{board}</View>
           {dock}
         </View>
-        {menu}
         {signalSheet}
       </View>
       {p.presenceNote !== null ? (
@@ -1108,6 +1198,15 @@ const styles = StyleSheet.create({
   viraBox: { alignItems: 'center', gap: 2, maxWidth: 120 },
   status: { position: 'absolute', alignItems: 'center', paddingVertical: 2 },
   statusPhone: { left: spacing.xl * 3, right: spacing.xl * 3 },
+  statusLand: { alignItems: 'flex-start' },
+  extrasLand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    zIndex: 3,
+  },
   statusCorner: { top: 4, left: 64, maxWidth: 170, alignItems: 'flex-start' },
   turn: {
     color: colors.text,
@@ -1148,7 +1247,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  dockStart: { flexShrink: 1 },
+  dockStart: { flexShrink: 0 },
   dockGroup: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   dockRow: {
     flexDirection: 'row',
@@ -1157,9 +1256,9 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   dockRowLand: { justifyContent: 'space-between', gap: spacing.sm },
-  dockMine: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, flexShrink: 1 },
+  dockMine: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, flexShrink: 0 },
   dockStack: { gap: spacing.xs },
-  dockBet: { flexShrink: 0, alignItems: 'flex-end' },
+  dockBet: { flexShrink: 1, alignItems: 'flex-end' },
   dockSide: { flex: 1, justifyContent: 'flex-end' },
   dockSideStart: { alignItems: 'flex-end' },
   dockSideEnd: { alignItems: 'flex-end' },
@@ -1182,6 +1281,18 @@ const styles = StyleSheet.create({
     fontSize: fontSize.small,
     fontWeight: fontWeight.bold,
     textAlign: 'center',
+  },
+  backdrop: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 10 },
+  historySheet: {
+    position: 'absolute',
+    left: spacing.xs,
+    right: spacing.xs,
+    zIndex: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
   },
   menuSheet: {
     position: 'absolute',
