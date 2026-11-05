@@ -42,6 +42,20 @@ export interface ScoreLayersProps {
    * fica recolhido por padrão, atrás de um botão expandir/recolher que abre sobre a mesa.
    */
   readonly compact?: boolean;
+  /**
+   * Barra de largura total no topo da mesa (celular e web): duplas com pontos e vazas em bolinhas,
+   * "Vale N" e mão especial, ícone do histórico e `actions` (chat, menu, sair) à direita, faixa de
+   * publicidade sob a barra. Tem precedência sobre `compact`.
+   */
+  readonly bar?: boolean;
+  /** Botões à direita da barra (só com `bar`). */
+  readonly actions?: ReactNode;
+  /**
+   * Histórico controlado de fora (só com `bar`): o chamador desenha a lista numa camada de tela com
+   * `ScoreHistoryList`, porque um dropdown fora dos limites do pai não recebe toque no Android.
+   */
+  readonly historyOpen?: boolean;
+  readonly onHistoryOpenChange?: (open: boolean) => void;
   /** Faixa discreta sob os números (só na versão compacta); o chamador decide o conteúdo. */
   readonly adSlot?: ReactNode;
 }
@@ -64,6 +78,92 @@ export function ScoreLayers(p: ScoreLayersProps) {
   const history = p.history ?? [];
   const currentLog = p.currentLog ?? [];
   const label = scoreSummary({ ...p, names, tricks: p.tricks }, p.variant);
+
+  if (p.bar === true) {
+    const layered = p.onHistoryOpenChange !== undefined;
+    const isOpen = layered ? p.historyOpen === true : open;
+    const toggle = (): void => {
+      if (layered) p.onHistoryOpenChange?.(!isOpen);
+      else setOpen((o) => !o);
+    };
+    const historyView =
+      !layered && isOpen ? (
+        <View style={[styles.history, styles.dropdown, styles.barDropdown]} testID="score-history">
+          <ScoreHistoryList {...p} />
+        </View>
+      ) : null;
+    return (
+      <View style={styles.barWrap} testID="score-compact">
+        <View style={styles.barRow}>
+          <View style={styles.barBox} accessible accessibilityLabel={label} testID="score-bar">
+            {order.map((team) => (
+              <View key={team} style={styles.barBlock}>
+                <View style={styles.barTeamLine}>
+                  <Text
+                    style={[
+                      styles.compactName,
+                      { color: team === p.myTeam ? teamColors.mine.main : teamColors.theirs.main },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {names[team]}
+                  </Text>
+                  <Text style={[styles.barScore, team === p.myTeam && styles.scoreMine]}>
+                    {p.scores[team] ?? 0}
+                  </Text>
+                </View>
+                <View style={styles.marks}>
+                  {trickMarks(p.tricks, team).map((m, i) => (
+                    <Text key={i} style={[styles.compactMark, { color: MARK_COLOR[m] }]}>
+                      {GLYPH[m]}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            ))}
+            {p.handNumber > 0 || p.series.format === 'bo3' ? (
+              <View style={styles.barBlock}>
+                {p.handNumber > 0 ? (
+                  <Text style={styles.compactHand} numberOfLines={1}>
+                    Vale {p.handValue}
+                  </Text>
+                ) : null}
+                {p.handNumber > 0 && sp !== null ? (
+                  <Text style={styles.compactCaption} numberOfLines={1}>
+                    {sp}
+                  </Text>
+                ) : null}
+                {p.series.format === 'bo3' ? (
+                  <Text style={styles.compactCaption} numberOfLines={1}>
+                    Série {p.series.games[p.myTeam] ?? 0}×{p.series.games[other] ?? 0}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.barActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                isOpen ? 'Histórico das jogadas, aberto' : 'Histórico das jogadas, fechado'
+              }
+              accessibilityHint={isOpen ? 'Recolher o histórico' : 'Expandir o histórico'}
+              accessibilityState={{ expanded: isOpen }}
+              aria-expanded={isOpen}
+              onPress={toggle}
+              style={styles.barIcon}
+              testID="score-history-toggle"
+            >
+              <Text style={styles.barIconText}>{'📜'}</Text>
+            </Pressable>
+            {p.actions}
+          </View>
+        </View>
+        {p.adSlot}
+        {historyView}
+      </View>
+    );
+  }
 
   if (p.compact === true) {
     const historyView = open ? (
@@ -206,6 +306,21 @@ export function ScoreLayers(p: ScoreLayersProps) {
   );
 }
 
+/** Lista do histórico (rolável) para uma camada de tela; mesmo conteúdo do dropdown da barra. */
+export function ScoreHistoryList(p: ScoreLayersProps) {
+  const names = p.teamNames ?? defaultTeamNames(p.myTeam);
+  return (
+    <ScrollView
+      style={styles.dropdownScroll}
+      nestedScrollEnabled
+      accessibilityRole="list"
+      accessibilityLabel="Histórico das mãos"
+    >
+      <HistoryLines p={p} names={names} history={p.history ?? []} currentLog={p.currentLog ?? []} />
+    </ScrollView>
+  );
+}
+
 function HistoryLines({
   p,
   names,
@@ -332,4 +447,28 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   dropdownScroll: { maxHeight: 260 },
+  barWrap: { alignSelf: 'stretch', alignItems: 'stretch', backgroundColor: colors.surface },
+  barRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: spacing.sm,
+  },
+  barBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
+  barBlock: { alignItems: 'center', justifyContent: 'center', minWidth: 40 },
+  barTeamLine: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  barScore: {
+    color: colors.textMuted,
+    fontSize: fontSize.large,
+    fontWeight: fontWeight.heavy,
+  },
+  barActions: { flexDirection: 'row', alignItems: 'center' },
+  barIcon: {
+    minWidth: MIN_TOUCH,
+    minHeight: MIN_TOUCH,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barIconText: { color: colors.text, fontSize: fontSize.large, fontWeight: fontWeight.bold },
+  barDropdown: { top: '100%', left: 0, right: 0, width: '100%' },
 });

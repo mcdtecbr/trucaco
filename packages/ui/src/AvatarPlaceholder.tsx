@@ -45,6 +45,13 @@ export interface AvatarPlaceholderProps {
   /** Destaca quem joga agora. */
   readonly active?: boolean;
   readonly layout?: 'row' | 'column';
+  /** Raio do anel do avatar desenhado (px). Omitido = anel redondo; informado = quadrado arredondado. */
+  readonly ringRadius?: number;
+  /**
+   * Apelido em faixa sobre a borda de baixo do avatar (nada abaixo dele): libera o espaço para as costas
+   * das cartas saírem por trás. O status só aparece na faixa quando não é "online".
+   */
+  readonly nameOverlay?: boolean;
   /**
    * Avatar desenhado pelo app (`<Avatar>` de `@trucaco/avatar`; `ui` não depende desse pacote). Quando
    * presente e a vaga não está vazia, substitui o círculo com a inicial; o anel de time e o destaque
@@ -76,6 +83,9 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
       <View
         style={[
           p.avatar !== undefined && !empty ? styles.ring : styles.circle,
+          p.avatar !== undefined && !empty && p.ringRadius !== undefined
+            ? { borderRadius: p.ringRadius }
+            : null,
           empty && styles.circleEmpty,
           team !== null && !empty && { borderColor: team.main },
           p.active === true && styles.active,
@@ -86,11 +96,37 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
         ) : (
           <Text style={styles.initial}>{empty ? '·' : initialOf(p.nickname)}</Text>
         )}
+        {p.nameOverlay === true ? (
+          <View
+            style={[
+              styles.nameBand,
+              p.ringRadius !== undefined
+                ? {
+                    borderBottomLeftRadius: Math.max(0, p.ringRadius - 3),
+                    borderBottomRightRadius: Math.max(0, p.ringRadius - 3),
+                  }
+                : null,
+            ]}
+            pointerEvents="none"
+          >
+            <Text style={styles.nameBandText} numberOfLines={1}>
+              {[name, status === 'away' || status === 'bot' ? STATUS_TEXT[status] : '']
+                .filter((x) => x !== '')
+                .join(' · ')}
+            </Text>
+          </View>
+        ) : null}
         {status !== undefined && !empty ? (
           <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
         ) : null}
       </View>
-      <View style={[styles.texts, column && styles.textsColumn]}>
+      <View
+        style={[
+          styles.texts,
+          column && styles.textsColumn,
+          p.nameOverlay === true && styles.hidden,
+        ]}
+      >
         <Text style={styles.nick} numberOfLines={column ? 2 : 1}>
           {name}
         </Text>
@@ -142,6 +178,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.round,
     borderWidth: 2,
     borderColor: colors.background,
+  },
+  hidden: { display: 'none' },
+  nameBand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.xs,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  nameBandText: {
+    color: colors.text,
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.bold,
+    textAlign: 'center',
   },
   initial: { color: colors.onPrimary, fontSize: fontSize.large, fontWeight: fontWeight.heavy },
   texts: { flexShrink: 1 },

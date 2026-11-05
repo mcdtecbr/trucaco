@@ -33,6 +33,8 @@ export interface AvatarProps {
   /** Rótulo falado; genérico, sem informação do jogo (padrão "Avatar"). */
   readonly accessibilityLabel?: string;
   readonly renderer?: AvatarRendererId;
+  /** `circle` (padrão) ou `square` (quadrado arredondado, rosto ampliado). */
+  readonly shape?: 'circle' | 'square';
   readonly testID?: string;
 }
 
@@ -57,6 +59,7 @@ function AvatarImpl(props: AvatarProps) {
       breathe={breathe}
       blink={blink}
       highlight={highlight}
+      shape={props.shape}
       accessibilityLabel={props.accessibilityLabel ?? 'Avatar'}
       testID={props.testID}
     />

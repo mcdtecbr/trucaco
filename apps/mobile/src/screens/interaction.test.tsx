@@ -62,6 +62,8 @@ interface Harness {
   table: TableController;
   sent: ClientMessage[];
   clock: ReturnType<typeof fakeTimers>;
+  /** Menu da mesa já aberto na montagem (padrão dos testes; falso nos testes das camadas). */
+  menu: boolean;
 }
 
 function Screen({ h }: { h: Harness }) {
@@ -73,6 +75,7 @@ function Screen({ h }: { h: Harness }) {
     <TableView
       vm={vm}
       layout="phone"
+      defaultMenuOpen={h.menu}
       banner={null}
       connected
       busy={s.busy}
@@ -150,7 +153,7 @@ let root: Root | null = null;
 let host: HTMLElement;
 let h: Harness;
 
-function mount(state: unknown): void {
+function mount(state: unknown, menu = true): void {
   const store = createTableStore();
   const clock = fakeTimers();
   const sent: ClientMessage[] = [];
@@ -162,7 +165,7 @@ function mount(state: unknown): void {
     },
     timers: clock.timers,
   });
-  h = { store, table, sent, clock };
+  h = { store, table, sent, clock, menu };
   table.applyState(state);
   const r = createRoot(host);
   root = r;
@@ -697,6 +700,7 @@ describe('5D: combinar sinais', () => {
     click(must('signal-toggle'));
     expect(host.querySelector('img[src="x"]')).toBeNull();
     expect(must('signal-meaning-wink').textContent).toBe('<img src=x onerror=alert(1)>');
+    click(must('open-menu'));
     click(must('open-codes'));
     expect(host.querySelector('img[src="x"]')).toBeNull();
     expect(must('code-custom-wink').textContent).toBe(
@@ -708,6 +712,7 @@ describe('5D: combinar sinais', () => {
     mount(snapshot({ privates: priv(1) }));
     click(must('signal-toggle'));
     expect(host.querySelector('[data-testid^="signal-meaning-"]')).toBeNull();
+    click(must('open-menu'));
     click(must('open-codes'));
     // Sem combinado vale "Nada"; nenhum outro significado vem marcado.
     expect(
@@ -824,5 +829,46 @@ describe('5D: sala de espera', () => {
     act(() => r.render(<Waiting mySeat={-1} />));
     expect(byTestId('open-codes')).toBeNull();
     expect(byTestId('codes-panel')).toBeNull();
+  });
+});
+
+describe('camadas da mesa: menu, histórico e sinais', () => {
+  it('uma camada por vez: histórico, menu e sinais se fecham entre si', () => {
+    mount(snapshot(), false);
+    click(must('score-history-toggle'));
+    expect(byTestId('score-history')).not.toBeNull();
+    click(must('open-menu'));
+    expect(byTestId('table-menu')).not.toBeNull();
+    expect(byTestId('score-history')).toBeNull();
+    click(must('signal-toggle'));
+    expect(byTestId('signal-grid')).not.toBeNull();
+    expect(byTestId('table-menu')).toBeNull();
+    click(must('score-history-toggle'));
+    expect(byTestId('signal-grid')).toBeNull();
+    expect(byTestId('score-history')).not.toBeNull();
+  });
+
+  it('tocar fora (fundo transparente) fecha o menu e o histórico', () => {
+    mount(snapshot(), false);
+    click(must('open-menu'));
+    click(must('layer-backdrop'));
+    expect(byTestId('table-menu')).toBeNull();
+    expect(byTestId('layer-backdrop')).toBeNull();
+    click(must('score-history-toggle'));
+    click(must('layer-backdrop'));
+    expect(byTestId('score-history')).toBeNull();
+  });
+
+  it('o menu tem papel de menu e vem logo depois da barra de placar', () => {
+    mount(snapshot(), false);
+    click(must('open-menu'));
+    expect(must('table-menu').getAttribute('role')).toBe('menu');
+    const html = host.innerHTML;
+    expect(html.indexOf('data-testid="score-fixed"')).toBeLessThan(
+      html.indexOf('data-testid="table-menu"'),
+    );
+    expect(html.indexOf('data-testid="table-menu"')).toBeLessThan(
+      html.indexOf('data-testid="turn-timer"'),
+    );
   });
 });

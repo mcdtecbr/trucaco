@@ -43,6 +43,8 @@ export interface PlayedCardsProps {
   readonly manilhas?: readonly { readonly rank: Rank; readonly suit: Suit }[];
   readonly nicknameOf?: (seat: number) => string;
   readonly size?: CardSize;
+  /** `cross` (padrão): em cruz. `row`: uma fileira na ordem de jogo a partir de mim (celular deitado, sem altura). */
+  readonly arrangement?: 'cross' | 'row';
 }
 
 const GRID: readonly (readonly (ScreenPosition | null)[])[] = [
@@ -51,12 +53,16 @@ const GRID: readonly (readonly (ScreenPosition | null)[])[] = [
   [null, 'self', null],
 ];
 
+/** Fileira: eu, o da direita, o parceiro e o da esquerda (a ordem em que se joga). */
+const ROW: readonly (readonly (ScreenPosition | null)[])[] = [['self', 'right', 'partner', 'left']];
+
 const TILT: Readonly<Record<ScreenPosition, number>> = { self: 0, partner: 0, left: -8, right: 8 };
 
 /** Cartas jogadas na vaza em curso, em cruz: eu embaixo, parceiro em cima, adversários nos lados. */
 export function PlayedCards(p: PlayedCardsProps) {
   const size = p.size ?? 'md';
   const { byPosition, order } = placePlays(p.plays, p.mySeat);
+  const flat = p.arrangement === 'row';
   return (
     <View
       accessibilityRole="summary"
@@ -64,7 +70,7 @@ export function PlayedCards(p: PlayedCardsProps) {
       style={styles.grid}
       pointerEvents="box-none"
     >
-      {GRID.map((row, r) => (
+      {(flat ? ROW : GRID).map((row, r) => (
         <View
           key={r}
           pointerEvents="box-none"
@@ -73,7 +79,7 @@ export function PlayedCards(p: PlayedCardsProps) {
           {row.map((pos, c) => {
             const play = pos === null ? undefined : byPosition[pos];
             if (pos === null || play === undefined) {
-              return <View key={c} style={slotSize(size)} pointerEvents="none" />;
+              return <View key={c} style={slotSize(size, flat)} pointerEvents="none" />;
             }
             const own = play.seat === p.mySeat && play.covered ? p.ownCovered : null;
             const face = parseFace(own ?? play);
@@ -92,7 +98,7 @@ export function PlayedCards(p: PlayedCardsProps) {
               <View
                 key={c}
                 style={[
-                  slotSize(size),
+                  slotSize(size, flat),
                   { zIndex: order.indexOf(pos) + 1, transform: [{ rotate: `${TILT[pos]}deg` }] },
                 ]}
               >
@@ -110,9 +116,11 @@ export function PlayedCards(p: PlayedCardsProps) {
   );
 }
 
-function slotSize(size: CardSize) {
+function slotSize(size: CardSize, flat = false) {
   const d = cardSizes[size];
-  return { width: d.width, height: d.height, margin: spacing.xs };
+  return flat
+    ? { width: d.width, height: d.height, marginHorizontal: spacing.xs }
+    : { width: d.width, height: d.height, margin: spacing.xs };
 }
 
 const styles = StyleSheet.create({
