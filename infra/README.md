@@ -88,6 +88,19 @@ Faça logo depois do primeiro deploy e registre o resultado no relatório da fas
 4. `GET /` responde `index.html`, `GET /health` responde `{"status":"ok","protocol":N,...}` e a rota de página desconhecida (ex.: `/mesa/x`) também devolve o `index.html`.
 5. Redis: `noeviction` e persistência confirmados no painel. Login e refresh sobrevivem a um restart (`fly machine restart`).
 
+## Staging local (Docker Desktop)
+
+Para jogar e testar antes de qualquer deploy, `infra/docker-compose.staging.yml` sobe a imagem de produção (servidor e web na mesma origem) com Postgres e Redis descartáveis, aplicando as migrações como o `release_command`:
+
+```bash
+docker compose -f infra/docker-compose.staging.yml up -d --build
+# abrir http://localhost:25670 (4 abas anônimas = 4 jogadores)
+docker compose -f infra/docker-compose.staging.yml logs -f app
+docker compose -f infra/docker-compose.staging.yml down -v   # apaga também os dados
+```
+
+Roda com `NODE_ENV=production`, então o cookie de sessão é `Secure`: Chrome, Edge e Firefox o aceitam em `http://localhost`; Safari e acesso por IP da rede local (`http://192.168.x.x`) não. Para testar de outro aparelho, use um túnel HTTPS (não publique a porta no roteador). O `JWT_SECRET` do compose é público no repositório: serve só para este ambiente.
+
 ## Teste local da imagem
 
 ```bash
