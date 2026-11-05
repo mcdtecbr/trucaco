@@ -12,8 +12,8 @@ function makeAuth(initial: { access: string | null; refresh: string | null }) {
     async setTokens(pair) {
       await tick(1);
       st.access = pair.accessToken;
-      st.refresh = pair.refreshToken;
-      st.saved.push(pair.refreshToken);
+      st.refresh = pair.refreshToken ?? null;
+      st.saved.push(pair.refreshToken ?? '');
       st.events.push('saved');
     },
     onRefreshRejected() {

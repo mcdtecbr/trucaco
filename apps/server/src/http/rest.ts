@@ -12,11 +12,13 @@ import {
   SocialAuthError,
   bearerFromHeader,
   type AuthService,
+  type TokenPair,
 } from '../auth/authService';
 import type { RestLimits } from '../auth/config';
 import {
   MATCHES_PAGE_MAX,
   REPORT_RATE_LIMIT_PER_HOUR,
+  WEB_CLIENT_HEADER,
   normalizeUuid,
   parseAvatarParts,
   parseBlockRequest,
@@ -30,12 +32,20 @@ import type {
   MatchSummaryResponse,
   MatchesPageResponse,
   MeResponse,
+  NonceResponse,
   PublicProfileResponse,
   SocialAuthResponse,
   SocialProvider,
 } from '@trucaco/protocol';
 import { log } from '../logger';
-import { SlidingWindowLimiter, clientKey } from '../rateLimit';
+import { SlidingWindowLimiter, clientKey, type TrustProxy } from '../rateLimit';
+import {
+  clearRefreshCookie,
+  isWebClient,
+  refreshFromCookie,
+  setRefreshCookie,
+  webOriginGuard,
+} from './webSession';
 import {
   InvalidInputError,
   NicknameTakenError,
@@ -102,7 +112,9 @@ export interface RestOptions {
   readonly now?: () => Date;
   readonly limits: RestLimits;
   readonly corsOrigins: readonly string[];
-  readonly trustProxy: boolean;
+  readonly trustProxy: TrustProxy;
+  /** Atributo `Secure` do cookie do refresh (web). Falso só em dev/test (http local). */
+  readonly secureCookies?: boolean;
 }
 
 export interface BaseMiddlewareOptions {
@@ -140,14 +152,21 @@ export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOpti
     if (typeof origin === 'string') {
       res.vary('Origin');
       const ok = allowed.has(origin);
-      if (ok) res.setHeader('Access-Control-Allow-Origin', origin);
+      if (ok) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        // Cookie do refresh do web (`credentials: 'include'`): só para origem da lista, nunca `*`.
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+      }
       if (req.method === 'OPTIONS' && req.headers['access-control-request-method'] !== undefined) {
         if (!ok) {
           fail(res, 403, 'CORS_FORBIDDEN');
           return;
         }
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+        res.setHeader(
+          'Access-Control-Allow-Headers',
+          `Authorization, Content-Type, ${WEB_CLIENT_HEADER}`,
+        );
         res.setHeader('Access-Control-Max-Age', '600');
         res.status(204).end();
         return;
@@ -167,6 +186,10 @@ export function mountRest(app: Application, opts: RestOptions): void {
   const guestGlobalLimiter = new SlidingWindowLimiter(limits.guestGlobalPerHour, 3_600_000);
   const refreshIpLimiter = new SlidingWindowLimiter(limits.refreshPerIpPerMin, 60_000);
   const socialIpLimiter = new SlidingWindowLimiter(limits.socialPerIpPerMin, 60_000);
+  const nonceIpLimiter = new SlidingWindowLimiter(limits.noncePerIpPerMin, 60_000);
+  const nonceGlobalLimiter = new SlidingWindowLimiter(limits.nonceGlobalPerMin, 60_000);
+  const secure = opts.secureCookies === true;
+  const webGuard = webOriginGuard(opts.corsOrigins);
   const userLimiter = new SlidingWindowLimiter(limits.perUserPerMin, 60_000);
   // Escritas do perfil (apelido/avatar/códigos): bem mais restritas que a leitura.
   const writeLimiter = new SlidingWindowLimiter(
@@ -258,58 +281,158 @@ export function mountRest(app: Application, opts: RestOptions): void {
   };
 
   // ------------------------------------------------------------------------------- /auth
+  /**
+   * Responde com a sessão. Cliente web (`X-Client: web`): refresh em cookie httpOnly e SEM `refreshToken`
+   * no corpo. Demais: par completo no corpo, como sempre. `replacesCookie` (login novo, não rotação): se o
+   * navegador ainda trazia um refresh de uma sessão anterior, a família dele é revogada DEPOIS do sucesso
+   * (melhor esforço: falha só vira aviso no log e nunca derruba a resposta).
+   */
+  const sendSession = async (
+    req: Request,
+    res: Response,
+    status: 200 | 201,
+    extra: object,
+    pair: TokenPair,
+    replacesCookie = false,
+  ): Promise<void> => {
+    if (isWebClient(req)) {
+      const previous = replacesCookie ? refreshFromCookie(req) : undefined;
+      if (previous !== undefined && previous !== pair.refreshToken) {
+        try {
+          await auth.revokeRefreshToken(previous);
+        } catch (err) {
+          log.warn('auth: não revogou a sessão anterior do cookie', {
+            error: err instanceof Error ? err.name : 'unknown',
+          });
+        }
+      }
+      setRefreshCookie(res, pair.refreshToken, auth.refreshTtlSec, secure);
+      res
+        .status(status)
+        .json({ ...extra, accessToken: pair.accessToken, expiresIn: pair.expiresIn });
+      return;
+    }
+    res.status(status).json({ ...extra, ...pair });
+  };
+
+  /** Corpo vazio (ou ausente) no web = usar o refresh do cookie. */
+  const emptyBody = (body: unknown): boolean =>
+    body === undefined || (isPlainObject(body) && Object.keys(body).length === 0);
+
+  route('/auth/nonce', ['GET'], (r) =>
+    r.get(
+      byIp(ipLimiter, 60),
+      byIp(nonceIpLimiter, 60),
+      (_req, res, next) => {
+        if (nonceGlobalLimiter.allow('global')) next();
+        else tooMany(res, 60);
+      },
+      async (_req, res) => {
+        // Sem provedor ligado não há o que emitir (e nada vai ao Redis).
+        if (auth.socialProviders().length === 0) {
+          fail(res, 503, 'SOCIAL_LOGIN_DISABLED');
+          return;
+        }
+        const body: NonceResponse = await auth.issueNonce();
+        res.json(body);
+      },
+    ),
+  );
+
   route('/auth/guest', ['POST'], (r) =>
     r.post(
       byIp(ipLimiter, 60),
       byIp(guestIpLimiter, 3600),
       globalGuest,
+      webGuard,
       contentType,
-      async (_req, res) => {
+      async (req, res) => {
         const { user, pair } = await auth.createGuest();
         log.info('auth: convidado criado');
-        res.status(201).json({ user: { id: user.id, nickname: user.nickname }, ...pair });
+        await sendSession(
+          req,
+          res,
+          201,
+          { user: { id: user.id, nickname: user.nickname } },
+          pair,
+          true,
+        );
       },
     ),
   );
 
+  /**
+   * Refresh: corpo `{ refreshToken }` (nativo) ou, no web, corpo vazio com o refresh no cookie. No web um
+   * refresh inválido também limpa o cookie.
+   */
   route('/auth/refresh', ['POST'], (r) =>
-    r.post(byIp(ipLimiter, 60), byIp(refreshIpLimiter, 60), contentType, json, async (req, res) => {
-      const body: unknown = req.body;
-      if (
-        !isPlainObject(body) ||
-        Object.keys(body).length !== 1 ||
-        typeof body['refreshToken'] !== 'string'
-      ) {
-        fail(res, 400, 'INVALID_BODY');
-        return;
-      }
-      const pair = await auth.refresh(body['refreshToken']);
-      res.status(200).json(pair);
-    }),
+    r.post(
+      byIp(ipLimiter, 60),
+      byIp(refreshIpLimiter, 60),
+      webGuard,
+      contentType,
+      json,
+      async (req, res) => {
+        const web = isWebClient(req);
+        const body: unknown = req.body;
+        let presented: string | undefined;
+        if (web && emptyBody(body)) {
+          presented = refreshFromCookie(req);
+          if (presented === undefined) throw new AuthError('INVALID_REFRESH_TOKEN');
+        } else if (
+          isPlainObject(body) &&
+          Object.keys(body).length === 1 &&
+          typeof body['refreshToken'] === 'string'
+        ) {
+          presented = body['refreshToken'];
+        } else {
+          fail(res, 400, 'INVALID_BODY');
+          return;
+        }
+        let pair: TokenPair;
+        try {
+          pair = await auth.refresh(presented);
+        } catch (err) {
+          if (web && err instanceof AuthError && err.code === 'INVALID_REFRESH_TOKEN') {
+            clearRefreshCookie(res, secure);
+          }
+          throw err;
+        }
+        await sendSession(req, res, 200, {}, pair);
+      },
+    ),
   );
 
   /**
-   * Logout: corpo `{ refreshToken }` (revoga a família dele, se for do usuário do JWT) ou `{ all: true }`.
-   * Sempre 204, também para refresh inválido/desconhecido/de outro usuário (sem oráculo). O `jti` do
-   * access apresentado é revogado em qualquer caso.
+   * Logout: corpo `{ refreshToken }` (revoga a família dele, se for do usuário do JWT) ou `{ all: true }`;
+   * no web também vale corpo vazio (usa o refresh do cookie). Sempre 204, também para refresh
+   * inválido/desconhecido/de outro usuário (sem oráculo). O `jti` do access apresentado é revogado em
+   * qualquer caso. No web o cookie é sempre limpo.
    */
   route('/auth/logout', ['POST'], (r) =>
-    r.post(byIp(ipLimiter, 60), authenticate, contentType, json, async (req, res) => {
+    r.post(byIp(ipLimiter, 60), webGuard, authenticate, contentType, json, async (req, res) => {
+      const web = isWebClient(req);
       const body: unknown = req.body;
-      if (!isPlainObject(body) || Object.keys(body).length !== 1) {
-        fail(res, 400, 'INVALID_BODY');
-        return;
-      }
       const jti = res.locals['jti'] as string;
       const userId = locals(res).user.id;
-      if (typeof body['refreshToken'] === 'string') {
-        await auth.logout({ userId, jti }, { refreshToken: body['refreshToken'] });
-      } else if (body['all'] === true) {
-        await auth.logout({ userId, jti }, { all: true });
+      if (web && emptyBody(body)) {
+        // Sem cookie, `''` cai no no-op do `logout` (só o `jti` do access é revogado).
+        await auth.logout({ userId, jti }, { refreshToken: refreshFromCookie(req) ?? '' });
       } else {
-        fail(res, 400, 'INVALID_BODY');
-        return;
+        if (!isPlainObject(body) || Object.keys(body).length !== 1) {
+          fail(res, 400, 'INVALID_BODY');
+          return;
+        }
+        if (typeof body['refreshToken'] === 'string') {
+          await auth.logout({ userId, jti }, { refreshToken: body['refreshToken'] });
+        } else if (body['all'] === true) {
+          await auth.logout({ userId, jti }, { all: true });
+        } else {
+          fail(res, 400, 'INVALID_BODY');
+          return;
+        }
       }
+      if (web) clearRefreshCookie(res, secure);
       res.status(204).end();
     }),
   );
@@ -335,8 +458,9 @@ export function mountRest(app: Application, opts: RestOptions): void {
   };
 
   /**
-   * Login social: `POST /auth/google` e `/auth/apple`, corpo `{ provider, idToken, nonce? }` (o `provider`
-   * tem de bater com a rota). 200 conta existente, 201 conta nova (`created: true`). Sem Bearer.
+   * Login social: `POST /auth/google` e `/auth/apple`, corpo `{ provider, idToken, nonce }` (o `provider`
+   * tem de bater com a rota; o `nonce` vem de `GET /auth/nonce`). 200 conta existente, 201 conta nova
+   * (`created: true`). Sem Bearer. No web o refresh vai em cookie (ver `webSession.ts`).
    */
   const socialLogin =
     (provider: SocialProvider): RequestHandler =>
@@ -352,12 +476,11 @@ export function mountRest(app: Application, opts: RestOptions): void {
           parsed.idToken,
           parsed.nonce,
         );
-        const body: SocialAuthResponse = {
+        const extra: Omit<SocialAuthResponse, keyof TokenPair> = {
           user: { id: user.id, nickname: user.nickname },
-          ...pair,
           created,
         };
-        res.status(created ? 201 : 200).json(body);
+        await sendSession(req, res, created ? 201 : 200, extra, pair, true);
       } catch (err) {
         if (!socialFail(res, err)) throw err;
       }
@@ -366,17 +489,25 @@ export function mountRest(app: Application, opts: RestOptions): void {
     r.post(
       byIp(ipLimiter, 60),
       byIp(socialIpLimiter, 60),
+      webGuard,
       contentType,
       json,
       socialLogin('google'),
     ),
   );
   route('/auth/apple', ['POST'], (r) =>
-    r.post(byIp(ipLimiter, 60), byIp(socialIpLimiter, 60), contentType, json, socialLogin('apple')),
+    r.post(
+      byIp(ipLimiter, 60),
+      byIp(socialIpLimiter, 60),
+      webGuard,
+      contentType,
+      json,
+      socialLogin('apple'),
+    ),
   );
 
   /**
-   * Vincular o convidado autenticado a Google/Apple. Corpo `{ provider, idToken, nonce? }`; o `userId` vem
+   * Vincular o convidado autenticado a Google/Apple. Corpo `{ provider, idToken, nonce }`; o `userId` vem
    * do token de acesso. 200 com par novo (as sessões antigas morrem); 409 `ALREADY_LINKED` (a conta não é
    * convidada) ou `PROVIDER_TAKEN` (o `sub` é de outra conta; o idToken não é gasto, serve para entrar nela).
    */
@@ -384,6 +515,7 @@ export function mountRest(app: Application, opts: RestOptions): void {
     r.post(
       byIp(ipLimiter, 60),
       byIp(socialIpLimiter, 60),
+      webGuard,
       authenticate,
       writeLimit,
       contentType,
@@ -401,12 +533,11 @@ export function mountRest(app: Application, opts: RestOptions): void {
             parsed.idToken,
             parsed.nonce,
           );
-          const body: SocialAuthResponse = {
+          const extra: Omit<SocialAuthResponse, keyof TokenPair> = {
             user: { id: user.id, nickname: user.nickname },
-            ...pair,
             created: false,
           };
-          res.status(200).json(body);
+          await sendSession(req, res, 200, extra, pair, true);
         } catch (err) {
           if (!socialFail(res, err)) throw err;
         }
@@ -422,21 +553,54 @@ export function mountRest(app: Application, opts: RestOptions): void {
    * (Redis fora), o usuário já não existe: o access restante (até 15 min) cai em 401, porque toda rota
    * autenticada e o `onAuth` das salas conferem que o usuário existe. 204 sem corpo.
    */
+  const deleteAccountWith = async (
+    req: Request,
+    res: Response,
+    presented: string,
+  ): Promise<void> => {
+    const user = locals(res).user;
+    const jti = res.locals['jti'] as string;
+    await auth.assertRecentRefresh(user.id, presented);
+    await users.deleteUser(user.id);
+    emitUserDeleted(user.id);
+    log.info('me: conta apagada');
+    await auth.logout({ userId: user.id, jti }, { all: true });
+    if (isWebClient(req)) clearRefreshCookie(res, secure);
+    res.status(204).end();
+  };
   const deleteAccount: RequestHandler = async (req, res) => {
     const parsed = parseDeleteAccountRequest(req.body);
     if (parsed === null) {
       fail(res, 400, 'INVALID_BODY');
       return;
     }
-    const user = locals(res).user;
-    const jti = res.locals['jti'] as string;
-    await auth.assertRecentRefresh(user.id, parsed.refreshToken);
-    await users.deleteUser(user.id);
-    emitUserDeleted(user.id);
-    log.info('me: conta apagada');
-    await auth.logout({ userId: user.id, jti }, { all: true });
-    res.status(204).end();
+    await deleteAccountWith(req, res, parsed.refreshToken);
   };
+
+  /**
+   * Apagar conta pelo web: o refresh é httpOnly (a página não o lê) e o cookie só vai a `/auth`, então
+   * `DELETE /me` não o recebe. Aqui o corpo é vazio e a prova de acesso recente é o cookie; com corpo
+   * `{ refreshToken }` age como `DELETE /me`. Mesmos efeitos e limites.
+   */
+  route('/auth/account', ['DELETE'], (r) =>
+    r.delete(
+      byIp(ipLimiter, 60),
+      webGuard,
+      authenticate,
+      writeLimit,
+      contentType,
+      json,
+      async (req, res) => {
+        if (isWebClient(req) && emptyBody(req.body)) {
+          const presented = refreshFromCookie(req);
+          if (presented === undefined) throw new AuthError('INVALID_REFRESH_TOKEN');
+          await deleteAccountWith(req, res, presented);
+          return;
+        }
+        await deleteAccount(req, res, () => undefined);
+      },
+    ),
+  );
 
   route('/me', ['GET', 'PUT', 'DELETE'], (r) => {
     r.get(byIp(ipLimiter, 60), authenticate, async (_req, res) => {

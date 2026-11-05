@@ -35,6 +35,7 @@ import {
   clampLimit,
   decodeCursor,
   encodeCursor,
+  nicknameSkeleton,
   normalizeId,
   orderPair,
   validateNickname,
@@ -173,8 +174,13 @@ export class MemoryUserRepository implements UserRepository {
     const user = this.store.users.get(id);
     if (user === undefined) throw new InvalidInputError('Usuário inexistente.');
     const lower = nickname.toLowerCase();
+    const skeleton = nicknameSkeleton(nickname);
     for (const other of this.store.users.values()) {
-      if (other.id !== id && other.nickname.toLowerCase() === lower) throw new NicknameTakenError();
+      if (other.id === id) continue;
+      // Mesmo apelido sem diferenciar caixa OU mesmo esqueleto (letra parecida), como no Postgres.
+      if (other.nickname.toLowerCase() === lower || nicknameSkeleton(other.nickname) === skeleton) {
+        throw new NicknameTakenError();
+      }
     }
     this.store.users.set(id, { ...user, nickname });
   }

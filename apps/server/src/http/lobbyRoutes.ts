@@ -26,14 +26,14 @@ import { GatewayAuthError } from '../lobby/lobby';
 import { holdUntilFloor } from '../lobby/minLatency';
 import type { LatencyDeps } from '../lobby/minLatency';
 import type { Fail, Lobby, LobbyError } from '../lobby/lobby';
-import { SlidingWindowLimiter, clientKey } from '../rateLimit';
+import { SlidingWindowLimiter, clientKey, type TrustProxy } from '../rateLimit';
 import { BODY_LIMIT } from './rest';
 
 export interface LobbyRoutesOptions {
   readonly auth: AuthService;
   readonly users: UserRepository;
   readonly lobby: Lobby;
-  readonly trustProxy: boolean;
+  readonly trustProxy: TrustProxy;
   /** Relógio/espera/sorteio do piso de latência (testes). Padrão: reais. */
   readonly latency?: LatencyDeps;
 }

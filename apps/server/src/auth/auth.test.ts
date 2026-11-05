@@ -54,6 +54,22 @@ describe('loadServerConfig', () => {
     }
   });
 
+  it('TRUST_PROXY: false (padrão), true ou o NOME de um cabeçalho; o resto é recusado', () => {
+    const ok = { ...base, JWT_SECRET: secret };
+    const trust = (v?: string) =>
+      loadServerConfig(v === undefined ? ok : { ...ok, TRUST_PROXY: v }).trustProxy;
+    expect(trust()).toBe(false);
+    expect(trust('')).toBe(false);
+    expect(trust('false')).toBe(false);
+    expect(trust('true')).toBe(true);
+    expect(trust('TRUE')).toBe(true);
+    expect(trust('Fly-Client-IP')).toEqual({ header: 'fly-client-ip' });
+    expect(trust(' X-Real-IP ')).toEqual({ header: 'x-real-ip' });
+    for (const bad of ['1', '0', 'yes', 'on', 'no', 'fly client ip', 'a'.repeat(65), 'x:y', '-x']) {
+      expect(() => trust(bad), bad).toThrow(/TRUST_PROXY/);
+    }
+  });
+
   it('janela de graça e teto da família: padrões e limites', () => {
     const ok = { ...base, JWT_SECRET: secret };
     expect(loadServerConfig(ok).auth).toMatchObject({

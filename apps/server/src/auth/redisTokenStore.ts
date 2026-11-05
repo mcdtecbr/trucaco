@@ -273,6 +273,17 @@ export class RedisTokenStore implements TokenStore {
     );
   }
 
+  async putNonce(key: string, ttlSec: number): Promise<void> {
+    await this.run(() =>
+      this.redis.set(`${REDIS_PREFIX}nonce:${key}`, '1', 'EX', Math.max(1, Math.ceil(ttlSec))),
+    );
+  }
+
+  async consumeNonce(key: string): Promise<boolean> {
+    // `DEL` devolve quantas chaves apagou: só uma chamada concorrente vê 1.
+    return this.run(async () => (await this.redis.del(`${REDIS_PREFIX}nonce:${key}`)) === 1);
+  }
+
   async close(): Promise<void> {
     this.redis.disconnect();
   }

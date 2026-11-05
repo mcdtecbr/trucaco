@@ -3,13 +3,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Server, ServerError, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
-import { MAX_MESSAGE_BYTES, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
+import { MAX_MESSAGE_BYTES, WEB_CLIENT_HEADER, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { AuthService } from './auth/authService';
-import { DEFAULT_LIMITS, type RestLimits } from './auth/config';
+import { DEFAULT_LIMITS, isDevLike, type RestLimits } from './auth/config';
 import type { AuthContext } from '@colyseus/core';
 import type { MatchRepository, ProgressionRepository, UserRepository } from './db/types';
 import { installBaseMiddleware, mountFallbacks, mountRest } from './http/rest';
 import { mountLobbyRoutes } from './http/lobbyRoutes';
+import { mountWeb } from './http/web';
 import {
   DEFAULT_LOBBY_CONFIG,
   GRANT_KEY,
@@ -20,7 +21,12 @@ import {
 } from './lobby/lobby';
 import type { LobbyConfig, TableGateway } from './lobby/lobby';
 import { buildHealth } from './index';
-import { SlidingWindowLimiter, clientKey, normalizeIp } from './rateLimit';
+import {
+  SlidingWindowLimiter,
+  clientKey,
+  trustedIpFromHeaders,
+  type TrustProxy,
+} from './rateLimit';
 import { reconnectUpgradeGuard } from './rooms/reconnectGuard';
 import { configureRoomAuth, identityFromToken, tokenFromHeaders } from './rooms/roomAuth';
 import { TRUCO_ROOM_NAME, TrucoRoom, defineTrucoRoom } from './rooms/TrucoRoom';
@@ -35,7 +41,12 @@ export interface ServerDeps {
   /** Origens CORS permitidas (lista exata). Vazio = nenhuma. */
   readonly corsOrigins?: readonly string[];
   readonly limits?: Partial<RestLimits>;
-  readonly trustProxy?: boolean;
+  /** Proxy confiável: `true` (último `X-Forwarded-For`) ou `{ header }` (ex.: `Fly-Client-IP`). Padrão `false`. */
+  readonly trustProxy?: TrustProxy;
+  /** Atributo `Secure` do cookie do refresh (web). Padrão: ligado, exceto com `NODE_ENV` development/test. */
+  readonly secureCookies?: boolean;
+  /** Pasta do export do web servida na mesma origem (fallback para `index.html`). Ausente: só API. */
+  readonly webDistDir?: string;
   /**
    * Aceita `devAuth` (userId/apelido do payload e token `dev:<id>`). SÓ com `NODE_ENV`
    * development/test, senão lança. Nunca ligado por padrão.
@@ -73,10 +84,11 @@ export interface MatchmakeLimitConfig {
   readonly windowMs: number;
   /**
    * Atrás de proxy reverso o IP do socket é o do proxy. Com `true`, usa o ÚLTIMO item de
-   * `X-Forwarded-For` (o que o proxy confiável acrescentou; os anteriores o cliente forja). Ligue só
-   * se TODO tráfego passa por um proxy que define esse cabeçalho. Padrão: `false`.
+   * `X-Forwarded-For` (o que o proxy confiável acrescentou; os anteriores o cliente forja); com
+   * `{ header }`, o cabeçalho que o proxy define (`Fly-Client-IP`). Ligue só se TODO tráfego passa por um
+   * proxy que define esse cabeçalho. Padrão: `false`.
    */
-  readonly trustProxy: boolean;
+  readonly trustProxy: TrustProxy;
 }
 
 export const DEFAULT_MATCHMAKE_LIMIT: MatchmakeLimitConfig = {
@@ -127,7 +139,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
     allowDevAuth: deps.allowDevAuth === true,
   });
   directMatchmake = deps.directMatchmake === true;
-  trustProxyForJoin = deps.trustProxy === true;
+  trustProxyForJoin = deps.trustProxy ?? false;
   const users = deps.users;
   const lobby = new Lobby(
     tableGateway(),
@@ -184,7 +196,8 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
           ...(deps.progression !== undefined ? { progression: deps.progression } : {}),
           limits: { ...DEFAULT_LIMITS, ...deps.limits },
           corsOrigins: deps.corsOrigins ?? [],
-          trustProxy: deps.trustProxy === true,
+          trustProxy: deps.trustProxy ?? false,
+          secureCookies: deps.secureCookies ?? !isDevLike(process.env.NODE_ENV),
         });
       }
       if (deps.auth !== undefined && deps.users !== undefined) {
@@ -192,9 +205,10 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
           auth: deps.auth,
           users: deps.users,
           lobby,
-          trustProxy: deps.trustProxy === true,
+          trustProxy: deps.trustProxy ?? false,
         });
       }
+      if (deps.webDistDir !== undefined) mountWeb(app, { dir: deps.webDistDir });
       mountFallbacks(app);
     },
     // Os sinais são tratados por quem chama (main.ts), não pelo Colyseus.
@@ -221,13 +235,13 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
  * CORS. O roteador do `@colyseus/core` é um listener `request` PREPENDIDO que responde a QUALQUER `OPTIONS`
  * (de qualquer caminho, inclusive `/me`) com 204 e `DEFAULT_CORS_HEADERS + getCorsHeaders()`, e põe esses
  * mesmos cabeçalhos em toda resposta, antes do express. Logo é essa camada que decide, não o middleware
- * express. Aqui: lista exata de origens; para origem da lista, os cabeçalhos completos (a API usa
- * `Authorization: Bearer`, sem cookies, então sem `Allow-Credentials`); para qualquer outra, NENHUM
+ * express. Aqui: lista exata de origens; para origem da lista, os cabeçalhos completos (com
+ * `Allow-Credentials`, por causa do cookie do refresh do web; a origem nunca é `*`); para qualquer outra, NENHUM
  * cabeçalho `Access-Control-*` (só `Vary: Origin`). Nunca `*`, `null` nem origem refletida sem lista.
  * Estado do core, global ao processo (um servidor por processo).
  */
 export const CORS_ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
-export const CORS_ALLOW_HEADERS = 'Authorization, Content-Type';
+export const CORS_ALLOW_HEADERS = `Authorization, Content-Type, ${WEB_CLIENT_HEADER}`;
 
 function restrictMatchmakeCors(origins: readonly string[]): void {
   const allowed = new Set(origins);
@@ -245,6 +259,8 @@ function restrictMatchmakeCors(origins: readonly string[]): void {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': CORS_ALLOW_METHODS,
       'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
+      // Cookie do refresh do web (`credentials: 'include'` em /auth): só para origem da lista.
+      'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Max-Age': '600',
       Vary: 'Origin',
     };
@@ -347,13 +363,11 @@ const WRAPPED = Symbol.for('trucaco.matchmakeReconnectGuard');
 
 /** Estado do processo (um servidor por processo): lido pelo wrapper, que é instalado uma única vez. */
 let directMatchmake = false;
-let trustProxyForJoin = false;
+let trustProxyForJoin: TrustProxy = false;
 
-/** IP do cliente só quando há proxy confiável (último item de `X-Forwarded-For`); senão `null`. */
+/** IP do cliente só quando há proxy confiável (ver `TrustProxy`); senão `null`. */
 function trustedIp(headers: Headers | undefined): string | null {
-  if (!trustProxyForJoin) return null;
-  const last = headers?.get('x-forwarded-for')?.split(',').at(-1)?.trim();
-  return last === undefined || last === '' ? null : normalizeIp(last);
+  return trustedIpFromHeaders(headers, trustProxyForJoin);
 }
 
 /** Costura do lobby com o matchmaker do Colyseus. */

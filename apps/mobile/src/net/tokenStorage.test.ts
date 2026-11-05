@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTokenStorage } from './tokenStorage';
 import {
   STORAGE_KEY,
+  WEB_STORAGE_KEY,
   createMemoryTokenStorage,
   parseStoredSession,
   serializeSession,
@@ -137,19 +138,38 @@ describe('web (localStorage)', () => {
     };
   }
 
-  it('persiste sob a chave versionada', async () => {
+  const U: StoredSession = { userId: 'u1', nickname: 'Zé' };
+
+  it('grava só o usuário (chave v2), nunca o refresh, mesmo que o chamador o passe', async () => {
     const ls = fakeLocalStorage();
     vi.stubGlobal('localStorage', ls);
     const { createTokenStorage: create } = await import('./tokenStorage.web');
     const s = create();
-    await s.save(S);
-    expect(ls.data.has(STORAGE_KEY)).toBe(true);
-    expect(await s.load()).toEqual(S);
+    await s.save(S); // S traz refreshToken: o web o descarta
+    expect([...ls.data.keys()]).toEqual([WEB_STORAGE_KEY]);
+    expect(ls.data.get(WEB_STORAGE_KEY)).not.toContain('r1');
+    expect(ls.data.get(WEB_STORAGE_KEY)).not.toContain('refresh');
+    expect(await s.load()).toEqual(U);
     await s.clear();
     expect(ls.data.size).toBe(0);
   });
 
-  it('subscribe escuta o evento storage de OUTRA aba, só da chave da sessão', async () => {
+  it('legado (Fase 3): load devolve o refresh da chave v1; save e clear a apagam', async () => {
+    const ls = fakeLocalStorage();
+    vi.stubGlobal('localStorage', ls);
+    ls.data.set(STORAGE_KEY, serializeSession(S));
+    const { createTokenStorage: create } = await import('./tokenStorage.web');
+    const s = create();
+    expect(await s.load()).toEqual(S);
+    await s.save(U);
+    expect(ls.data.has(STORAGE_KEY)).toBe(false);
+    expect(await s.load()).toEqual(U);
+    ls.data.set(STORAGE_KEY, serializeSession(S));
+    await s.clear();
+    expect(ls.data.size).toBe(0);
+  });
+
+  it('subscribe escuta o evento storage de OUTRA aba, só da chave v2 e só com usuário válido', async () => {
     const handlers = new Map<
       string,
       (e: { key: string | null; newValue: string | null }) => void
@@ -160,13 +180,14 @@ describe('web (localStorage)', () => {
     const { createTokenStorage: create } = await import('./tokenStorage.web');
     const s = create();
     const got: string[] = [];
-    const off = s.subscribe?.((x) => got.push(x.refreshToken));
+    const off = s.subscribe?.((x) => got.push(x.userId));
     const fire = handlers.get('storage')!;
-    fire({ key: 'outra', newValue: serializeSession(S) });
-    fire({ key: STORAGE_KEY, newValue: null }); // remoção: ignorada
-    fire({ key: STORAGE_KEY, newValue: 'lixo' });
-    fire({ key: STORAGE_KEY, newValue: serializeSession({ ...S, refreshToken: 'r9' }) });
-    expect(got).toEqual(['r9']);
+    fire({ key: 'outra', newValue: JSON.stringify(U) });
+    fire({ key: STORAGE_KEY, newValue: serializeSession(S) }); // chave legada: ignorada
+    fire({ key: WEB_STORAGE_KEY, newValue: null }); // remoção: ignorada
+    fire({ key: WEB_STORAGE_KEY, newValue: 'lixo' });
+    fire({ key: WEB_STORAGE_KEY, newValue: JSON.stringify({ userId: 'u9', nickname: 'Ana' }) });
+    expect(got).toEqual(['u9']);
     off?.();
     expect(handlers.has('storage')).toBe(false);
   });

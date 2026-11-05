@@ -69,10 +69,17 @@ export async function createGuest(): Promise<Account> {
 export const testIdToken = (sub: string, suffix = ''): string =>
   suffix === '' ? `test:${sub}` : `test:${sub}:${suffix}`;
 
+/** `GET /auth/nonce`: o servidor exige um nonce emitido por ele em todo login social e vínculo. */
+export async function fetchNonce(): Promise<string> {
+  const r = await call('GET', '/auth/nonce');
+  if (r.status !== 200) throw new Error(`nonce: esperava 200, veio ${r.status}`);
+  return (r.json as { nonce: string }).nonce;
+}
+
 /** `POST /auth/google` com o verificador de teste. Conta nova = 201, existente = 200. */
 export async function loginGoogle(sub: string, suffix = ''): Promise<ApiReply> {
   return call('POST', '/auth/google', {
-    body: { provider: 'google', idToken: testIdToken(sub, suffix) },
+    body: { provider: 'google', idToken: testIdToken(sub, suffix), nonce: await fetchNonce() },
   });
 }
 
@@ -81,7 +88,7 @@ export const accountOf = (r: ApiReply): Account => asAccount(r, r.status);
 export async function linkGoogle(token: string, sub: string, suffix = ''): Promise<ApiReply> {
   return call('POST', '/auth/link', {
     token,
-    body: { provider: 'google', idToken: testIdToken(sub, suffix) },
+    body: { provider: 'google', idToken: testIdToken(sub, suffix), nonce: await fetchNonce() },
   });
 }
 
@@ -89,11 +96,14 @@ export async function linkGoogle(token: string, sub: string, suffix = ''): Promi
 export const uniqueSub = (label: string): string =>
   `${label}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-const STORAGE_KEY = 'trucaco.session.v1';
+/** Chave LEGADA (Fase 3, com refresh) e a atual (7A, só o usuário): ver `tokenStorage.web.ts`. */
+export const LEGACY_STORAGE_KEY = 'trucaco.session.v1';
+export const STORAGE_KEY = 'trucaco.session.v2';
 
 /**
- * Entra no app como a conta dada: grava a sessão no `localStorage` ANTES de a página carregar (mesmo
- * formato do `tokenStorage.web`). Vale para as próximas navegações do contexto.
+ * Entra no app como a conta dada, pelo caminho de MIGRAÇÃO: grava um refresh LEGADO no `localStorage`
+ * ANTES de a página carregar; o app o troca por cookie httpOnly e apaga o valor local. Vale para as
+ * próximas navegações do contexto.
  */
 export async function signInContext(context: BrowserContext, acc: Account): Promise<void> {
   await context.addInitScript(
@@ -105,7 +115,7 @@ export async function signInContext(context: BrowserContext, acc: Account): Prom
       window.localStorage.setItem(key, value);
     },
     [
-      STORAGE_KEY,
+      LEGACY_STORAGE_KEY,
       JSON.stringify({
         refreshToken: acc.refreshToken,
         userId: acc.id,
@@ -115,7 +125,7 @@ export async function signInContext(context: BrowserContext, acc: Account): Prom
   );
 }
 
-/** Sessão guardada hoje no navegador (ou `null`). */
+/** Usuário guardado hoje no navegador (chave v2, sem refresh) ou `null`. */
 export async function storedSession(page: Page): Promise<{ userId: string } | null> {
   const raw = await page.evaluate((k) => window.localStorage.getItem(k), STORAGE_KEY);
   return raw === null ? null : (JSON.parse(raw) as { userId: string });

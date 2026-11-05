@@ -4,17 +4,22 @@ import { createIdentityRegistry } from '../net/identity';
 import { errorMessage } from '../i18n/errors';
 import { NO_SDK_TEXT, providerStates, runSocialAuth, serverProvidersOf } from './socialAuth';
 
-function setup(over: { cred?: { idToken: string; nonce?: string } | null | 'throw' } = {}) {
+const seen: string[] = [];
+
+function setup(over: { cred?: { idToken: string } | null | 'throw' } = {}) {
   const registry = createIdentityRegistry();
-  const cred = over.cred === undefined ? { idToken: 'tok', nonce: 'n' } : over.cred;
+  const cred = over.cred === undefined ? { idToken: 'tok' } : over.cred;
   registry.register({
     provider: 'google',
-    getCredential: () =>
-      cred === 'throw' ? Promise.reject(new Error('sdk')) : Promise.resolve(cred),
+    getCredential: (nonce: string) =>
+      cred === 'throw'
+        ? Promise.reject(new Error('sdk'))
+        : (seen.push(nonce), Promise.resolve(cred)),
   });
   const session = {
     loginSocial: vi.fn<(req: unknown) => Promise<void>>(() => Promise.resolve()),
     linkAccount: vi.fn<(req: unknown) => Promise<void>>(() => Promise.resolve()),
+    fetchNonce: vi.fn<() => Promise<string>>(() => Promise.resolve('n')),
   };
   return { registry, session };
 }
@@ -24,7 +29,7 @@ const apiErr = (code: ConstructorParameters<typeof ApiError>[0]['code'], status 
 
 describe('runSocialAuth', () => {
   it('sem SDK registrado: indisponível, sem chamar a sessão', async () => {
-    const session = { loginSocial: vi.fn(), linkAccount: vi.fn() };
+    const session = { loginSocial: vi.fn(), linkAccount: vi.fn(), fetchNonce: vi.fn() };
     const out = await runSocialAuth({
       mode: 'link',
       provider: 'apple',
@@ -33,9 +38,10 @@ describe('runSocialAuth', () => {
     });
     expect(out).toEqual({ kind: 'unavailable', message: NO_SDK_TEXT });
     expect(session.linkAccount).not.toHaveBeenCalled();
+    expect(session.fetchNonce).not.toHaveBeenCalled();
   });
 
-  it('vincula com o idToken e o nonce do provedor', async () => {
+  it('busca o nonce no servidor, entrega ao provedor e vincula com idToken e nonce', async () => {
     const { registry, session } = setup();
     expect(await runSocialAuth({ mode: 'link', provider: 'google', registry, session })).toEqual({
       kind: 'done',
@@ -46,6 +52,7 @@ describe('runSocialAuth', () => {
       nonce: 'n',
     });
     expect(session.loginSocial).not.toHaveBeenCalled();
+    expect(seen.at(-1)).toBe('n'); // o SDK recebeu o nonce do servidor
   });
 
   it('entrar usa loginSocial; cancelar o fluxo não chama a rede', async () => {
@@ -57,6 +64,20 @@ describe('runSocialAuth', () => {
       kind: 'cancelled',
     });
     expect(b.session.loginSocial).not.toHaveBeenCalled();
+  });
+
+  it('falha ao buscar o nonce: o provedor nem é aberto; SOCIAL_LOGIN_DISABLED vira indisponível', async () => {
+    const { registry, session } = setup();
+    const before = seen.length;
+    session.fetchNonce.mockRejectedValueOnce(apiErr('SOCIAL_LOGIN_DISABLED', 503));
+    const out = await runSocialAuth({ mode: 'login', provider: 'google', registry, session });
+    expect(out).toMatchObject({ kind: 'unavailable' });
+    session.fetchNonce.mockRejectedValueOnce(new TypeError('rede'));
+    expect(
+      await runSocialAuth({ mode: 'login', provider: 'google', registry, session }),
+    ).toMatchObject({ kind: 'error', code: 'UNKNOWN' });
+    expect(seen.length).toBe(before);
+    expect(session.loginSocial).not.toHaveBeenCalled();
   });
 
   it('falha do SDK vira erro genérico sem vazar a mensagem', async () => {

@@ -7,8 +7,12 @@
  * - o par novo é persistido (`auth.setTokens`) ANTES de qualquer requisição ser repetida;
  * - 503, falha de rede e timeout NUNCA descartam a sessão; só `401` no `/auth/refresh` a encerra;
  * - nada é logado: nem token, nem `Authorization`, nem corpo (principalmente de `/auth/*`).
+ *
+ * Modo web (`webSession`, docs/protocolo-servidor.md "Sessão do web"): o refresh vive num cookie httpOnly que o
+ * JS nunca vê. As rotas `/auth/*` levam `X-Client: web` (e `credentials: 'include'` se a origem do servidor
+ * difere da página), o refresh e o logout vão com corpo vazio e as respostas vêm sem `refreshToken`.
  */
-import { isHttpErrorCode } from '@trucaco/protocol';
+import { WEB_CLIENT_HEADER, WEB_CLIENT_VALUE, isHttpErrorCode } from '@trucaco/protocol';
 import type {
   AchievementsResponse,
   BlocksResponse,
@@ -70,12 +74,20 @@ export function isApiError(e: unknown): e is ApiError {
   return e instanceof ApiError;
 }
 
+/** Par de tokens como a sessão o recebe: no web o `refreshToken` não vem (fica no cookie). */
+export type SessionTokens = Omit<TokenPairResponse, 'refreshToken'> & {
+  readonly refreshToken?: string;
+};
+type Loose<T extends TokenPairResponse> = Omit<T, 'refreshToken'> & {
+  readonly refreshToken?: string;
+};
+
 /** Ponte com a sessão: guarda os tokens e decide o que fazer quando o refresh é recusado. */
 export interface ApiAuth {
   getAccessToken(): string | null;
   getRefreshToken(): string | null;
   /** Deve persistir o par novo (refresh rotativo) e só então resolver. */
-  setTokens(pair: TokenPairResponse): Promise<void>;
+  setTokens(pair: SessionTokens): Promise<void>;
   /** `401` no `/auth/refresh`: a família morreu. */
   onRefreshRejected(): void | Promise<void>;
   /**
@@ -97,7 +109,7 @@ export type FetchLike = (
     headers: Record<string, string>;
     body?: string;
     signal: AbortSignal;
-    credentials: 'omit';
+    credentials: 'omit' | 'include' | 'same-origin';
   },
 ) => Promise<{
   status: number;
@@ -110,13 +122,25 @@ export interface ApiOptions {
   auth: ApiAuth;
   fetch?: FetchLike;
   timeoutMs?: number;
+  /** Modo web: refresh em cookie httpOnly (ver o cabeçalho do arquivo). Padrão: nativo (par no corpo). */
+  webSession?: boolean;
+  /** Só no modo web: força (ou não) `credentials: 'include'` em `/auth/*`. Padrão: compara a origem com a da página. */
+  crossOrigin?: boolean;
 }
 
 export interface ApiClient {
-  guest(): Promise<GuestAuthResponse>;
+  guest(): Promise<Loose<GuestAuthResponse>>;
   /** Renovação em fila única. Resolve com o access novo. */
   refreshSession(): Promise<string>;
-  logout(body: LogoutRequest): Promise<void>;
+  /**
+   * Troca um refresh LEGADO (do `localStorage` antigo) pelo cookie httpOnly: `POST /auth/refresh` com corpo e
+   * `X-Client: web`. Só no modo web. Sem repetição; `401` sobe como erro (quem chama descarta o legado).
+   */
+  migrateLegacyRefresh(refreshToken: string): Promise<SessionTokens>;
+  /** `GET /auth/nonce` (uso único, 300 s): vai ao provedor e volta em `loginSocial`/`linkAccount`. */
+  nonce(): Promise<string>;
+  /** Nativo: `{ refreshToken }`. Web: sem corpo (o servidor lê o cookie). */
+  logout(body?: LogoutRequest): Promise<void>;
   health(): Promise<HealthResponse>;
   me(): Promise<MeResponse>;
   updateNickname(nickname: string): Promise<UpdateNicknameResponse>;
@@ -138,14 +162,17 @@ export interface ApiClient {
   /** Perfil público de outro jogador (`GET /users/:id`). Nunca traz histórico nem provedor. */
   publicProfile(userId: string): Promise<PublicProfileResponse>;
   /** `POST /auth/google|apple` (sem Bearer). O convidado atual é substituído pela conta devolvida. */
-  loginSocial(req: SocialAuthRequest): Promise<SocialAuthResponse>;
+  loginSocial(req: SocialAuthRequest): Promise<Loose<SocialAuthResponse>>;
   /**
    * `POST /auth/link` (Bearer, convidado). Devolve par novo (o servidor revoga as famílias antigas).
    * Sem repetição por 401: ele pode ser `INVALID_ID_TOKEN`; quem chama garante o access antes.
    */
-  linkAccount(req: SocialAuthRequest): Promise<SocialAuthResponse>;
-  /** `DELETE /me`: o refresh token é a prova de acesso recente. Sem repetição por 401. */
-  deleteAccount(refreshToken: string): Promise<void>;
+  linkAccount(req: SocialAuthRequest): Promise<Loose<SocialAuthResponse>>;
+  /**
+   * Nativo: `DELETE /me` com o refresh como prova de acesso recente. Web: `DELETE /auth/account` sem corpo
+   * (o cookie é a prova; o argumento é ignorado). Sem repetição por 401.
+   */
+  deleteAccount(refreshToken?: string): Promise<void>;
 }
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -161,28 +188,40 @@ function parseJson(text: string): unknown {
   }
 }
 
-function isTokenPair(x: unknown): x is TokenPairResponse {
+/** `needsRefresh`: o nativo exige o `refreshToken` no corpo; o web não o recebe (cookie). */
+function isTokenPair(x: unknown, needsRefresh: boolean): x is SessionTokens {
   return (
     isRecord(x) &&
     typeof x['accessToken'] === 'string' &&
     x['accessToken'] !== '' &&
-    typeof x['refreshToken'] === 'string' &&
-    x['refreshToken'] !== '' &&
+    (!needsRefresh || (typeof x['refreshToken'] === 'string' && x['refreshToken'] !== '')) &&
     typeof x['expiresIn'] === 'number' &&
     x['expiresIn'] > 0
   );
 }
 
-function isGuestResponse(x: unknown): x is GuestAuthResponse {
-  if (!isTokenPair(x)) return false;
+function isGuestResponse(x: unknown, needsRefresh: boolean): x is Loose<GuestAuthResponse> {
+  if (!isTokenPair(x, needsRefresh)) return false;
   const user = (x as unknown as Record<string, unknown>)['user'];
   return isRecord(user) && typeof user['id'] === 'string' && typeof user['nickname'] === 'string';
 }
 
-function isSocialResponse(x: unknown): x is SocialAuthResponse {
+function isSocialResponse(x: unknown, needsRefresh: boolean): x is Loose<SocialAuthResponse> {
   return (
-    isGuestResponse(x) && typeof (x as unknown as Record<string, unknown>)['created'] === 'boolean'
+    isGuestResponse(x, needsRefresh) &&
+    typeof (x as unknown as Record<string, unknown>)['created'] === 'boolean'
   );
+}
+
+/** A página e o servidor estão em origens diferentes (dev: Metro em 8081, servidor em 2567). */
+function differsFromPage(baseUrl: string): boolean {
+  const page = (globalThis as { location?: { origin?: string } }).location?.origin;
+  if (page === undefined || page === 'null') return false;
+  try {
+    return new URL(baseUrl).origin !== page;
+  } catch {
+    return false;
+  }
 }
 
 function errorCodeOf(body: unknown): ApiErrorCode {
@@ -203,6 +242,9 @@ export function createApiClient(options: ApiOptions): ApiClient {
   const { auth } = options;
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const web = options.webSession === true;
+  const needsRefresh = !web;
+  const includeCookies = web && (options.crossOrigin ?? differsFromPage(baseUrl));
   const doFetch: FetchLike =
     options.fetch ?? ((url, init) => (globalThis.fetch as unknown as FetchLike)(url, init));
 
@@ -215,6 +257,8 @@ export function createApiClient(options: ApiOptions): ApiClient {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (accessToken !== null) headers['authorization'] = `Bearer ${accessToken}`;
+    const isAuthRoute = web && (path === '/auth' || path.startsWith('/auth/'));
+    if (isAuthRoute) headers[WEB_CLIENT_HEADER.toLowerCase()] = WEB_CLIENT_VALUE;
 
     const controller = new AbortController();
     let timedOut = false;
@@ -232,7 +276,8 @@ export function createApiClient(options: ApiOptions): ApiClient {
         headers,
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: controller.signal,
-        credentials: 'omit',
+        // Web: nunca `omit` em /auth/* (o navegador descartaria o Set-Cookie). Mesma origem: `same-origin`.
+        credentials: isAuthRoute ? (includeCookies ? 'include' : 'same-origin') : 'omit',
       });
       status = res.status;
       retryAfter = res.headers.get('retry-after');
@@ -278,11 +323,12 @@ export function createApiClient(options: ApiOptions): ApiClient {
    * Limite conhecido: rede fora por mais de 20 s depois de um commit perdido => reuso => família revogada
    * (mitigação futura: graça maior no servidor).
    */
-  async function postRefresh(refreshToken: string): Promise<TokenPairResponse> {
+  async function postRefresh(refreshToken: string): Promise<SessionTokens> {
     for (let attempt = 0; ; attempt++) {
       try {
-        const json = await raw('POST', '/auth/refresh', { refreshToken }, null);
-        if (!isTokenPair(json)) {
+        // Web: corpo vazio, o servidor lê o cookie.
+        const json = await raw('POST', '/auth/refresh', web ? undefined : { refreshToken }, null);
+        if (!isTokenPair(json, needsRefresh)) {
           throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
         }
         return json;
@@ -312,6 +358,15 @@ export function createApiClient(options: ApiOptions): ApiClient {
       return pair.accessToken;
     };
     return auth.exclusive !== undefined ? auth.exclusive(body) : body();
+  }
+
+  async function migrateLegacyRefresh(refreshToken: string): Promise<SessionTokens> {
+    if (!web) throw new Error('migrateLegacyRefresh só existe no modo web');
+    const json = await raw('POST', '/auth/refresh', { refreshToken }, null);
+    if (!isTokenPair(json, false)) {
+      throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+    }
+    return json;
   }
 
   function refreshSession(): Promise<string> {
@@ -344,14 +399,25 @@ export function createApiClient(options: ApiOptions): ApiClient {
   return {
     async guest() {
       const json = await raw('POST', '/auth/guest', undefined, null);
-      if (!isGuestResponse(json)) {
+      if (!isGuestResponse(json, needsRefresh)) {
         throw new ApiError({ status: 201, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
       }
       return json;
     },
     refreshSession,
+    migrateLegacyRefresh,
+    async nonce() {
+      const json = await raw('GET', '/auth/nonce', undefined, null);
+      const value = isRecord(json) ? json['nonce'] : undefined;
+      if (typeof value !== 'string' || value === '') {
+        throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
+      }
+      return value;
+    },
     async logout(body) {
-      await authed<undefined>('POST', '/auth/logout', body, { refreshOn401: false });
+      await authed<undefined>('POST', '/auth/logout', web ? undefined : body, {
+        refreshOn401: false,
+      });
     },
     health: () => raw('GET', '/health', undefined, null) as Promise<HealthResponse>,
     me: () => authed<MeResponse>('GET', '/me'),
@@ -385,19 +451,23 @@ export function createApiClient(options: ApiOptions): ApiClient {
       authed<PublicProfileResponse>('GET', `/users/${encodeURIComponent(userId)}`),
     async loginSocial(req) {
       const json = await raw('POST', `/auth/${req.provider}`, req, null);
-      if (!isSocialResponse(json)) {
+      if (!isSocialResponse(json, needsRefresh)) {
         throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
       }
       return json;
     },
     async linkAccount(req) {
       const json = await authed<unknown>('POST', '/auth/link', req, { refreshOn401: false });
-      if (!isSocialResponse(json)) {
+      if (!isSocialResponse(json, needsRefresh)) {
         throw new ApiError({ status: 200, code: 'INVALID_RESPONSE', kind: 'invalid_response' });
       }
       return json;
     },
     async deleteAccount(refreshToken) {
+      if (web) {
+        await authed<undefined>('DELETE', '/auth/account', undefined, { refreshOn401: false });
+        return;
+      }
       await authed<undefined>('DELETE', '/me', { refreshToken }, { refreshOn401: false });
     },
   };

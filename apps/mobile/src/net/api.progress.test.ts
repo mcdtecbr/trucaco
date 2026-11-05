@@ -53,7 +53,7 @@ describe('api: conquistas, missões e perfil público', () => {
         created: true,
       },
     }));
-    const res = await api.loginSocial({ provider: 'google', idToken: 't' });
+    const res = await api.loginSocial({ provider: 'google', idToken: 't', nonce: 'n' });
     expect(res.created).toBe(true);
     expect(calls[0]).toMatchObject({ method: 'POST', path: '/auth/google' });
     expect(calls[0]?.headers['authorization']).toBeUndefined();
@@ -64,7 +64,9 @@ describe('api: conquistas, missões e perfil público', () => {
       status: 401,
       json: { error: { code: 'INVALID_ID_TOKEN' } },
     }));
-    await expect(api.linkAccount({ provider: 'apple', idToken: 't' })).rejects.toMatchObject({
+    await expect(
+      api.linkAccount({ provider: 'apple', idToken: 't', nonce: 'n' }),
+    ).rejects.toMatchObject({
       code: 'INVALID_ID_TOKEN',
     });
     expect(calls).toHaveLength(1);

@@ -26,6 +26,7 @@ vi.mock('../services/app', () => ({
       api: { health: mocks.health },
       linkAccount: mocks.linkAccount,
       loginSocial: mocks.loginSocial,
+      fetchNonce: () => Promise.resolve('nonce-1'),
     },
   }),
 }));
@@ -84,7 +85,11 @@ describe('useSocialAuth', () => {
     linkAccount.mockResolvedValueOnce(undefined);
     const { onDone } = await mount();
     await act(async () => latest.on.press('google'));
-    expect(linkAccount).toHaveBeenCalledWith({ provider: 'google', idToken: 'tok-google' });
+    expect(linkAccount).toHaveBeenCalledWith({
+      provider: 'google',
+      idToken: 'tok-google',
+      nonce: 'nonce-1',
+    });
     expect(onDone).toHaveBeenCalledOnce();
 
     const { ApiError } = await import('../net/api');

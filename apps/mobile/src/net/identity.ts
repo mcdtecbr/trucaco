@@ -12,14 +12,16 @@ import type { SocialProvider } from '@trucaco/protocol';
 
 export interface IdentityCredential {
   readonly idToken: string;
-  /** Nonce enviado ao provedor, quando o fluxo o usa. */
-  readonly nonce?: string;
 }
 
 export interface IdentityProvider {
   readonly provider: SocialProvider;
-  /** Abre o fluxo do provedor. `null` = o usuário fechou ou cancelou. Erro de SDK deve ser lançado. */
-  getCredential(): Promise<IdentityCredential | null>;
+  /**
+   * Abre o fluxo do provedor. `nonce` é o de `GET /auth/nonce` (uso único): o SDK o passa ao provedor, para
+   * ele entrar na claim `nonce` do idToken, e o cliente o reenvia ao servidor. `null` = o usuário fechou ou
+   * cancelou. Erro de SDK deve ser lançado.
+   */
+  getCredential(nonce: string): Promise<IdentityCredential | null>;
 }
 
 export const PROVIDER_BUTTON_LABEL: Readonly<Record<SocialProvider, string>> = {

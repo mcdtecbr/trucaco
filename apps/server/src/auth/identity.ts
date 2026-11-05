@@ -2,9 +2,12 @@
  * Verificação de idToken de provedor social (Google e Apple), atrás de uma interface injetável.
  *
  * - `JwksIdentityVerifier` (produção): assinatura RS256 contra o JWKS do provedor (`jose`), `iss` fixo,
- *   `aud` dentro dos client IDs configurados, `exp`/`nbf` com tolerância curta e `nonce` quando enviado.
+ *   `aud` dentro dos client IDs configurados, `exp`/`nbf` com tolerância curta e a claim `nonce` sempre
+ *   igual ao nonce informado (cru, ou SHA-256 em hex na Apple).
  *   Nenhuma claim é aceita sem passar por isso. O provedor sem client ID configurado fica DESLIGADO.
- * - `TestIdentityVerifier` (só `NODE_ENV` development/test): `test:<sub>[:<qualquer coisa>]`.
+ * - `TestIdentityVerifier` (só `NODE_ENV` development/test): `test:<sub>[:<qualquer coisa>]`. Não tem
+ *   claim para o nonce, então não o confere; o `AuthService` continua exigindo e consumindo um nonce
+ *   emitido por `GET /auth/nonce` (o fluxo do cliente é o mesmo de produção).
  *
  * O idToken e as claims nunca são logados. Só `sub` (e `email` verificado, que NÃO é persistido) saem
  * daqui.
@@ -57,8 +60,11 @@ export interface VerifiedIdentity {
 export interface IdentityVerifier {
   /** O provedor tem client ID configurado? Falso = `SOCIAL_LOGIN_DISABLED`. */
   isEnabled(provider: SocialProvider): boolean;
-  /** Lança `InvalidIdTokenError` para qualquer falha de validação. */
-  verify(provider: SocialProvider, idToken: string, nonce?: string): Promise<VerifiedIdentity>;
+  /**
+   * Lança `InvalidIdTokenError` para qualquer falha de validação. `nonce` é o que o cliente diz ter enviado
+   * ao provedor: a claim `nonce` do token tem de bater (se foi emitido por nós é conferido pelo `AuthService`).
+   */
+  verify(provider: SocialProvider, idToken: string, nonce: string): Promise<VerifiedIdentity>;
 }
 
 export const enabledProviders = (v: IdentityVerifier): SocialProvider[] =>
@@ -125,7 +131,7 @@ export class JwksIdentityVerifier implements IdentityVerifier {
   async verify(
     provider: SocialProvider,
     idToken: string,
-    nonce?: string,
+    nonce: string,
   ): Promise<VerifiedIdentity> {
     const audience = this.opts.clientIds[provider];
     const getKey = this.keys.get(provider);
@@ -155,13 +161,15 @@ export class JwksIdentityVerifier implements IdentityVerifier {
       throw new InvalidIdTokenError();
     }
     if (typeof exp !== 'number') throw new InvalidIdTokenError();
-    if (nonce !== undefined) {
-      // Google: o nonce vai cru na claim. Apple: o app costuma mandar o SHA-256 do nonce ao provedor e o
-      // cru ao servidor. As duas formas só se obtêm sabendo o nonce.
-      const claim = payload['nonce'];
-      if (typeof claim !== 'string' || (claim !== nonce && claim !== sha256Hex(nonce))) {
-        throw new InvalidIdTokenError();
-      }
+    // Sempre exigido. Google: o nonce vai cru na claim. Apple: o app costuma mandar o SHA-256 do nonce ao
+    // provedor e o cru ao servidor. As duas formas só se obtêm sabendo o nonce.
+    const claim = payload['nonce'];
+    if (
+      nonce === '' ||
+      typeof claim !== 'string' ||
+      (claim !== nonce && claim !== sha256Hex(nonce))
+    ) {
+      throw new InvalidIdTokenError();
     }
     const email = payload['email'];
     return {

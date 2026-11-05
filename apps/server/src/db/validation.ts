@@ -42,13 +42,6 @@ function length(text: string): number {
   return [...text].length;
 }
 
-/**
- * Política de apelido (espelha `users_nickname_nfc_check` e `users_nickname_charset_check`):
- * NFC; letras latinas (Latin-1 e Latin Extended-A/B, sem × e ÷), dígitos, `_`, `.` e `-`;
- * 3 a 16 code points. Sem espaço, tab, controle, zero-width, bidi nem outros alfabetos.
- */
-export const NICKNAME_PATTERN = /^[0-9A-Za-z_.\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F-]+$/;
-
 /** Forma canônica do apelido (NFC). Deve ser aplicada ANTES de validar e de gravar. */
 export function normalizeNickname(raw: string): string {
   return raw.normalize('NFC');
@@ -64,6 +57,112 @@ export function validateNickname(raw: string): string {
     );
   }
   return nickname;
+}
+
+/**
+ * Letras de aparência igual ou quase igual a uma letra ASCII que a decomposição NFD não resolve (sem ponto,
+ * com barra, com traço). `ACCEPTED_*`: continuam valendo em apelido novo (Latin-1 ou Latin Extended-A de
+ * uso real). `SKELETON_ONLY`: NÃO valem em apelido novo, mas entram no esqueleto para colidir com
+ * apelidos antigos que as tenham (o banco ainda aceita U+00C0 a U+024F).
+ */
+const ACCEPTED_LOOKALIKES: Readonly<Record<string, string>> = {
+  ı: 'i',
+  ł: 'l',
+  Ł: 'L',
+  đ: 'd',
+  Đ: 'D',
+  ħ: 'h',
+  Ħ: 'H',
+  ŧ: 't',
+  Ŧ: 'T',
+  ø: 'o',
+  Ø: 'O',
+};
+const SKELETON_ONLY: Readonly<Record<string, string>> = {
+  ƒ: 'f',
+  ǥ: 'g',
+  Ǥ: 'G',
+  ƀ: 'b',
+  ǀ: 'l', // U+01C0 (clique dental), igual a "l" e "I"
+  ȷ: 'j',
+  ŀ: 'l',
+  Ŀ: 'L',
+  ƚ: 'l',
+  ɉ: 'j',
+  Ɉ: 'J',
+  ſ: 's',
+  ĸ: 'k',
+  Ɩ: 'l',
+};
+
+/** Confusáveis ASCII clássicos no resultado final do esqueleto: `I` (i maiúsculo) = `l`, `0` = `o`. */
+const finalLetter = (c: string): string => (c === 'I' ? 'l' : c === '0' ? 'o' : c);
+
+function buildSkeleton(): {
+  from: string;
+  to: string;
+  map: ReadonlyMap<string, string>;
+  extraAccepted: string;
+} {
+  const map = new Map<string, string>();
+  let extraAccepted = '';
+  // U+0100 a U+024F: letra de base ASCII + marca (NFD) => a base. Latin-1 (ã, é, ç...) NÃO entra: acento
+  // do português distingue apelidos de verdade (João x Joao). Essas letras são as únicas de Latin
+  // Extended aceitas em apelido novo, além das de `ACCEPTED_LOOKALIKES`.
+  for (let cp = 0x100; cp <= 0x24f; cp++) {
+    const ch = String.fromCodePoint(cp);
+    const base = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (base !== ch && /^[A-Za-z]$/.test(base)) {
+      map.set(ch, finalLetter(base));
+      extraAccepted += ch;
+    }
+  }
+  for (const [ch, base] of Object.entries(ACCEPTED_LOOKALIKES)) {
+    map.set(ch, finalLetter(base));
+    if (ch.charCodeAt(0) >= 0x100) extraAccepted += ch;
+  }
+  for (const [ch, base] of Object.entries(SKELETON_ONLY)) map.set(ch, finalLetter(base));
+  map.set('I', 'l');
+  map.set('0', 'o');
+  let from = '';
+  let to = '';
+  for (const [ch, base] of map) {
+    from += ch;
+    to += base;
+  }
+  return { from, to, map, extraAccepted };
+}
+
+const SKELETON = buildSkeleton();
+/** Tabelas do esqueleto para o `translate(nickname, from, to)` do Postgres (mesma regra do TypeScript). */
+export const SKELETON_TRANSLATE_FROM = SKELETON.from;
+export const SKELETON_TRANSLATE_TO = SKELETON.to;
+
+const hex4 = (ch: string): string => `\\u${ch.codePointAt(0)?.toString(16).padStart(4, '0')}`;
+
+/**
+ * Política de apelido para apelidos NOVOS: NFC; ASCII (letras, dígitos), `_`, `.`, `-`; Latin-1 (acentos do
+ * português, sem × e ÷); e, de Latin Extended-A/B, só as letras que decompõem por NFD em letra ASCII mais
+ * marca (ā, ğ, ǎ...) e as de `ACCEPTED_LOOKALIKES` (ı, ł, đ...). O resto de U+0100 a U+024F (ǀ, ȷ, ŀ, ƚ,
+ * ɉ, ſ, ĸ, Ɩ...) é recusado. 3 a 16 code points. Sem espaço, tab, controle, zero-width, bidi nem outros
+ * alfabetos. O CHECK do banco (`users_nickname_charset_check`) segue mais largo (U+00C0 a U+024F), então
+ * apelidos que já existem continuam carregando.
+ */
+export const NICKNAME_PATTERN = new RegExp(
+  `^[0-9A-Za-z_.\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u00FF${[...SKELETON.extraAccepted].map(hex4).join('')}-]+$`,
+);
+
+/**
+ * "Esqueleto" do apelido para unicidade: Latin Extended e letras com barra viram a letra ASCII parecida,
+ * `I` vira `l` e `0` vira `o` (aceitando o falso positivo `Ivo` x `lvo`), e o resultado vai para
+ * minúsculas. `ı` (sem ponto) colide com `i`, `ǀeo` com `leo`; `João` e `Joao` continuam distintos. Cada
+ * caractere vira um caractere (o tamanho não muda). Aplicado pelo índice único de expressão
+ * `users_nickname_skeleton_key` (a mesma tabela, por `translate`) e pelo repositório em memória.
+ */
+export function nicknameSkeleton(nickname: string): string {
+  let out = '';
+  for (const ch of normalizeNickname(nickname)) out += SKELETON.map.get(ch) ?? ch;
+  return out.toLowerCase();
 }
 
 export function assertProviderSubject(subject: string): void {
