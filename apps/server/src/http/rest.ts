@@ -38,6 +38,7 @@ import type {
   SocialProvider,
 } from '@trucaco/protocol';
 import { log } from '../logger';
+import { requestIdOf } from './observability';
 import { SlidingWindowLimiter, clientKey, type TrustProxy } from '../rateLimit';
 import {
   clearRefreshCookie,
@@ -156,6 +157,7 @@ export function installBaseMiddleware(app: Application, opts: BaseMiddlewareOpti
         res.setHeader('Access-Control-Allow-Origin', origin);
         // Cookie do refresh do web (`credentials: 'include'`): só para origem da lista, nunca `*`.
         res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id');
       }
       if (req.method === 'OPTIONS' && req.headers['access-control-request-method'] !== undefined) {
         if (!ok) {
@@ -1035,6 +1037,7 @@ export function mountFallbacks(app: Application): void {
     }
     // Só nome e código (o erro bruto do Prisma/Redis pode carregar dados): nunca a mensagem nem a stack.
     log.error('rest: erro interno', {
+      requestId: requestIdOf(res.locals),
       name: typeof e.name === 'string' ? e.name : 'unknown',
       code: err instanceof PersistenceError ? err.code : typeof e.code === 'string' ? e.code : null,
     });

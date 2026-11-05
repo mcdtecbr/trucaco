@@ -42,6 +42,21 @@ describe('getServerUrl', () => {
       prod('');
       expect(getServerUrl()).toBe(DEFAULT_SERVER_URL);
     });
+    it('sem a variável, no web de produção usa a origem da página (mesma origem)', () => {
+      prod('');
+      vi.stubGlobal('window', { location: { origin: 'https://trucaco.exemplo.com' } });
+      expect(getServerUrl()).toBe('https://trucaco.exemplo.com');
+    });
+    it('sem a variável, a origem da página em http continua recusada', () => {
+      prod('');
+      vi.stubGlobal('window', { location: { origin: 'http://trucaco.exemplo.com' } });
+      expect(() => getServerUrl()).toThrow('EXPO_PUBLIC_SERVER_URL');
+    });
+    it('com a variável, ela vale mesmo havendo origem de página', () => {
+      prod('https://api.trucaco.app');
+      vi.stubGlobal('window', { location: { origin: 'https://outra.exemplo.com' } });
+      expect(getServerUrl()).toBe('https://api.trucaco.app');
+    });
     it('__DEV__ === false também conta como produção', () => {
       vi.stubEnv('NODE_ENV', 'development');
       vi.stubGlobal('__DEV__', false);
