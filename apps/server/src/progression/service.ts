@@ -14,6 +14,7 @@ import {
   isValidMatch,
 } from './achievements';
 import type { PartnerWins, ProgressionPolicy } from './achievements';
+import { metrics } from '../metrics';
 import { advanceMissions, dailyMissionsFor, weeklyMissionsFor } from './missions';
 import { periodKeys } from './period';
 
@@ -118,8 +119,13 @@ export async function applyMatchProgression(
               ],
         );
   const options = { scored: evaluations.length > 0 };
+  // Só conta `notScored` quando a partida foi de fato aplicada (reaplicação duplicada não infla a métrica).
+  const done = (result: ApplyProgressResult): ApplyProgressResult => {
+    if (!scoring && result.applied) metrics.inc('progressionNotScored');
+    return result;
+  };
   try {
-    return await progression.applyMatchProgress(matchId, deltas, options);
+    return done(await progression.applyMatchProgress(matchId, deltas, options));
   } catch (err) {
     if (!(err instanceof InvalidInputError)) throw err;
     // Conta apagada entre a gravação da partida e a avaliação: a transação foi desfeita inteira, então
@@ -129,6 +135,6 @@ export async function applyMatchProgression(
       if ((await progression.getPublicProfile(d.userId)) !== null) alive.push(d);
     }
     if (alive.length === 0 || alive.length === deltas.length) throw err;
-    return progression.applyMatchProgress(matchId, alive, options);
+    return done(await progression.applyMatchProgress(matchId, alive, options));
   }
 }

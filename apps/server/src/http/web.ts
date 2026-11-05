@@ -20,6 +20,7 @@ import type { Application, NextFunction, Request, Response } from 'express';
 export const API_PREFIXES = [
   '/auth',
   '/health',
+  '/metrics',
   '/matches',
   '/me',
   '/users',

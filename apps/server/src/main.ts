@@ -1,5 +1,6 @@
 import { AuthService } from './auth/authService';
 import { loadServerConfig } from './auth/config';
+import { METRICS_TOKEN_MIN_LENGTH } from './http/observability';
 import { buildIdentityVerifier } from './auth/identity';
 import { RedisTokenStore } from './auth/redisTokenStore';
 import { MemoryTokenStore, type TokenStore } from './auth/tokenStore';
@@ -166,6 +167,12 @@ async function main(): Promise<void> {
     }
   }
 
+  // `/metrics` só existe com token forte (falha fechado se estiver curto demais).
+  const metricsToken = process.env.METRICS_TOKEN ?? '';
+  if (metricsToken !== '' && metricsToken.length < METRICS_TOKEN_MIN_LENGTH) {
+    throw new Error(`METRICS_TOKEN precisa ter pelo menos ${METRICS_TOKEN_MIN_LENGTH} caracteres.`);
+  }
+
   const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
   const server = await createServer({
     port: resolvePort(process.env.PORT),
@@ -183,6 +190,7 @@ async function main(): Promise<void> {
       corsOrigins: config.corsOrigins,
       limits: config.limits,
       trustProxy: config.trustProxy,
+      ...(metricsToken !== '' ? { metricsToken } : {}),
       ...(webDistDir !== undefined ? { webDistDir } : {}),
       allowDevAuth: devFlag && config.devLike,
     },

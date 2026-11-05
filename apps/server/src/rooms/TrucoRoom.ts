@@ -77,6 +77,7 @@ import {
 } from '../game/schema';
 import type { TableState } from '../game/schema';
 import { log } from '../logger';
+import { metrics } from '../metrics';
 import { AuthError, bearerFromHeader } from '../auth/authService';
 import { InvalidInputError, PersistenceError } from '../db/types';
 import type {
@@ -501,6 +502,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     if (grant !== null) this.armGrantTimers(grant);
     if (this.config.patchRateMs !== undefined) this.setPatchRate(this.config.patchRateMs);
     this.unsubscribers.push(
+      metrics.registerRoom(this.roomId, () => ({
+        visibility: this.options?.visibility === 'private' ? 'private' : 'public',
+        seatsOccupied: this.userBySeat.size,
+        playersConnected: this.connectedHumans().length,
+      })),
       onBlockChange((c) => {
         const edge = `${c.blockerId}>${c.blockedId}`;
         const seated = new Set(this.userBySeat.values());
@@ -925,6 +931,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * eventos perdidos, relógio do turno. Cancela o bot do turno (nunca duas ações no mesmo turno).
    */
   private resume(client: Client, seat: Seat): void {
+    metrics.inc('reconnections');
     this.reconnectCount.set(seat, (this.reconnectCount.get(seat) ?? 0) + 1);
     this.botSeats.delete(seat);
     this.absenceBotSeats.delete(seat);
@@ -1710,6 +1717,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     // Sinais por assento desta partida (copiados já: a revanche zera o contador).
     const signals = new Map(this.signalsBySeat);
     const saving = recorder.save(repo, input, this.roomId).then(async (ok) => {
+      metrics.inc(ok ? 'matchesSaved' : 'matchesSaveFailed');
       if (ok && finished) await this.persistNewPairs();
       if (ok) await this.persistProgression(recorder.matchId, input, signals);
       return ok;
@@ -1733,6 +1741,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         signals,
         this.config.progressionPolicy,
       );
+      if (result === null) metrics.inc('progressionInvalid');
+      else metrics.inc(result.applied ? 'progressionApplied' : 'progressionDuplicate');
       if (result?.applied === true) {
         log.info('truco: progressão aplicada', {
           room: this.roomId,
@@ -1741,6 +1751,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         });
       }
     } catch (err) {
+      metrics.inc('progressionFailed');
       // Só nome e código: o erro bruto do Prisma pode carregar dados.
       log.error('truco: falha ao aplicar progressão', {
         room: this.roomId,

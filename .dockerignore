@@ -7,9 +7,13 @@
 **/.expo
 **/coverage
 docs
-assets
-.env
-.env.*
-!.env.example
+assets/rive/source
+assets/rive/test_matrix
+**/.env
+**/.env.*
+!**/.env.example
 *.md
 **/src/generated
+**/dist-e2e*
+**/test-results*
+**/playwright-report

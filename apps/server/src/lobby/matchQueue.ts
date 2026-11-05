@@ -39,6 +39,11 @@ export class MatchQueue {
     return this.entries.length;
   }
 
+  /** Quantos esperam, agrupados pelo tamanho da mesa que formariam (hoje sempre 4). Sem userId. */
+  countByTableSize(): Record<string, number> {
+    return this.entries.length === 0 ? {} : { [String(QUEUE_GROUP_SIZE)]: this.entries.length };
+  }
+
   has(userId: string): boolean {
     return this.entries.some((e) => e.userId === userId);
   }

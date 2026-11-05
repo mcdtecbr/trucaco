@@ -23,7 +23,12 @@ function isProductionBuild(): boolean {
  */
 export function getServerUrl(): string {
   const raw = process.env.EXPO_PUBLIC_SERVER_URL;
-  const url = (raw !== undefined && raw !== '' ? raw : DEFAULT_SERVER_URL).replace(/\/+$/, '');
+  const configured = raw !== undefined && raw !== '';
+  // Web de produção servido pelo próprio servidor (mesma origem): sem variável, usa a origem da página.
+  const pageOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined;
+  const sameOrigin =
+    !configured && isProductionBuild() && pageOrigin !== undefined && pageOrigin !== 'null';
+  const url = (configured ? raw : sameOrigin ? pageOrigin : DEFAULT_SERVER_URL).replace(/\/+$/, '');
   if (isProductionBuild()) {
     let parsed: URL;
     try {

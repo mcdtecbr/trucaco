@@ -118,6 +118,64 @@ Prazos são propostas para o usuário confirmar (privacidade/jurídico); mudar u
 
 Antes do 7A nenhum job rodava. Convidados nunca expiravam: a tabela `users` cresce a cada `POST /auth/guest` (limitado por `AUTH_GUEST_PER_IP_PER_HOUR` e `AUTH_GUEST_GLOBAL_PER_HOUR`). Se o Redis falha depois de `createGuest` gravar o usuário, sobra um convidado sem sessão, porque o repositório não tem `delete`. Expiração de convidados é decisão pendente (produto e `dalva-dba`).
 
+### Telemetria de produto por SQL (7F)
+
+Sem rastreamento novo no cliente: tudo sai de `users.last_seen_at` (atualizado a cada `/auth/refresh`, melhor esforço, então é "última renovação de sessão", não "último toque") e de `matches`/`match_players`. Rodar em réplica ou fora do horário de pico, só leitura, e nunca exportar `user_id` ou `nickname` para ferramenta externa: agregar sempre. Partidas apagadas pela retenção (12 meses, canceladas 30 dias) saem das contagens.
+
+```sql
+-- DAU: usuários ativos por dia (último refresh; subestima quem não renovou no dia, pois só guarda o ÚLTIMO)
+SELECT date_trunc('day', last_seen_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia, count(*) AS usuarios
+FROM users
+WHERE last_seen_at >= now() - interval '30 days'
+GROUP BY 1 ORDER BY 1;
+
+-- DAU pelo que de fato aconteceu (mais fiel): usuários distintos que terminaram partida no dia
+SELECT date_trunc('day', m.ended_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+       count(DISTINCT mp.user_id) AS jogadores
+FROM matches m JOIN match_players mp ON mp.match_id = m.id
+WHERE m.status = 'finished' AND mp.user_id IS NOT NULL AND m.ended_at >= now() - interval '30 days'
+GROUP BY 1 ORDER BY 1;
+
+-- Partidas por jogador (histograma: quantos jogadores jogaram 1, 2, 3... partidas terminadas nos últimos 30 dias)
+SELECT partidas, count(*) AS jogadores FROM (
+  SELECT mp.user_id, count(*) AS partidas
+  FROM matches m JOIN match_players mp ON mp.match_id = m.id
+  WHERE m.status = 'finished' AND mp.user_id IS NOT NULL AND m.ended_at >= now() - interval '30 days'
+  GROUP BY mp.user_id
+) t GROUP BY partidas ORDER BY partidas;
+
+-- Duplas repetidas: pares de parceiros (assentos 0/2 e 1/3) com 2+ partidas juntos (conta pares, não identifica ninguém no resultado)
+SELECT partidas_juntos, count(*) AS duplas FROM (
+  SELECT least(a.user_id, b.user_id) AS u1, greatest(a.user_id, b.user_id) AS u2, count(*) AS partidas_juntos
+  FROM match_players a
+  JOIN match_players b ON b.match_id = a.match_id AND b.seat = (a.seat + 2) % 4 AND a.seat < b.seat
+  JOIN matches m ON m.id = a.match_id AND m.status = 'finished'
+  WHERE a.user_id IS NOT NULL AND b.user_id IS NOT NULL
+  GROUP BY 1, 2
+) t GROUP BY partidas_juntos ORDER BY partidas_juntos;
+
+-- Retenção D1 e D7 por coorte de cadastro (dia 0 = created_at). Atividade = ter terminado partida no dia
+-- D+N (fuso de São Paulo). Só coortes com idade suficiente entram no denominador.
+WITH coorte AS (
+  SELECT id, (created_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia0
+  FROM users  -- para só contas vinculadas: WHERE provider <> 'guest'
+),
+atividade AS (
+  SELECT DISTINCT mp.user_id AS id, (m.ended_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia
+  FROM matches m JOIN match_players mp ON mp.match_id = m.id
+  WHERE m.status = 'finished' AND mp.user_id IS NOT NULL
+)
+SELECT c.dia0,
+       count(*) AS cadastros,
+       round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM atividade a WHERE a.id = c.id AND a.dia = c.dia0 + 1)) / count(*), 1) AS d1_pct,
+       round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM atividade a WHERE a.id = c.id AND a.dia = c.dia0 + 7)) / count(*), 1) AS d7_pct
+FROM coorte c
+WHERE c.dia0 <= (now() AT TIME ZONE 'America/Sao_Paulo')::date - 7
+GROUP BY c.dia0 ORDER BY c.dia0 DESC LIMIT 30;
+```
+
+Observações: convidados nunca expiram e cada logout cria um novo (ver acima), então a retenção de convidados é pessimista; filtre `provider <> 'guest'` para ver só contas vinculadas. A retenção D1/D7 por partida terminada ignora quem só abriu o app. As cinco consultas foram executadas sem erro num Postgres 16 de teste (banco quase vazio): a sintaxe está validada, os números não; conferir no staging com dados reais antes de confiar neles. O `/metrics` (README do servidor) cobre o operacional (salas, fila, erros) em tempo real; estas consultas cobrem o produto, em retrospecto.
+
 ### Observações e limites conhecidos
 
 - O `CHECK` de assento é 0..3. A mesa de 6 (Fase 8) troca `match_players_seat_check` e `match_players_team_check` (`team = seat % 2` continua válido).

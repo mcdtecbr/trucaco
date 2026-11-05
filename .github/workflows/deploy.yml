@@ -1,0 +1,123 @@
+name: Deploy (produção)
+
+# Deploy do beta na Fly.io. Roda em push na master (merge de PR develop -> master) e sob demanda.
+# Nada roda sem o secret FLY_API_TOKEN: o job de deploy falha cedo com mensagem clara.
+# Configuração manual necessária no GitHub (infra/README.md): ambiente `production` com revisores
+# obrigatórios (aprovação manual) e o secret FLY_API_TOKEN nesse ambiente.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Um deploy por vez e nunca cancelado no meio (uma migração interrompida é pior que uma fila).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Mesma sequência do job `verify` do ci.yml (replicada: o ci.yml não expõe workflow_call).
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  deploy:
+    needs: verify
+    # Defesa extra: o workflow_dispatch pode ser acionado em outra branch; só a master implanta.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # A aprovação manual vem das regras de proteção do ambiente (Settings > Environments > production).
+    environment:
+      name: production
+      url: ${{ steps.target.outputs.url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Exigir o secret FLY_API_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::Secret FLY_API_TOKEN ausente no ambiente 'production'. Crie com 'fly tokens create deploy -a <app>' e cadastre em Settings > Environments > production > Secrets. Nada foi implantado."
+            exit 1
+          fi
+
+      # Origem pública e versão do protocolo esperada pelo smoke. A URL vem do nome do app em fly.toml,
+      # ou da variável PRODUCTION_URL do repositório (domínio próprio).
+      - name: Resolver alvo do deploy
+        id: target
+        run: |
+          app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' infra/fly.toml | head -n1)
+          case "$app" in
+            ""|*TROCAR*) echo "::error::infra/fly.toml ainda tem o nome de app placeholder (TROCAR)."; exit 1 ;;
+          esac
+          printf '%s' "$app" | grep -Eq '^[a-z0-9-]+$' || { echo "::error::nome de app fora de ^[a-z0-9-]+$"; exit 1; }
+          url="${PRODUCTION_URL:-https://${app}.fly.dev}"
+          url="${url%/}"
+          printf '%s' "$url" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]+)?$' || { echo "::error::URL de produção inválida (esperado https://host sem caminho)"; exit 1; }
+          proto=$(sed -n 's/^export const PROTOCOL_VERSION = \([0-9]*\);/\1/p' packages/protocol/src/catalogs.ts | head -n1)
+          [ -n "$proto" ] || { echo "::error::não achei PROTOCOL_VERSION em packages/protocol/src/catalogs.ts"; exit 1; }
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "protocol=$proto" >> "$GITHUB_OUTPUT"
+        env:
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
+
+      # O SHA fixa a action (tag 1.5). O flyctl instalado segue a versão estável dela: para fixar também o
+      # flyctl, acrescente `with: version: <x.y.z>` depois de conferir a versão em `fly version`.
+      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
+
+      # Contexto = raiz do repositório (o Dockerfile copia apps/ e packages/). Build remoto na Fly.
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy . --config infra/fly.toml --dockerfile infra/Dockerfile.server --remote-only
+
+      # /health confirma que o app responde e que o protocolo é o esperado. NÃO identifica o build: se o
+      # protocolo não mudou, uma máquina antiga ainda passaria. O `flyctl deploy` já espera os checks da
+      # máquina nova (rolling) e falha se ela não ficar saudável; um id de build no /health exigiria mexer
+      # em apps/server (fora desta tarefa). Em falha, rollback manual: infra/README.md.
+      - name: Smoke pós-deploy
+        env:
+          TARGET_URL: ${{ steps.target.outputs.url }}
+          TARGET_PROTOCOL: ${{ steps.target.outputs.protocol }}
+        run: |
+          expected="\"protocol\":${TARGET_PROTOCOL},"
+          url="$TARGET_URL"
+          for i in $(seq 1 18); do
+            body=$(curl -fsS --max-time 10 "$url/health" || true)
+            echo "tentativa $i: $body"
+            case "$body" in
+              *'"status":"ok"'*"$expected"*) echo "ok"; exit 0 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::/health não respondeu ok com $expected em $url"
+          exit 1
+      - name: Smoke da página inicial
+        env:
+          TARGET_URL: ${{ steps.target.outputs.url }}
+        run: |
+          curl -fsS --max-time 10 "$TARGET_URL/" | grep -qi '<html' \
+            || { echo "::error::GET / não devolveu o index.html"; exit 1; }

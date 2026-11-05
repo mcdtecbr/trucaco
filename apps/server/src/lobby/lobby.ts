@@ -734,6 +734,11 @@ export class Lobby {
     return { queued: this.queue.size, tables: this.rooms.size, users: this.slots.size };
   }
 
+  /** Fila pública por tamanho de mesa (agregado, sem userId). */
+  queueByTableSize(): Record<string, number> {
+    return this.queue.countByTableSize();
+  }
+
   /** Teste: slot do usuário. */
   slotKind(userId: string): Slot['kind'] | null {
     return this.slots.get(userId)?.kind ?? null;

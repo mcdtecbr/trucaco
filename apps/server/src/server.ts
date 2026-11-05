@@ -10,6 +10,7 @@ import type { AuthContext } from '@colyseus/core';
 import type { MatchRepository, ProgressionRepository, UserRepository } from './db/types';
 import { installBaseMiddleware, mountFallbacks, mountRest } from './http/rest';
 import { mountLobbyRoutes } from './http/lobbyRoutes';
+import { installRequestId, mountMetrics } from './http/observability';
 import { mountWeb } from './http/web';
 import {
   DEFAULT_LOBBY_CONFIG,
@@ -64,6 +65,8 @@ export interface ServerDeps {
    * Só para testes/ferramentas internas.
    */
   readonly directMatchmake?: boolean;
+  /** Token Bearer de `GET /metrics` (>= 32 caracteres). Ausente: a rota não existe (404). */
+  readonly metricsToken?: string;
 }
 
 export interface CreateServerOptions {
@@ -173,6 +176,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
       handleProtocols: selectBearerProtocol,
     }),
     express: (app) => {
+      installRequestId(app);
       installBaseMiddleware(app, {
         corsOrigins: deps.corsOrigins ?? [],
         hsts: process.env.NODE_ENV === 'production',
@@ -180,6 +184,7 @@ export function buildColyseusServer(room: TrucoRoomConfig = {}, deps: ServerDeps
       app.get('/health', (_req, res) => {
         res.json(buildHealth(deps.auth?.socialProviders() ?? []));
       });
+      mountMetrics(app, { token: deps.metricsToken, trustProxy: deps.trustProxy ?? false });
       app.post(LIMITED_PATH, (req, res, next) => {
         if (!limited.has(req)) {
           next();
