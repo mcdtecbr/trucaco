@@ -5,8 +5,8 @@
 #   fly deploy . --config infra/fly.toml --dockerfile infra/Dockerfile.server --remote-only
 # Segredos NUNCA entram aqui: `fly secrets set` (lista em infra/README.md).
 
-# TROQUE antes de `fly apps create`: nome único global na Fly. O domínio padrão será <app>.fly.dev.
-app = "trucaco-beta-TROCAR"
+# Nome do app na Fly (domínio padrão: <app>.fly.dev).
+app = "trucaco-beta-marcelo"
 # gru = São Paulo, a região mais próxima dos jogadores. Confirme com `fly platform regions` se está
 # disponível para a organização (e se o Postgres gerenciado existe nela); senão use a mais próxima (ex.: scl, iad).
 primary_region = "gru"
