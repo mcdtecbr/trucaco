@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-e2e
+dist-e2e-same
 playwright-report
 test-results
 test-results-perf

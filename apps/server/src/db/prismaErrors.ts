@@ -8,6 +8,8 @@ import {
 } from './types';
 
 export const NICKNAME_CONSTRAINT = 'users_nickname_lower_key';
+/** Índice único de expressão sobre o esqueleto do apelido (migração do 7A). */
+export const NICKNAME_SKELETON_CONSTRAINT = 'users_nickname_skeleton_key';
 export const PROVIDER_CONSTRAINT = 'users_provider_provider_subject_key';
 
 const SAFE_NAME = /^[A-Za-z0-9_]{1,63}$/;
@@ -86,7 +88,8 @@ export function translateDbError(error: unknown): Error {
   const constraint = constraintNameOf(error);
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === 'P2002') {
-      if (constraint === NICKNAME_CONSTRAINT) return new NicknameTakenError();
+      if (constraint === NICKNAME_CONSTRAINT || constraint === NICKNAME_SKELETON_CONSTRAINT)
+        return new NicknameTakenError();
       if (constraint === PROVIDER_CONSTRAINT) return new ProviderSubjectTakenError();
       return new InvalidInputError('Registro duplicado.', constraint);
     }

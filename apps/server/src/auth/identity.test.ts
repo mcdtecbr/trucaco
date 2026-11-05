@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { SignJWT, createLocalJWKSet, errors, exportJWK, generateKeyPair } from 'jose';
 import type { JWK } from 'jose';
+import type { SocialProvider } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { setLogSink } from '../logger';
 import {
@@ -16,6 +17,20 @@ import {
   buildIdentityVerifier,
   enabledProviders,
 } from './identity';
+
+/** Nonce padrão dos testes: `sign` o põe na claim e `V.verify` o usa quando o teste não informa outro. */
+const NONCE = 'nonce-padrao-do-teste';
+
+/** Verificador com o nonce padrão (a API real exige o 3º argumento). */
+class V extends JwksIdentityVerifier {
+  override verify(
+    provider: SocialProvider,
+    idToken: string,
+    nonce: string = NONCE,
+  ): ReturnType<JwksIdentityVerifier['verify']> {
+    return super.verify(provider, idToken, nonce);
+  }
+}
 
 const GOOGLE_AUD = 'google-client.apps.googleusercontent.com';
 const APPLE_AUD = 'com.mcdtec.trucaco';
@@ -36,7 +51,7 @@ async function setup() {
   const good = await makeKeys('good');
   const evil = await makeKeys('good'); // mesmo kid, chave outra: assinatura tem de falhar
   const jwks = createLocalJWKSet({ keys: [good.jwk] });
-  const verifier = new JwksIdentityVerifier({
+  const verifier = new V({
     clientIds: { google: [GOOGLE_AUD, 'outro-google'], apple: [APPLE_AUD] },
     keys: { google: jwks, apple: jwks },
   });
@@ -50,7 +65,7 @@ async function setup() {
       alg?: string;
     } = {},
   ): Promise<string> => {
-    const jwt = new SignJWT(claims)
+    const jwt = new SignJWT({ nonce: NONCE, ...claims })
       .setProtectedHeader({ alg: o.alg ?? 'RS256', kid: 'good' })
       .setIssuer(o.iss ?? 'https://accounts.google.com')
       .setAudience(o.aud ?? GOOGLE_AUD)
@@ -155,7 +170,7 @@ describe('JwksIdentityVerifier', () => {
     }
   });
 
-  it('nonce: confere cru (Google) ou em SHA-256 (Apple); ausente ou diferente é recusado', async () => {
+  it('nonce: confere cru (Google) ou em SHA-256 (Apple); sempre exigido, ausente ou diferente é recusado', async () => {
     const { verifier, sign } = await setup();
     const raw = 'nonce-do-cliente-123';
     const withRaw = await sign({ sub: 'a', nonce: raw });
@@ -167,15 +182,22 @@ describe('JwksIdentityVerifier', () => {
       InvalidIdTokenError,
     );
     // token sem nonce, mas o cliente enviou um: não dá para provar o vínculo
-    await expect(verifier.verify('google', await sign({ sub: 'a' }), raw)).rejects.toBeInstanceOf(
-      InvalidIdTokenError,
-    );
+    await expect(
+      verifier.verify('google', await sign({ sub: 'a', nonce: undefined }), raw),
+    ).rejects.toBeInstanceOf(InvalidIdTokenError);
     // nonce numérico na claim não passa
     await expect(
       verifier.verify('google', await sign({ sub: 'a', nonce: 5 }), '5'),
     ).rejects.toBeInstanceOf(InvalidIdTokenError);
-    // sem nonce na requisição, a claim não é exigida
-    await expect(verifier.verify('google', withRaw)).resolves.toBeDefined();
+    // nonce vazio nunca vale, mesmo que a claim seja vazia
+    await expect(
+      verifier.verify('google', await sign({ sub: 'a', nonce: '' }), ''),
+    ).rejects.toBeInstanceOf(InvalidIdTokenError);
+    // o nonce é sempre exigido: token com a claim padrão só passa com o nonce padrão
+    await expect(verifier.verify('google', await sign({ sub: 'a' }))).resolves.toBeDefined();
+    await expect(verifier.verify('google', await sign({ sub: 'a' }), 'x')).rejects.toBeInstanceOf(
+      InvalidIdTokenError,
+    );
   });
 
   it('e-mail só sai se verificado (boolean ou "true"); nunca de claim não verificada', async () => {
@@ -194,7 +216,7 @@ describe('JwksIdentityVerifier', () => {
   it('provedor sem client ID fica desligado e recusa mesmo token bom', async () => {
     const { good } = await setup();
     const jwks = createLocalJWKSet({ keys: [good.jwk] });
-    const onlyApple = new JwksIdentityVerifier({
+    const onlyApple = new V({
       clientIds: { google: [], apple: [APPLE_AUD] },
       keys: { google: jwks, apple: jwks },
     });
@@ -221,7 +243,7 @@ describe('JwksIdentityVerifier', () => {
 
 describe('JWKS indisponível x token inválido', () => {
   const make = (err: Error) =>
-    new JwksIdentityVerifier({
+    new V({
       clientIds: { google: [GOOGLE_AUD], apple: [] },
       keys: {
         google: (async () => {
@@ -314,7 +336,7 @@ describe('buildIdentityVerifier', () => {
   });
 
   it('o verificador desligado recusa verify', async () => {
-    await expect(DISABLED_IDENTITY.verify('google', 'x')).rejects.toBeInstanceOf(
+    await expect(DISABLED_IDENTITY.verify('google', 'x', 'n')).rejects.toBeInstanceOf(
       InvalidIdTokenError,
     );
   });

@@ -132,7 +132,8 @@ export class PrismaUserRepository implements UserRepository {
   async updateNickname(rawId: string, rawNickname: string): Promise<void> {
     const id = normalizeId(rawId);
     const nickname = validateNickname(rawNickname);
-    // A unicidade (índice em lower(nickname)) é traduzida por `guarded` em `NicknameTakenError`.
+    // A unicidade (índices `users_nickname_lower_key` e `users_nickname_skeleton_key`, este contra letra
+    // parecida) é traduzida por `guarded` em `NicknameTakenError`.
     const result = await guarded(() =>
       this.db.user.updateMany({ where: { id }, data: { nickname } }),
     );

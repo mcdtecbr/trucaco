@@ -294,3 +294,53 @@ describe('RedisTokenStore: claimIdToken, revokeAllForUser com exceção e peekLi
     await store.close();
   });
 });
+
+describe('RedisTokenStore: nonce do login social (Redis real)', () => {
+  const hex = (): string => randomUUID().replaceAll('-', '').repeat(2);
+
+  it('grava só nonce:<hash> com o TTL pedido, consome com DEL e nunca renova', async () => {
+    const store = new RedisTokenStore(URL);
+    const key = hex();
+    await store.putNonce(key, 300);
+    const redisKey = `${REDIS_PREFIX}nonce:${key}`;
+    const ttl = await probe.ttl(redisKey);
+    expect(ttl).toBeGreaterThan(295);
+    expect(ttl).toBeLessThanOrEqual(300);
+    expect(await store.consumeNonce(key)).toBe(true);
+    expect(await probe.exists(redisKey)).toBe(0);
+    expect(await store.consumeNonce(key)).toBe(false);
+    await store.close();
+  });
+
+  it('o AuthService emite nonce cujo Redis guarda só o SHA-256 (nunca o valor em claro)', async () => {
+    const store = new RedisTokenStore(URL);
+    const auth = new AuthService(createMemoryRepositories().users, store, {
+      secret: new TextEncoder().encode('segredo-de-teste-com-32-bytes-ou-mais!!'),
+      issuer: 'trucaco',
+      audience: 'trucaco-api',
+      accessTtlSec: 900,
+      refreshTtlSec: 120,
+      refreshReuseGraceSec: 0,
+      refreshFamilyMaxSec: 7_776_000,
+      clockToleranceSec: 5,
+    });
+    const { nonce, expiresIn } = await auth.issueNonce();
+    expect(expiresIn).toBe(300);
+    for (const key of await probe.keys(`${REDIS_PREFIX}nonce:*`)) expect(key).not.toContain(nonce);
+    await store.close();
+  });
+
+  it('duas instâncias disputando o mesmo nonce: só uma consome', async () => {
+    const a = new RedisTokenStore(URL);
+    const b = new RedisTokenStore(URL);
+    const key = hex();
+    await a.putNonce(key, 60);
+    const results = await Promise.all([
+      ...Array.from({ length: 10 }, () => a.consumeNonce(key)),
+      ...Array.from({ length: 10 }, () => b.consumeNonce(key)),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    await a.close();
+    await b.close();
+  });
+});

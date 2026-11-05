@@ -11,6 +11,9 @@ import {
   PrismaUserRepository,
 } from './db';
 import type { MatchRepository, PrismaHandle, ProgressionRepository, UserRepository } from './db';
+import { startRetentionJob } from './db/retention';
+import type { RetentionJob } from './db/retention';
+import { assertWebDist } from './http/web';
 import { log } from './logger';
 import { roomConfigFromEnv } from './rooms/roomSeed';
 import { createServer } from './server';
@@ -143,6 +146,26 @@ async function main(): Promise<void> {
   if (config.social.testIdentity) log.warn('AUTH_TEST_IDENTITY ligado: idToken de teste aceito');
   log.info('login social', { providers: social.length === 0 ? 'desligado' : social.join(',') });
 
+  // Web na mesma origem (opcional): valida a pasta ANTES de subir.
+  const webDir = process.env.WEB_DIST_DIR;
+  const webDistDir = webDir === undefined || webDir === '' ? undefined : assertWebDist(webDir);
+  if (webDistDir !== undefined) log.info('web: estático servido na mesma origem');
+
+  // Retenção diária (só com banco real).
+  let retention: RetentionJob | null = null;
+  if (process.env.RETENTION_ENABLED === 'true') {
+    if (prismaHandle === null) {
+      log.warn('RETENTION_ENABLED ignorado: sem DATABASE_URL não há o que expurgar');
+    } else {
+      retention = startRetentionJob(prismaHandle.prisma);
+      log.info('retention: agendado', { everyHours: 24 });
+    }
+  } else if (process.env.RETENTION_ENABLED !== undefined && process.env.RETENTION_ENABLED !== '') {
+    if (process.env.RETENTION_ENABLED !== 'false') {
+      throw new Error('RETENTION_ENABLED deve ser true ou false.');
+    }
+  }
+
   const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
   const server = await createServer({
     port: resolvePort(process.env.PORT),
@@ -160,6 +183,7 @@ async function main(): Promise<void> {
       corsOrigins: config.corsOrigins,
       limits: config.limits,
       trustProxy: config.trustProxy,
+      ...(webDistDir !== undefined ? { webDistDir } : {}),
       allowDevAuth: devFlag && config.devLike,
     },
   });
@@ -169,6 +193,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    retention?.stop();
     console.log(JSON.stringify({ level: 'info', msg: 'shutting down', signal }));
     server
       .close()

@@ -9,7 +9,11 @@ import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthService, hashRefresh } from '../auth/authService';
 import { DEFAULT_LIMITS, type AuthConfig, type RestLimits } from '../auth/config';
-import { IdentityUnavailableError, TestIdentityVerifier } from '../auth/identity';
+import {
+  IdentityUnavailableError,
+  InvalidIdTokenError,
+  TestIdentityVerifier,
+} from '../auth/identity';
 import type { IdentityVerifier } from '../auth/identity';
 import { MemoryTokenStore, TokenStoreUnavailableError } from '../auth/tokenStore';
 import { createMemoryRepositories } from '../db';
@@ -46,6 +50,7 @@ interface SocialBody extends Session {
 
 async function start(
   opts: {
+    trustProxy?: boolean;
     limits?: Partial<RestLimits>;
     identity?: IdentityVerifier;
     tokens?: MemoryTokenStore;
@@ -70,7 +75,7 @@ async function start(
     progression: repos.progression,
     limits: { ...DEFAULT_LIMITS, perIpPerMin: 10_000, perUserPerMin: 10_000, ...opts.limits },
     corsOrigins: [],
-    trustProxy: false,
+    trustProxy: opts.trustProxy ?? false,
   });
   mountFallbacks(app);
   const server = await new Promise<HttpServer>((resolve) => {
@@ -96,11 +101,23 @@ async function start(
     const { user, pair } = await auth.createGuest();
     return { user, accessToken: pair.accessToken, refreshToken: pair.refreshToken };
   };
-  const login = (provider: 'google' | 'apple', idToken: string, extra: object = {}) =>
-    call('POST', `/auth/${provider}`, { body: { provider, idToken, ...extra } });
-  const link = (s: Session, provider: 'google' | 'apple', idToken: string, extra: object = {}) =>
-    call('POST', '/auth/link', { token: s.accessToken, body: { provider, idToken, ...extra } });
-  return { call, guest, login, link, repos, auth, tokens, base };
+  /** Nonce emitido pelo serviço (o que `GET /auth/nonce` faz); os testes de rota do nonce usam o HTTP. */
+  const nonce = async (): Promise<string> => (await auth.issueNonce()).nonce;
+  const login = async (provider: 'google' | 'apple', idToken: string, extra: object = {}) =>
+    call('POST', `/auth/${provider}`, {
+      body: { provider, idToken, nonce: await nonce(), ...extra },
+    });
+  const link = async (
+    s: Session,
+    provider: 'google' | 'apple',
+    idToken: string,
+    extra: object = {},
+  ) =>
+    call('POST', '/auth/link', {
+      token: s.accessToken,
+      body: { provider, idToken, nonce: await nonce(), ...extra },
+    });
+  return { call, guest, login, link, nonce, repos, auth, tokens, base };
 }
 
 const code = async (res: Response): Promise<string | undefined> =>
@@ -196,6 +213,8 @@ describe('POST /auth/google e /auth/apple', () => {
       { provider: 'google', idToken: '' },
       { provider: 'google', idToken: 'x'.repeat(4097) },
       { provider: 'google', idToken: 'test:x', nonce: 5 },
+      { provider: 'google', idToken: 'test:x', nonce: '' },
+      { provider: 'google', idToken: 'test:x' },
       { idToken: 'test:x' },
       {},
       [],
@@ -242,7 +261,7 @@ describe('POST /auth/google e /auth/apple', () => {
     const repos = createMemoryRepositories();
     const auth = new AuthService(repos.users, new MemoryTokenStore(), CFG);
     expect(auth.socialProviders()).toEqual([]);
-    await expect(auth.loginSocial('google', 'test:x')).rejects.toMatchObject({
+    await expect(auth.loginSocial('google', 'test:x', 'n')).rejects.toMatchObject({
       code: 'SOCIAL_LOGIN_DISABLED',
     });
   });
@@ -291,7 +310,7 @@ describe('POST /auth/google e /auth/apple', () => {
 
 describe('POST /auth/link', () => {
   it('vincula o convidado: mesmo id e apelido, provider vira google, linkedAt gravado, par novo', async () => {
-    const { guest, link, call, repos } = await start();
+    const { guest, link, login, call, repos } = await start();
     const g = await guest();
     const res = await link(g, 'google', 'test:vinc1');
     expect(res.status).toBe(200);
@@ -309,9 +328,7 @@ describe('POST /auth/link', () => {
     };
     expect(me.provider).toBe('google');
     // o login social posterior com o mesmo sub entra na MESMA conta
-    const again = await call('POST', '/auth/google', {
-      body: { provider: 'google', idToken: 'test:vinc1:outro' },
-    });
+    const again = await login('google', 'test:vinc1:outro');
     expect(again.status).toBe(200);
     expect(((await again.json()) as SocialBody).user.id).toBe(g.user.id);
   });
@@ -366,7 +383,7 @@ describe('POST /auth/link', () => {
   it('exige autenticação', async () => {
     const { call } = await start();
     const res = await call('POST', '/auth/link', {
-      body: { provider: 'google', idToken: 'test:x' },
+      body: { provider: 'google', idToken: 'test:x', nonce: 'n' },
     });
     expect(res.status).toBe(401);
     expect(await code(res)).toBe('UNAUTHORIZED');
@@ -574,5 +591,161 @@ describe('POST /auth/link: falhas do Redis e retomada', () => {
     down = false;
     expect((await login('google', 'sub-x')).status).toBe(201);
     expect((await link(g, 'google', 'sub-y')).status).toBe(200);
+  });
+});
+
+describe('GET /auth/nonce e o nonce do login social', () => {
+  /** Verificador que amarra o idToken ao nonce, como a claim `nonce` faz: `tok:<sub>:<nonce>`. */
+  const bound: IdentityVerifier = {
+    isEnabled: () => true,
+    verify: async (_p, token, nonce) => {
+      const [kind, sub, n] = token.split(':');
+      if (kind !== 'tok' || sub === undefined || n !== nonce) throw new InvalidIdTokenError();
+      return { subject: sub, expiresAt: Math.floor(Date.now() / 1000) + 60 };
+    },
+  };
+
+  it('emite nonce aleatório de uso único com validade de 300 s, sem cache', async () => {
+    const { call } = await start();
+    const a = await call('GET', '/auth/nonce');
+    expect(a.status).toBe(200);
+    expect(a.headers.get('cache-control')).toBe('no-store');
+    const body = (await a.json()) as { nonce: string; expiresIn: number };
+    expect(body.expiresIn).toBe(300);
+    expect(body.nonce).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const b = (await (await call('GET', '/auth/nonce')).json()) as { nonce: string };
+    expect(b.nonce).not.toBe(body.nonce);
+  });
+
+  it('só GET; sem provedor ligado responde 503 SOCIAL_LOGIN_DISABLED e não grava nada', async () => {
+    const { call } = await start();
+    const post = await call('POST', '/auth/nonce', { body: {} });
+    expect(post.status).toBe(405);
+    expect(post.headers.get('allow')).toBe('GET');
+    const off = await start({ identity: { isEnabled: () => false, verify: bound.verify } });
+    const res = await off.call('GET', '/auth/nonce');
+    expect(res.status).toBe(503);
+    expect(await code(res)).toBe('SOCIAL_LOGIN_DISABLED');
+  });
+
+  it('rate limit por IP próprio (não gasta o limite do login)', async () => {
+    const { call, login } = await start({ limits: { noncePerIpPerMin: 2 } });
+    expect((await call('GET', '/auth/nonce')).status).toBe(200);
+    expect((await call('GET', '/auth/nonce')).status).toBe(200);
+    const limited = await call('GET', '/auth/nonce');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('60');
+    expect((await login('google', 'test:ok')).status).toBe(201);
+  });
+
+  it('limite GLOBAL do nonce vale para IPs diferentes (proxy confiável)', async () => {
+    const { call } = await start({ limits: { nonceGlobalPerMin: 2 }, trustProxy: true });
+    const ask = (ip: string) => call('GET', '/auth/nonce', { headers: { 'x-forwarded-for': ip } });
+    expect((await ask('1.1.1.1')).status).toBe(200);
+    expect((await ask('2.2.2.2')).status).toBe(200);
+    const limited = await ask('3.3.3.3');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('60');
+  });
+
+  it('login exige nonce emitido por nós: inventado, reusado e já consumido dão INVALID_ID_TOKEN', async () => {
+    const { call, nonce } = await start();
+    const invented = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'test:n1', nonce: 'inventado-pelo-cliente' },
+    });
+    expect(invented.status).toBe(401);
+    expect(await code(invented)).toBe('INVALID_ID_TOKEN');
+    const n = await nonce();
+    const ok = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'test:n2', nonce: n },
+    });
+    expect(ok.status).toBe(201);
+    // o mesmo nonce com OUTRO idToken (outro sub): consumido, recusado, nada criado
+    const replay = await call('POST', '/auth/apple', {
+      body: { provider: 'apple', idToken: 'test:n3', nonce: n },
+    });
+    expect(replay.status).toBe(401);
+    expect(await code(replay)).toBe('INVALID_ID_TOKEN');
+  });
+
+  it('nonce expira em 5 minutos', async () => {
+    let clock = 1_000_000;
+    const tokens = new MemoryTokenStore(() => clock);
+    const { call, nonce } = await start({ tokens });
+    const n = await nonce();
+    clock += 301_000;
+    const res = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'test:exp', nonce: n },
+    });
+    expect(res.status).toBe(401);
+    expect(await code(res)).toBe('INVALID_ID_TOKEN');
+  });
+
+  it('a claim tem de bater com o nonce enviado; idToken recusado NÃO queima o nonce', async () => {
+    const { call, nonce, repos } = await start({ identity: bound });
+    const n = await nonce();
+    const wrong = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'tok:ana:outro-nonce', nonce: n },
+    });
+    expect(wrong.status).toBe(401);
+    expect(repos.store.users.size).toBe(0);
+    const ok = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: `tok:ana:${n}`, nonce: n },
+    });
+    expect(ok.status).toBe(201);
+    // consumido: o mesmo par não entra de novo
+    const again = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: `tok:ana:${n}`, nonce: n },
+    });
+    expect(again.status).toBe(401);
+  });
+
+  it('vínculo: PROVIDER_TAKEN não gasta o nonce (serve para entrar na conta dona); sucesso o gasta', async () => {
+    const { call, nonce, guest } = await start({ identity: bound });
+    const owner = await nonce();
+    await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: `tok:dono:${owner}`, nonce: owner },
+    });
+    const g = await guest();
+    const n = await nonce();
+    const token = `tok:dono:${n}`;
+    const taken = await call('POST', '/auth/link', {
+      token: g.accessToken,
+      body: { provider: 'google', idToken: token, nonce: n },
+    });
+    expect(taken.status).toBe(409);
+    expect(await code(taken)).toBe('PROVIDER_TAKEN');
+    const enter = await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: token, nonce: n },
+    });
+    expect(enter.status).toBe(200);
+    // vínculo bem-sucedido consome o nonce
+    const g2 = await guest();
+    const n2 = await nonce();
+    const linked = await call('POST', '/auth/link', {
+      token: g2.accessToken,
+      body: { provider: 'apple', idToken: `tok:novo:${n2}`, nonce: n2 },
+    });
+    expect(linked.status).toBe(200);
+    const g3 = await guest();
+    const reuse = await call('POST', '/auth/link', {
+      token: g3.accessToken,
+      body: { provider: 'apple', idToken: `tok:outro:${n2}`, nonce: n2 },
+    });
+    expect(reuse.status).toBe(401);
+  });
+
+  it('o nonce não vai para o log', async () => {
+    const lines: string[] = [];
+    setLogSink((_l, msg, f) => lines.push(JSON.stringify({ msg, ...f })));
+    const { call, nonce } = await start();
+    const n = await nonce();
+    await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'test:logn', nonce: n },
+    });
+    await call('POST', '/auth/google', {
+      body: { provider: 'google', idToken: 'test:logn2', nonce: n },
+    });
+    expect(lines.join('\n')).not.toContain(n);
   });
 });

@@ -30,27 +30,11 @@ export async function runSocialAuth(args: {
   mode: SocialMode;
   provider: SocialProvider;
   registry: IdentityRegistry;
-  session: Pick<Session, 'loginSocial' | 'linkAccount'>;
+  session: Pick<Session, 'loginSocial' | 'linkAccount' | 'fetchNonce'>;
 }): Promise<SocialOutcome> {
   const identity = args.registry.get(args.provider);
   if (identity === null) return { kind: 'unavailable', message: NO_SDK_TEXT };
-  let credential;
-  try {
-    credential = await identity.getCredential();
-  } catch {
-    return { kind: 'error', code: 'UNKNOWN', message: errorMessage('UNKNOWN'), offerLogin: false };
-  }
-  if (credential === null) return { kind: 'cancelled' };
-  const req = {
-    provider: args.provider,
-    idToken: credential.idToken,
-    ...(credential.nonce !== undefined ? { nonce: credential.nonce } : {}),
-  };
-  try {
-    if (args.mode === 'link') await args.session.linkAccount(req);
-    else await args.session.loginSocial(req);
-    return { kind: 'done' };
-  } catch (e) {
+  const failed = (e: unknown): SocialOutcome => {
     const code = errorCodeOf(e);
     if (code === 'SOCIAL_LOGIN_DISABLED') {
       return { kind: 'unavailable', message: errorMessage(code) };
@@ -61,6 +45,28 @@ export async function runSocialAuth(args: {
       message: errorMessage(code),
       offerLogin: args.mode === 'link' && code === 'PROVIDER_TAKEN',
     };
+  };
+  // O nonce vem ANTES do provedor: o SDK o põe no idToken e o servidor o confere (uso único, 300 s).
+  let nonce: string;
+  try {
+    nonce = await args.session.fetchNonce();
+  } catch (e) {
+    return failed(e);
+  }
+  let credential;
+  try {
+    credential = await identity.getCredential(nonce);
+  } catch {
+    return { kind: 'error', code: 'UNKNOWN', message: errorMessage('UNKNOWN'), offerLogin: false };
+  }
+  if (credential === null) return { kind: 'cancelled' };
+  const req = { provider: args.provider, idToken: credential.idToken, nonce };
+  try {
+    if (args.mode === 'link') await args.session.linkAccount(req);
+    else await args.session.loginSocial(req);
+    return { kind: 'done' };
+  } catch (e) {
+    return failed(e);
   }
 }
 

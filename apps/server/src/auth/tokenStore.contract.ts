@@ -275,6 +275,23 @@ export function tokenStoreContract(name: string, make: (clock: () => number) => 
       expect(await store.claimIdToken(short, 60)).toBe(true);
     });
 
+    it('nonce: emitido uma vez, consumido uma vez (também sob corrida); desconhecido e expirado dão false', async () => {
+      const store = fresh();
+      const key = hex();
+      expect(await store.consumeNonce(key)).toBe(false);
+      await store.putNonce(key, 60);
+      expect(await store.consumeNonce(key)).toBe(true);
+      expect(await store.consumeNonce(key)).toBe(false);
+      const race = hex();
+      await store.putNonce(race, 60);
+      const results = await Promise.all(Array.from({ length: 8 }, () => store.consumeNonce(race)));
+      expect(results.filter(Boolean)).toHaveLength(1);
+      const short = hex();
+      await store.putNonce(short, 1);
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(await store.consumeNonce(short)).toBe(false);
+    });
+
     it('família expirada: refresh é desconhecido', async () => {
       const store = fresh();
       const f = await family(store, 1);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CLAIMED_ID_TOKENS, MemoryTokenStore } from './tokenStore';
+import { MAX_CLAIMED_ID_TOKENS, MAX_PENDING_NONCES, MemoryTokenStore } from './tokenStore';
 
 describe('MemoryTokenStore.claimIdToken: teto de memória', () => {
   it('descarta os mais antigos acima do teto e continua recusando os recentes', async () => {
@@ -21,5 +21,14 @@ describe('MemoryTokenStore.claimIdToken: teto de memória', () => {
     expect(await store.claimIdToken('novo', 3600)).toBe(true);
     expect(await store.claimIdToken('novo', 3600)).toBe(false);
     expect(await store.claimIdToken('v5', 3600)).toBe(true);
+  });
+});
+
+describe('MemoryTokenStore.putNonce: teto de memória', () => {
+  it('descarta os mais antigos acima do teto; o recente segue valendo', async () => {
+    const store = new MemoryTokenStore(() => 1_000_000);
+    for (let i = 0; i < MAX_PENDING_NONCES + 50; i++) await store.putNonce(`n${i}`, 300);
+    expect(await store.consumeNonce('n0')).toBe(false);
+    expect(await store.consumeNonce(`n${MAX_PENDING_NONCES + 49}`)).toBe(true);
   });
 });

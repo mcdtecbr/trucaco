@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http';
-import { isIPv4, isIPv6 } from 'node:net';
+import { isIP, isIPv4, isIPv6 } from 'node:net';
+import { log } from './logger';
 
 /** Teto rígido de chaves por limitador (memória limitada mesmo sob ataque com muitos IPs). */
 export const DEFAULT_MAX_KEYS = 50_000;
@@ -113,17 +114,61 @@ export function normalizeIp(raw: string): string {
 }
 
 /**
- * Chave de rate limit do cliente. Atrás de proxy reverso o IP do socket é o do proxy. Com
- * `trustProxy`, usa o ÚLTIMO item de `X-Forwarded-For` (o que o proxy confiável acrescentou; os
- * anteriores o cliente forja). Só ligue se TODO tráfego passa por um proxy que define o cabeçalho.
+ * Proxy confiável. `false`: ignora cabeçalhos e usa o IP do socket. `true`: ÚLTIMO item de
+ * `X-Forwarded-For`. `{ header }`: o valor do cabeçalho NOMEADO, que o proxy define sozinho (ex.:
+ * `Fly-Client-IP` na Fly.io; nome em minúsculas). Só ligue se TODO tráfego passa pelo proxy: senão o
+ * cliente forja o cabeçalho.
  */
-export function clientKey(req: IncomingMessage, trustProxy: boolean): string {
-  if (trustProxy) {
-    const xff = req.headers['x-forwarded-for'];
-    const raw = Array.isArray(xff) ? xff.join(',') : xff;
-    const last = raw?.split(',').at(-1)?.trim();
-    if (last !== undefined && last !== '') return normalizeIp(last);
+export type TrustProxy = boolean | { readonly header: string };
+
+const FORWARDED_FOR = 'x-forwarded-for';
+
+/** IP anunciado pelo proxy confiável nos cabeçalhos (`undefined` se não houver ou `trust` desligado). */
+function proxyIp(get: (name: string) => string | undefined, trust: TrustProxy): string | undefined {
+  if (trust === false) return undefined;
+  const name = trust === true ? FORWARDED_FOR : trust.header.toLowerCase();
+  const raw = get(name);
+  if (raw === undefined) return undefined;
+  // `X-Forwarded-For` (lista): só o último item vale. Cabeçalho próprio do proxy: o valor inteiro.
+  const value = name === FORWARDED_FOR ? raw.split(',').at(-1) : raw;
+  const ip = value?.trim();
+  if (ip === undefined || ip === '') return undefined;
+  // Só IP de verdade vale como chave: lixo no cabeçalho (proxy mal configurado ou tráfego fora do proxy)
+  // cai no IP do socket, e o aviso (sem o valor) avisa quem opera. Um aviso por minuto no máximo.
+  const bare = ip.startsWith('[') && ip.endsWith(']') ? ip.slice(1, -1) : ip;
+  if (!isIP(bare.split('%')[0] ?? '')) {
+    const now = Date.now();
+    if (now - lastBadHeaderWarn > 60_000) {
+      lastBadHeaderWarn = now;
+      log.warn('rateLimit: cabeçalho do TRUST_PROXY sem IP válido, usando o IP do socket', {
+        header: name,
+      });
+    }
+    return undefined;
   }
+  return normalizeIp(ip);
+}
+
+let lastBadHeaderWarn = 0;
+
+/**
+ * Chave de rate limit do cliente. Atrás de proxy reverso o IP do socket é o do proxy; com
+ * `trustProxy` (ver `TrustProxy`) vale o IP que o proxy confiável anunciou, e sem ele cai no do socket.
+ */
+export function clientKey(req: IncomingMessage, trustProxy: TrustProxy): string {
+  const ip = proxyIp((name) => {
+    const v = req.headers[name];
+    return Array.isArray(v) ? v.join(',') : v;
+  }, trustProxy);
+  if (ip !== undefined) return ip;
   const addr = req.socket.remoteAddress;
   return addr === undefined ? 'unknown' : normalizeIp(addr);
+}
+
+/** Como `clientKey`, para cabeçalhos no formato `Headers` (matchmaker). `null` sem proxy confiável/cabeçalho. */
+export function trustedIpFromHeaders(
+  headers: Headers | undefined,
+  trustProxy: TrustProxy,
+): string | null {
+  return proxyIp((name) => headers?.get(name) ?? undefined, trustProxy) ?? null;
 }

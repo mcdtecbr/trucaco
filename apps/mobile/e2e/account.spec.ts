@@ -17,6 +17,7 @@ import {
   accountOf,
   call,
   createGuest,
+  fetchNonce,
   linkGoogle,
   loginGoogle,
   signInContext,
@@ -79,7 +80,7 @@ test.describe('apagar conta', () => {
       // Nenhuma sessão da conta apagada sobra no aparelho: só pode haver um convidado NOVO (ou nada).
       await expect
         .poll(async () =>
-          page.evaluate(() => window.localStorage.getItem('trucaco.session.v1') ?? ''),
+          page.evaluate(() => window.localStorage.getItem('trucaco.session.v2') ?? ''),
         )
         .not.toContain(acc.id);
     } finally {
@@ -229,7 +230,7 @@ test.describe('vincular conta e entrar na conta existente', () => {
     expect(replay.json).toMatchObject({ error: { code: 'INVALID_ID_TOKEN' } });
     // Token com formato inválido também.
     const bad = await call('POST', '/auth/google', {
-      body: { provider: 'google', idToken: 'nao-e-um-token' },
+      body: { provider: 'google', idToken: 'nao-e-um-token', nonce: await fetchNonce() },
     });
     expect(bad.status).toBe(401);
     expect(bad.json).toMatchObject({ error: { code: 'INVALID_ID_TOKEN' } });

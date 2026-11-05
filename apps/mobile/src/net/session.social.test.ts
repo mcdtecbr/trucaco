@@ -60,7 +60,7 @@ describe('entrar com conta social', () => {
       status: 201,
       json: { ...pair(5), user: { id: 'u9', nickname: 'Ana' }, created: true },
     }));
-    await session.loginSocial({ provider: 'apple', idToken: 't' });
+    await session.loginSocial({ provider: 'apple', idToken: 't', nonce: 'n' });
     const call = calls.find((c) => c.path === '/auth/apple');
     expect(call?.headers['authorization']).toBeUndefined();
     expect(session.getState()).toMatchObject({

@@ -3,7 +3,7 @@
  * Sem HTTP aqui. Refresh token: 32 bytes aleatórios em base64url (opaco); só o SHA-256 vai ao store.
  */
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import { WS_BEARER_PROTOCOL } from '@trucaco/protocol';
+import { NONCE_TTL_SECONDS, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type { SocialProvider } from '@trucaco/protocol';
 import { log } from '../logger';
 import {
@@ -75,6 +75,8 @@ export const hashRefresh = (token: string): string =>
   createHash('sha256').update(token, 'utf8').digest('hex');
 
 const newRefresh = (): string => randomBytes(32).toString('base64url');
+const hashNonce = (nonce: string): string =>
+  createHash('sha256').update(nonce, 'utf8').digest('hex');
 
 export class AuthService {
   readonly jwt: AccessTokenService;
@@ -129,7 +131,7 @@ export class AuthService {
   private async verifyIdToken(
     provider: SocialProvider,
     idToken: string,
-    nonce: string | undefined,
+    nonce: string,
     claim: boolean,
   ): Promise<VerifiedIdentity> {
     if (!this.identity.isEnabled(provider)) throw new SocialAuthError('SOCIAL_LOGIN_DISABLED');
@@ -145,15 +147,37 @@ export class AuthService {
       if (err instanceof IdentityUnavailableError) throw new AuthError('SERVICE_UNAVAILABLE');
       throw err;
     }
-    if (claim) await this.claimIdToken(provider, idToken, verified);
+    if (claim) await this.claimIdToken(provider, idToken, verified, nonce);
     return verified;
   }
 
+  /** Emite um nonce de login social (`GET /auth/nonce`): 24 bytes aleatórios, uso único, `NONCE_TTL_SECONDS`. */
+  async issueNonce(): Promise<{ readonly nonce: string; readonly expiresIn: number }> {
+    const nonce = randomBytes(24).toString('base64url');
+    await this.tokens.putNonce(hashNonce(nonce), NONCE_TTL_SECONDS);
+    return { nonce, expiresIn: NONCE_TTL_SECONDS };
+  }
+
+  /** Validade do refresh (s), para o `Max-Age` do cookie do web. */
+  get refreshTtlSec(): number {
+    return Math.min(this.cfg.refreshTtlSec, this.cfg.refreshFamilyMaxSec);
+  }
+
+  /**
+   * Gasta o nonce (emitido por nós, não expirado, não usado) e o idToken, nesta ordem. Só roda DEPOIS de a
+   * claim `nonce` do token ter batido (`verify`), então o nonce consumido é o que o provedor assinou.
+   * Nonce desconhecido, expirado ou reusado: `INVALID_ID_TOKEN`, sem distinguir a causa.
+   */
   private async claimIdToken(
     provider: SocialProvider,
     idToken: string,
     verified: VerifiedIdentity,
+    nonce: string,
   ): Promise<void> {
+    if (!(await this.tokens.consumeNonce(hashNonce(nonce)))) {
+      log.warn('auth: nonce social desconhecido, expirado ou reusado', { provider });
+      throw new SocialAuthError('INVALID_ID_TOKEN');
+    }
     const ttlSec = Math.max(
       60,
       Math.ceil(verified.expiresAt - this.now() / 1000) + this.cfg.clockToleranceSec + 1,
@@ -173,7 +197,7 @@ export class AuthService {
   async loginSocial(
     provider: SocialProvider,
     idToken: string,
-    nonce?: string,
+    nonce: string,
   ): Promise<{ readonly user: UserRecord; readonly pair: TokenPair; readonly created: boolean }> {
     const identity = await this.verifyIdToken(provider, idToken, nonce, true);
     let user = await this.users.findByProvider(provider, identity.subject);
@@ -211,7 +235,7 @@ export class AuthService {
     principal: Principal,
     provider: SocialProvider,
     idToken: string,
-    nonce?: string,
+    nonce: string,
   ): Promise<{ readonly user: UserRecord; readonly pair: TokenPair }> {
     if (!this.identity.isEnabled(provider)) throw new SocialAuthError('SOCIAL_LOGIN_DISABLED');
     const current = await this.users.findById(principal.userId);
@@ -231,7 +255,7 @@ export class AuthService {
     if ((await this.users.findByProvider(provider, identity.subject)) !== null) {
       throw new SocialAuthError('PROVIDER_TAKEN');
     }
-    await this.claimIdToken(provider, idToken, identity);
+    await this.claimIdToken(provider, idToken, identity, nonce);
     let linked: UserRecord | null;
     try {
       linked = await this.users.linkProvider(current.id, provider, identity.subject);
@@ -372,6 +396,8 @@ export class AuthService {
     if (result.graced === true) {
       log.info('auth: refresh reapresentado na janela de graça', { user: result.userId });
     }
+    // Atividade para o job de retenção (convidado "inativo"): melhor esforço, nunca derruba o refresh.
+    this.users.touchLastSeen(user.id, new Date(this.now())).catch(() => undefined);
     const access = await this.jwt.sign(user.id, newJti);
     return { accessToken: access.token, refreshToken, expiresIn: this.cfg.accessTtlSec };
   }
@@ -413,6 +439,17 @@ export class AuthService {
     }
     const owner = await this.tokens.peekLive(hashRefresh(presented));
     if (owner === null || owner.userId !== userId) throw new AuthError('INVALID_REFRESH_TOKEN');
+  }
+
+  /**
+   * Revoga a família do refresh apresentado (e o access vigente dela), seja de quem for: quem tem o token
+   * pode encerrar a sessão dele. Formato inválido ou token desconhecido é no-op. Usado quando o navegador
+   * faz login novo por cima de um cookie antigo.
+   */
+  async revokeRefreshToken(presented: string): Promise<void> {
+    if (typeof presented !== 'string' || !REFRESH_FORMAT.test(presented)) return;
+    const owner = await this.tokens.lookup(hashRefresh(presented));
+    if (owner !== null) await this.revokeFamilyAndAccess(owner.familyId);
   }
 
   /** Revoga a família e o access vigente dela (`lastJti`), se acabou de ser revogada. */
