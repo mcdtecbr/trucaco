@@ -58,6 +58,10 @@ COPY apps/mobile apps/mobile
 COPY packages packages
 # O Metro importa os áudios e o .riv da raiz (../../../assets); o .dockerignore só tira o que é fonte.
 COPY assets assets
+# Textos legais: origem de apps/mobile/scripts/gen-legal.mjs (o módulo gerado não vai no contexto).
+COPY docs/legal docs/legal
+# Estrito: sem os .md o build falha em vez de embarcar o placeholder.
+RUN pnpm --filter @trucaco/mobile exec node scripts/gen-legal.mjs --strict
 RUN pnpm --filter "@trucaco/mobile..." run build
 # apps/mobile/dist = saída de `expo export --platform web`
 

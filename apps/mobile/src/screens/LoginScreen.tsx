@@ -9,5 +9,12 @@ export function LoginScreen() {
   const nickname = useSessionStore(selectNickname);
   const goHome = useCallback(() => router.replace('/home'), [router]);
   const social = useSocialAuth('login', goHome);
-  return <LoginView nickname={nickname} social={social} on={{ guest: goHome }} />;
+  return (
+    <LoginView
+      nickname={nickname}
+      social={social}
+      on={{ guest: goHome }}
+      legal={{ onTerms: () => router.push('/terms'), onPrivacy: () => router.push('/privacy') }}
+    />
+  );
 }

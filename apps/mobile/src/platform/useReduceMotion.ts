@@ -19,7 +19,7 @@ export function useReduceMotion(): boolean {
     });
     return () => {
       alive = false;
-      sub.remove();
+      (sub as { remove?: () => void } | undefined)?.remove?.(); // react-native-web antigo devolve undefined
     };
   }, []);
   return reduce;
