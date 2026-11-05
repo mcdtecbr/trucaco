@@ -9,7 +9,7 @@ import { expect, test } from './fixtures';
 import { createTable, joinTable, readProbe } from './support/table';
 import type { Player } from './support/table';
 
-const MEANING = 'tenho o zap E2E';
+const MEANING = 'ZAP / manilha de paus';
 const CHAT = 'oi parceiro E2E';
 
 /** Segura o botão por mais que os 400 ms exigidos. */
@@ -42,19 +42,24 @@ test.describe('combinado da dupla', () => {
     await expect(a.page.getByTestId('codes-guest')).toHaveText(
       'Como convidado, seu combinado some ao sair da conta.',
     );
-    await expect(a.page.getByTestId('code-count-wink')).toHaveText('0/60');
-    await a.page.getByTestId('code-input-wink').fill(MEANING);
-    await expect(a.page.getByTestId('code-count-wink')).toHaveText(`${MEANING.length}/60`);
-    await a.page.getByTestId('code-save-wink').click();
+    await a.page.getByTestId('code-option-wink-zap').click();
 
     // C vê a edição ao vivo no próprio painel.
     await c.page.getByTestId('open-codes').click();
-    await expect(c.page.getByTestId('code-input-wink')).toHaveValue(MEANING);
+    await expect(c.page.getByTestId('code-option-wink-zap')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    // Um significado em uso some das opções dos outros sinais.
+    await expect(c.page.getByTestId('code-option-nod-zap')).toHaveCount(0);
 
     // O adversário B abre o painel dele: nada combinado e sem parceiro sentado ainda.
     await b.page.getByTestId('open-codes').click();
     await expect(b.page.getByTestId('codes-no-partner')).toBeVisible();
-    await expect(b.page.getByTestId('code-input-wink')).toHaveValue('');
+    await expect(b.page.getByTestId('code-option-wink-nada')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
     await b.page.getByTestId('codes-close').click();
 
     // Chat da dupla na espera: A escreve na aba Dupla, C lê; B não tem nada da dupla de A.
@@ -130,18 +135,26 @@ test.describe('combinado da dupla', () => {
     }
     await a.page.getByTestId('open-codes').click();
     await expect(a.page.getByTestId('codes-panel')).toBeVisible();
-    await a.page.getByTestId('code-input-nod').fill('pode pedir truco');
-    await a.page.getByTestId('code-save-nod').click();
+    await a.page.getByTestId('code-option-nod-copas').click();
     await c.page.getByTestId('signal-toggle').click();
-    await expect(c.page.getByTestId('signal-meaning-nod')).toHaveText('pode pedir truco');
+    await expect(c.page.getByTestId('signal-meaning-nod')).toHaveText(
+      'Sete Copas / manilha de copas',
+    );
     for (const adv of [b, d]) {
-      expect(sawInFrames(adv, 'pode pedir truco')).toBe(false);
+      expect(sawInFrames(adv, 'Sete Copas / manilha de copas')).toBe(false);
     }
-    // O servidor limita a 1 edição por segundo por assento; o teto de 60 caracteres cabe inteiro.
+    // O servidor limita a 1 edição por segundo por assento.
     await a.page.waitForTimeout(1100);
-    await a.page.getByTestId('code-input-wink').fill('z'.repeat(60));
-    await a.page.getByTestId('code-save-wink').click();
-    await expect(c.page.getByTestId('signal-meaning-wink')).toHaveText('z'.repeat(60));
+    await a.page.getByTestId('code-option-wink-espadao').click();
+    await expect(c.page.getByTestId('signal-meaning-wink')).toHaveText(
+      'Espadão / manilha de espadas',
+    );
+    // Em jogo só existe o chat da mesa.
+    await a.page.getByTestId('codes-close').click();
+    await a.page.getByTestId('open-chat').click();
+    await expect(a.page.getByTestId('chat-tab-partner')).toHaveCount(0);
+    await a.page.getByTestId('chat-close').click();
+    await a.page.getByTestId('open-codes').click();
     await a.page.getByTestId('codes-close').click();
     await expect(a.page.getByTestId('codes-panel')).toHaveCount(0);
   });

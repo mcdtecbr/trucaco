@@ -1302,8 +1302,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * Sinais, sfx e chat (2F). O assento é SEMPRE o do servidor (`seatBySession`); a mensagem de saída
    * leva `seat` do remetente. Decisões:
    * - Fora de `playing` (espera, série encerrada/cancelada): `signal`/`sfx` são IGNORADOS em silêncio
-   *   (sem erro, sem gastar cooldown); o chat da dupla também, EXCETO na espera (Fase 5: a sala de espera
-   *   é a preparação da dupla). Chat da mesa vale em qualquer fase.
+   *   (sem erro, sem gastar cooldown); o chat da dupla só existe na espera (Fase 5: a sala de espera é a
+   *   preparação da dupla) e é ignorado com a série em andamento ou encerrada. Chat da mesa vale em
+   *   qualquer fase.
    * - Dentro do cooldown: `RATE_LIMITED` ao remetente, nada é enviado (igual ao rate limit de ações);
    *   não gera strike.
    * - `signal`/`sfx`: broadcast PÚBLICO aos 4 (é o design: adversários também veem).
@@ -1329,8 +1330,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const playing = series !== null && !isSeriesOver(series);
     const at = Date.now();
     if (msg.type === 'chat') {
-      // Chat da dupla vale na espera (série ainda nula) e em jogo; depois do fim da série é ignorado.
-      if (msg.scope === 'partner' && series !== null && !playing) return;
+      // Chat da dupla só existe na espera (série ainda nula). Com a série em andamento ou encerrada,
+      // é ignorado em silêncio (durante a partida o chat é só da mesa).
+      if (msg.scope === 'partner' && series !== null) return;
       if (
         !this.cooldownPassed(this.lastChatAt, seat, this.config.chatCooldownMs ?? CHAT_COOLDOWN_MS)
       ) {

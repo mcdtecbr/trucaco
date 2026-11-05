@@ -141,11 +141,11 @@ Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração ráp
 - **Partes do jogador**: `src/table/avatarParts.ts` converte `players[i].avatar` (string JSON) em `AvatarParts`. Vazio, JSON inválido ou partes fora do catálogo viram `DEFAULT_AVATAR_PARTS`. O resultado é cacheado por texto, para o `<Avatar>` memoizado não re-renderizar a cada patch.
 - **Onde aparece**: `TableView` (os 4 assentos) e `WaitingRoomView` (o placeholder só aparece em vaga).
 - **Sinal recebido**: `roomService` entrega `signal` ao `tableController.onSignal`. Se o assento está livre, anima já; se está animando, entra na fila de 1 posição por assento, e o excedente é descartado. O anúncio para o leitor de tela ("Fulano: piscar um olho") sai sempre. Fim da animação: `onSignalEnd`, com timer de segurança de `MAX_SIGNAL_DURATION_MS + 500` ms.
-- **Painel de sinais** (`src/screens/SignalPanel.tsx`): 12 botões, um por sinal do catálogo. O sinal é enviado ao **segurar 400 ms** (`SIGNAL_HOLD_MS`); toque rápido não envia. Ativação por leitor de tela (sem `onPressIn`) envia pelo `accessibilityActions`. O cooldown de 3 s (`SIGNAL_COOLDOWN_MS`) é só espelhado na UI; quem decide é o servidor (`RATE_LIMITED`).
+- **Painel de sinais** (`src/screens/SignalPanel.tsx`): um botão por sinal do catálogo, enviado com um toque. O cooldown de 3 s (`SIGNAL_COOLDOWN_MS`) é só espelhado na UI; quem decide é o servidor (`RATE_LIMITED`).
 - **Movimento reduzido**: `src/platform/useReduceMotion.ts` lê `AccessibilityInfo` (na web, o `prefers-reduced-motion`). Com ele ligado, o sinal vira um destaque estático (borda branca) de 1 s, e o avatar ocioso para de animar.
 - **Criador de avatar** (`/avatar`, `src/screens/AvatarEditorScreen.tsx` e `AvatarEditorView.tsx`): escolhe uma variante por parte (8 partes, nomes em `PART_VARIANT_NAMES`), pré-visualiza com `<Avatar>` e salva com `PUT /me/avatar`. "Salvar" fica desligado sem mudança. Entradas: "Meu avatar" em Início (`open-avatar`) e "Editar avatar" em Configurações (`settings-avatar`).
-- **E2E**: `e2e/avatar.spec.ts` (3 cenários): segurar o botão envia o sinal e os 4 navegadores veem o marcador `avatar-<assento>-signal-<id>`; o editor salva e o avatar persiste ao recarregar; o editor abre pelas Configurações.
-- **Não validado**: aparência em aparelho, iOS, Android, leitor de tela, e o "segurar" com dedo real. Só Chromium.
+- **E2E**: `e2e/avatar.spec.ts` (3 cenários): um toque no botão envia o sinal e os 4 navegadores veem o marcador `avatar-<assento>-signal-<id>`; o editor salva e o avatar persiste ao recarregar; o editor abre pelas Configurações.
+- **Não validado**: aparência em aparelho, iOS, Android, leitor de tela, e o toque com dedo real. Só Chromium.
 
 ### Desempenho do avatar
 

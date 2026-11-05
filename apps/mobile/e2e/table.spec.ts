@@ -89,63 +89,26 @@ test.describe('mesa privada de 4 jogadores', () => {
     }
   });
 
-  test('mensagem do chat da mesa aparece como texto e balão; a da dupla não chega ao adversário', async ({
+  test('em jogo só existe o chat da mesa: a mensagem aparece como texto e balão e não há aba da dupla', async ({
     players,
   }) => {
     await startTable(players);
     const [sender, ...receivers] = players as [Player, Player, Player, Player];
     const markup = '<b>Olá, mesa!</b>';
-    const secret = 'segredo-da-dupla';
 
-    // Quem é o parceiro do autor (assento + 2) e quem são os adversários, pelo assento de cada um.
-    const senderSeat = (await readProbe(sender.page))?.me ?? -1;
-    const seatOf = async (p: Player): Promise<number> => (await readProbe(p.page))?.me ?? -1;
-    let partner: Player | undefined;
-    const opponents: Player[] = [];
-    for (const p of receivers) {
-      if ((await seatOf(p)) === (senderSeat + 2) % 4) partner = p;
-      else opponents.push(p);
-    }
-    if (partner === undefined || opponents.length !== 2) throw new Error('mesa sem parceiro');
-
-    const send = async (tab: 'table' | 'partner', text: string): Promise<void> => {
-      await sender.page.getByTestId(`chat-tab-${tab}`).click();
-      await sender.page.getByTestId('chat-input').fill(text);
-      await sender.page.getByTestId('chat-send').click();
-    };
     await sender.page.getByTestId('open-chat').click();
     await expect(sender.page.getByTestId('chat-panel')).toBeVisible();
-    // A da dupla vai primeiro e a da mesa logo em seguida (sem esperar eco): o servidor entrega em
-    // ordem, então quando a da mesa chegar a um jogador a da dupla já teria chegado, se fosse dele.
-    await send('partner', secret);
+    await expect(sender.page.getByTestId('chat-tab-partner')).toHaveCount(0);
+    await expect(sender.page.getByTestId('chat-tab-table')).toBeVisible();
+    await sender.page.getByTestId('chat-input').fill(markup);
+    await sender.page.getByTestId('chat-send').click();
     // Rate limit de chat (2 s entre mensagens): a segunda, em seguida, é recusada com aviso.
-    await send('table', markup);
+    await sender.page.getByTestId('chat-input').fill(markup);
+    await sender.page.getByTestId('chat-send').click();
     await expect(sender.page.getByTestId('chat-error')).toBeVisible();
-    // Passado o intervalo, a mesma mensagem é entregue.
-    await expect(async () => {
-      await send('table', markup);
-      await expect(sender.page.getByTestId('chat-list')).toContainText(markup, { timeout: 2500 });
-    }).toPass({ timeout: 15_000 });
+    await expect(sender.page.getByTestId('chat-list')).toContainText(markup, { timeout: 5000 });
 
-    // Nos FRAMES que o servidor mandou a cada navegador (antes de qualquer filtro do cliente): a mensagem
-    // da mesa chega aos três; a da dupla chega ao parceiro e a NENHUM adversário.
-    const includes = (p: Player, text: string): boolean =>
-      p.frames.some((f) => f.includes(Buffer.from(text, 'utf8')));
-    const tableNeedle = 'mesa!</b>'; // ASCII, trecho da mensagem da mesa
-    await expect
-      .poll(() => receivers.every((p) => includes(p, tableNeedle)), {
-        message: 'a mensagem da mesa chega aos três',
-      })
-      .toBe(true);
-    expect(includes(partner, secret), 'o parceiro recebe a mensagem da dupla').toBe(true);
-    for (const o of opponents) {
-      expect(
-        includes(o, secret),
-        `adversário (jogador ${o.index}) NÃO pode receber a da dupla`,
-      ).toBe(false);
-    }
-
-    // Balão sobre o assento do autor, para os outros três, como TEXTO LITERAL (nada vira elemento).
+    // A mensagem chega aos três, como TEXTO LITERAL (nada vira elemento), em balão sobre o autor.
     for (const p of receivers) {
       const bubble = p.page.locator('[data-testid^="bubble-"]', { hasText: 'Olá, mesa!' });
       await expect(bubble).toBeVisible();
@@ -153,16 +116,11 @@ test.describe('mesa privada de 4 jogadores', () => {
       await expect(p.page.getByTestId('table').locator('b')).toHaveCount(0);
     }
 
-    // Painel de cada receptor: a mensagem da mesa está lá como texto; a da dupla só no parceiro.
     for (const p of receivers) {
       await p.page.getByTestId('open-chat').click();
-      await p.page.getByTestId('chat-tab-table').click();
+      await expect(p.page.getByTestId('chat-tab-partner')).toHaveCount(0);
       await expect(p.page.getByTestId('chat-list')).toContainText(markup);
       await expect(p.page.getByTestId('chat-list').locator('b')).toHaveCount(0);
-      await p.page.getByTestId('chat-tab-partner').click();
-      await expect(p.page.getByTestId('chat-list').getByText(secret)).toHaveCount(
-        p === partner ? 1 : 0,
-      );
       await p.page.getByTestId('chat-close').click();
     }
   });

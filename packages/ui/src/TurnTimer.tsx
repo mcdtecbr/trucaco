@@ -55,21 +55,24 @@ export function TurnTimer({
   );
 }
 
+/** Barra fina e discreta: o timer fica no alto da tela, sem disputar atenção com as cartas. */
+const TRACK = 4;
+
 const styles = StyleSheet.create({
-  wrap: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'stretch' },
+  wrap: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, alignSelf: 'stretch' },
   track: {
     flex: 1,
-    height: spacing.sm,
+    height: TRACK,
     borderRadius: radius.round,
     backgroundColor: colors.surfaceAlt,
     overflow: 'hidden',
   },
-  fill: { height: spacing.sm, borderRadius: radius.round },
+  fill: { height: TRACK, borderRadius: radius.round },
   text: {
     color: colors.text,
-    fontSize: fontSize.small,
+    fontSize: fontSize.caption,
     fontWeight: fontWeight.bold,
-    minWidth: spacing.xl,
+    minWidth: spacing.lg,
     textAlign: 'right',
   },
   urgent: { color: colors.danger },

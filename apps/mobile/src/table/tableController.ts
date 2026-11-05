@@ -460,11 +460,20 @@ export function createTableController(opts: TableControllerOptions): TableContro
       };
     }
     director.onState(vm);
+    // Começou a partida: em jogo só existe o chat da mesa. Aba e contador da dupla (da espera) saem.
+    const enteredPlaying =
+      vm.phase === 'playing' && (cur.vm === null || cur.vm.phase !== 'playing');
     // Um único `set` por patch do servidor.
     cur.patch({
       vm,
       selected,
       ...cleaned,
+      ...(enteredPlaying
+        ? {
+            chatTab: 'table' as const,
+            chatUnread: { ...(cleaned.chatUnread ?? cur.chatUnread), partner: 0 },
+          }
+        : {}),
       ...(enteredFinished ? { errorCode: null } : {}),
       ...(newMatch
         ? {
@@ -512,6 +521,11 @@ export function createTableController(opts: TableControllerOptions): TableContro
     clear(busyTimer);
     busyTimer = timers.setTimeout(unlock, BUSY_TIMEOUT_MS);
     return true;
+  }
+
+  /** Durante a partida só existe o chat da mesa; o da dupla é da sala de espera (o servidor também recusa). */
+  function partnerChatClosed(scope: string): boolean {
+    return scope === 'partner' && store.getState().vm?.phase === 'playing';
   }
 
   function sendParsed(message: unknown): boolean {
@@ -653,7 +667,10 @@ export function createTableController(opts: TableControllerOptions): TableContro
         text,
         at: typeof m['at'] === 'number' ? m['at'] : 0,
       };
-      const seen = cur.chatOpen && cur.chatTab === scope;
+      // Em jogo o chat da dupla não existe: não conta como não lida (o servidor também recusa).
+      const seen =
+        (cur.chatOpen && cur.chatTab === scope) ||
+        (scope === 'partner' && cur.vm?.phase === 'playing');
       // Balão: um por assento; o novo substitui o anterior e reinicia os 4 s.
       const prevTimer = bubbleTimers.get(seat);
       if (prevTimer !== undefined) timers.clearTimeout(prevTimer);
@@ -903,11 +920,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const s = store.getState();
       if (s.busy || s.vm === null) return;
       if (!(s.vm.legalActions as readonly string[]).includes(actionId)) return;
-      if (s.selected === actionId) {
-        act(actionId);
-        return;
-      }
-      s.patch({ selected: actionId, errorCode: null });
+      // Um toque joga: `act` já trava o segundo toque enquanto a ação está em voo (`busy`).
+      act(actionId);
     },
 
     setCoverMode(on) {
@@ -938,6 +952,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
     },
 
     sendChat(scope, text) {
+      if (partnerChatClosed(scope)) return false;
       if (!sendParsed({ type: 'chat', scope, text })) return false;
       const s = store.getState();
       s.patch({ chatError: null, chatDraft: { ...s.chatDraft, [scope]: '' } });
@@ -945,6 +960,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
     },
 
     sendPhrase(scope, phraseId) {
+      if (partnerChatClosed(scope)) return false;
       if (!sendParsed({ type: 'chat', scope, phraseId })) return false;
       store.getState().patch({ chatError: null });
       return true;
