@@ -1,5 +1,5 @@
 /**
- * Escolha da voz do avatar (apresentação pura). As 6 vozes do catálogo ficam selecionáveis; as que ainda
+ * Escolha da voz do avatar (apresentação pura). As 9 vozes do catálogo ficam selecionáveis; as que ainda
  * não têm arquivo de áudio ganham "em breve" e, por enquanto, tocam a voz do mesmo grupo
  * (`resolveVoice`). A escolha já vale e é salva: quando os arquivos chegarem, o avatar passa a usar a voz.
  * "Ouvir" só existe para vozes com arquivo.

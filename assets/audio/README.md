@@ -6,7 +6,7 @@
 
 ```
 assets/audio/
-  voices/<voiceId>/<evento>_<n>.m4a   # masc_1, fem_1 (as demais vozes ainda sem arquivo)
+  voices/<voiceId>/<evento>_<n>.m4a   # masc_1, fem_1 (as demais, até masc_5 e fem_4, ainda sem arquivo)
   sfx/<id>.m4a                        # 8 efeitos do painel + 4 efeitos de jogo locais
 ```
 
@@ -19,7 +19,7 @@ Mono, AAC `.m4a`, cerca de 1 s por fala. Orçamento: até 1 MB por voz completa 
 ## Como trocar pelos arquivos finais
 
 1. Grave ou gere cada take com o texto do catálogo e salve com o **mesmo nome** (`voices/masc_1/truco_1.m4a`). Normalize o volume e exporte mono AAC.
-2. Para uma voz nova (`masc_2`...): crie `voices/<voiceId>/` com todos os takes e acrescente o id em `voicesWithFiles` no `audioCatalog.json`.
+2. Para uma voz com id já reservado em `VOICE_IDS` (`masc_2` a `masc_5`, `fem_2` a `fem_4`): crie `voices/<voiceId>/` com todos os takes e acrescente o id em `voicesWithFiles` no `audioCatalog.json`.
 3. Para um take novo: acrescente `{ "id": "<evento>_<n>", "text": "..." }` ao evento no `audioCatalog.json` (ids antigos nunca são renomeados) e grave o arquivo para **toda** voz com arquivos.
 4. Registre fonte e licença em `LICENSES.md`. Sem licença comercial confirmada, não versione o arquivo (o repositório é público).
 5. Regere o manifesto e rode os testes: `node scripts/audio/gen-manifest.mjs`, depois `pnpm --filter @trucaco/avatar test`.

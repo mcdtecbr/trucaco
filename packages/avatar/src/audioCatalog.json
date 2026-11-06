@@ -1,5 +1,5 @@
 {
-  "voicesWithFiles": ["masc_1", "fem_1"],
+  "voicesWithFiles": ["masc_1", "masc_2", "masc_3", "masc_4", "masc_5", "fem_1"],
   "gameSfx": ["card_play", "card_shuffle", "table_slam", "ambience_bar"],
   "soundboardSfx": [
     "horn",

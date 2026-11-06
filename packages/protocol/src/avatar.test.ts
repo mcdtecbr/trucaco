@@ -64,6 +64,16 @@ describe('parseAvatarParts', () => {
     expect(parseAvatarParts(max)).toEqual(max);
   });
 
+  it('voice: aceita masc_4, masc_5 e fem_4; rejeita fem_5, masc_6 e ids soltos', () => {
+    for (const voice of ['masc_4', 'masc_5', 'fem_4']) {
+      expect(parseAvatarParts({ ...valid, voice })).toEqual({ ...valid, voice });
+    }
+    for (const voice of ['fem_5', 'masc_6', 'masc_0', 'Puck', '', 3]) {
+      expect(parseAvatarParts({ ...valid, voice }), String(voice)).toBeNull();
+    }
+    expect(VOICE_IDS).toHaveLength(9);
+  });
+
   it('cabelo 2 (longo ondulado) e 14 (longo liso) não aceitam chapéu', () => {
     expect(HAIR_WITHOUT_HAT).toEqual([2, 14]);
     for (const hair of HAIR_WITHOUT_HAT) {

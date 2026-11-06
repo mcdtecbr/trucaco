@@ -50,3 +50,6 @@ apps/server/src/generated/
 
 # Codex CLI (estado local)
 .codex/
+
+# Cache bruto da geração de voz (scripts/audio/gen-voices.mjs)
+.audio-work/

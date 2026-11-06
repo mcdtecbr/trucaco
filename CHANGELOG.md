@@ -4,6 +4,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), agrupado p
 
 ## [Não lançado]
 
+### Vozes: catálogo ampliado de 6 para 9 (2026-11-04), branch `feat/audio-vozes-gemini`
+
+- `VOICE_IDS` passa a `masc_1..masc_5` e `fem_1..fem_4` (só acrescenta; ids antigos intactos). Sem migração (`voice` vive no JSON `parts`, validado por `parseAvatarParts`) e sem bump de `PROTOCOL_VERSION` (mudança aditiva, como o chat e o `voice` da 5b). Rótulos, notas de fallback e tela de som seguem `VOICE_IDS`.
+- Vozes alvo no Gemini TTS (`gemini-3.8-flash-tts`): Puck, Schedar, Zubenelgenubi, Sadaltager, Fenrir, Autonoe, Aoede, Despina, Zephyr. Sem arquivo novo: só `masc_1` e `fem_1` têm placeholder; as demais caem no fallback do grupo ("em breve"). Licença comercial do áudio gerado ainda não confirmada.
+
+### Fase 6, blocos 6A e 6B: contrato, bloqueio, denúncia, histórico e apagar conta (2026-11-04), em andamento, branch `feat/fase-6b-social`
+
 ### Fase 6: contas, perfil, conquistas e missões (2026-11-05), concluída com ressalvas
 
 Ressalvas: **nenhum login social real** (Google e Apple): o app não registra SDK e o servidor ainda não emite nonce (pendência obrigatória antes de `GOOGLE_CLIENT_IDS` / `APPLE_CLIENT_IDS` em produção). Bloquear e denunciar só a partir do histórico (o assento na mesa não tem `userId` público). Limites anti-farm são padrões a recalibrar no beta. E2E web: 23 de 24; `progress.spec.ts:38` ("quem vence recebe o aviso e a medalha") falha em duas execuções, e a causa não está identificada (suspeita: regra 6I não commitada). Nada validado em iOS, Android, leitor de tela ou Safari. Plano e status em `docs/specs/2026-11-04-fase-6-plano.md` (seção 7); relatório em `docs/specs/2026-11-05-fase-6-relatorio.md`.
