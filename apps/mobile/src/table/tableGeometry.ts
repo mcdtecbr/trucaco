@@ -25,11 +25,14 @@ export const NAME_BLOCK = SEAT_NAME_GAP + SEAT_NAME_H;
  * Monte com a vira saindo por baixo (canto esquerdo), igual em todos os layouts: largura da caixa,
  * posicao do monte e da vira dentro dela e a area do texto das manilhas fixas do Mineiro (ate duas linhas) abaixo.
  */
-export const DECK_GROUP_W = 76;
 export const DECK_IN_X = 8;
-/** A vira desce `VIRA_IN_Y` a partir do topo do monte e se desloca para a direita, levemente inclinada. */
-export const VIRA_IN_Y = 30;
-export const VIRA_IN_X = DECK_IN_X + 14;
+/**
+ * A vira sai pelo lado direito do monte (so 2 px sob ele) e desce `VIRA_IN_Y`, levemente inclinada: o
+ * indice da carta (numero e naipe, no canto superior esquerdo) fica fora do monte e visivel.
+ */
+export const VIRA_IN_Y = 24;
+export const VIRA_IN_X = DECK_IN_X + DECK_W - 2;
+export const DECK_GROUP_W = VIRA_IN_X + DECK_W + 6;
 export const VIRA_ROTATION = 8;
 export const DECK_LABEL_Y = VIRA_IN_Y + DECK_H + 2;
 export const DECK_LABEL_H = 28;
