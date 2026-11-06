@@ -79,10 +79,22 @@ export interface TokenStore {
    */
   revokeFamily(familyId: string): Promise<string | null>;
   /** "Sair de todos os aparelhos", banimento, remoção de conta. Devolve o `lastJti` de cada família recém-revogada. */
-  revokeAllForUser(userId: string): Promise<string[]>;
+  revokeAllForUser(userId: string, exceptFamilyId?: string): Promise<string[]>;
   /** Revoga um access JWT até o instante em que ele expiraria. */
   revokeJti(jti: string, ttlSec: number): Promise<void>;
   isJtiRevoked(jti: string): Promise<boolean>;
+  /**
+   * Uso único de um idToken social (`SET NX EX`): `true` na primeira chamada com a `key` (hash do token,
+   * nunca o token), `false` enquanto o TTL não passar. ATÔMICO entre processos no Redis.
+   */
+  claimIdToken(key: string, ttlSec: number): Promise<boolean>;
+  /** Registra um nonce de login social emitido por nós (`key` = hash do nonce) com validade de `ttlSec`. */
+  putNonce(key: string, ttlSec: number): Promise<void>;
+  /**
+   * Consome o nonce: `true` UMA vez se foi emitido e não expirou; `false` se desconhecido, expirado ou já
+   * consumido. ATÔMICO entre processos no Redis (`DEL`).
+   */
+  consumeNonce(key: string): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -102,10 +114,17 @@ interface TokenEntry {
   expiresAt: number;
 }
 
+/** Teto de idTokens consumidos guardados pelo `MemoryTokenStore`. */
+export const MAX_CLAIMED_ID_TOKENS = 10_000;
+/** Teto de nonces pendentes no `MemoryTokenStore` (o Redis aplica TTL sozinho). */
+export const MAX_PENDING_NONCES = 10_000;
+
 export class MemoryTokenStore implements TokenStore {
   private readonly tokens = new Map<string, TokenEntry>();
   private readonly families = new Map<string, FamilyEntry>();
   private readonly revokedJtis = new Map<string, number>();
+  private readonly claimedIdTokens = new Map<string, number>();
+  private readonly nonces = new Map<string, number>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -189,10 +208,10 @@ export class MemoryTokenStore implements TokenStore {
     return family.lastJti;
   }
 
-  async revokeAllForUser(userId: string): Promise<string[]> {
+  async revokeAllForUser(userId: string, exceptFamilyId?: string): Promise<string[]> {
     const jtis: string[] = [];
     for (const [familyId, family] of this.families) {
-      if (family.userId !== userId) continue;
+      if (family.userId !== userId || familyId === exceptFamilyId) continue;
       const jti = await this.revokeFamily(familyId);
       if (jti !== null) jtis.push(jti);
     }
@@ -213,9 +232,47 @@ export class MemoryTokenStore implements TokenStore {
     return true;
   }
 
+  async claimIdToken(key: string, ttlSec: number): Promise<boolean> {
+    const now = this.now();
+    const until = this.claimedIdTokens.get(key);
+    if (until !== undefined && until > now) return false;
+    // Teto de memória (store de dev/teste): varre os vencidos e, se ainda estiver cheio, descarta os mais
+    // antigos (ordem de inserção). Em produção o Redis aplica o TTL sozinho.
+    if (this.claimedIdTokens.size >= MAX_CLAIMED_ID_TOKENS) {
+      for (const [k, v] of this.claimedIdTokens) if (v <= now) this.claimedIdTokens.delete(k);
+      for (const k of this.claimedIdTokens.keys()) {
+        if (this.claimedIdTokens.size < MAX_CLAIMED_ID_TOKENS) break;
+        this.claimedIdTokens.delete(k);
+      }
+    }
+    this.claimedIdTokens.set(key, now + Math.max(1, ttlSec) * 1000);
+    return true;
+  }
+
+  async putNonce(key: string, ttlSec: number): Promise<void> {
+    const now = this.now();
+    if (this.nonces.size >= MAX_PENDING_NONCES) {
+      for (const [k, v] of this.nonces) if (v <= now) this.nonces.delete(k);
+      for (const k of this.nonces.keys()) {
+        if (this.nonces.size < MAX_PENDING_NONCES) break;
+        this.nonces.delete(k);
+      }
+    }
+    this.nonces.set(key, now + Math.max(1, ttlSec) * 1000);
+  }
+
+  async consumeNonce(key: string): Promise<boolean> {
+    const until = this.nonces.get(key);
+    if (until === undefined) return false;
+    this.nonces.delete(key);
+    return until > this.now();
+  }
+
   async close(): Promise<void> {
     this.tokens.clear();
     this.families.clear();
     this.revokedJtis.clear();
+    this.claimedIdTokens.clear();
+    this.nonces.clear();
   }
 }

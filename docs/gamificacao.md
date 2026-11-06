@@ -38,6 +38,7 @@ Notas:
 - **3 missões diárias** sorteadas de um catálogo, renovadas à meia-noite (America/Sao_Paulo). **1 missão semanal**, renovada na segunda-feira.
 - Exemplos do catálogo: jogar 3 partidas; vencer 1 partida; pedir truco 3 vezes; aceitar 2 aumentos; usar 5 sinais; vencer uma mão valendo 6 ou mais; jogar uma partida com o mesmo parceiro da véspera.
 - Missão com requisito de parceiro ou de variante só é sorteada se o jogador já cumpriu o pré-requisito (ex.: já tem dupla frequente).
+- Contagem das apostas (implementação do 6D): "pedir truco" conta cada `betCalled` do jogador **e** cada `betRaised` (aumentar é pedir a aposta maior); "aceitar aumento" conta cada `betAccepted` **e** cada `betRaised` (no motor, aumentar aceita o pedido anterior). Logo um aumento vale 1 em cada missão.
 - Partida em que o jogador foi substituído por bot por ausência não conta para as missões dele.
 - Sem acúmulo: missão não concluída no dia expira.
 
@@ -82,3 +83,5 @@ Atualizado no bloco 6C (ADR 0009): o catálogo de conquistas e missões fica **e
 3. Se o ranking de **duplas fixas** (opção não escolhida agora) entra numa fase futura. Os dados de `partner_codes` e o histórico por par já deixam isso possível.
 
 > Nota (revanche): as Fases 6 e 9 não contam partida com `botFrom != null` em algum jogador e exigem 4 `userId` distintos. Revanches com bots não valem para conquistas, missões nem ranking.
+
+> Nota (anti-farm por conluio, auditoria 6I): para pontuar, a partida também precisa de no mínimo 4 mãos decididas e 3 minutos de duração; mesa privada com os 4 jogadores convidados não pontua; cada usuário pontua no máximo 10 partidas de mesa privada por 24 h; e cada par dos 4 jogadores pontua no máximo 5 partidas por 24 h (a 6ª do mesmo grupo não pontua). Partida inelegível é gravada normalmente (histórico, combinado de sinais). **Estatística separada de pontuação (decisão do coordenador, reversível):** `user_stats` (jogadas e vitórias) conta toda partida válida (finalizada, 4 humanos distintos, sem bot), mesmo quando o anti-farm barra conquistas e missões; a partida barrada fica marcada `progression_applied.scored = false` e não entra em `dupla_afinada` nem nos tetos. O anti-farm só gateia conquistas e missões; o ranking da Fase 9 terá gate próprio. Os valores são constantes de código (`apps/server/src/progression/achievements.ts`) e devem ser recalibrados no beta; o ranking da Fase 9 deve reaproveitar as mesmas regras.

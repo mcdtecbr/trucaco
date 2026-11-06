@@ -124,6 +124,8 @@ export function createRoomService(options: {
       tablePhase: p.tablePhase,
       seats: p.seats,
       mySeat: p.mySeat,
+      hostSeat: p.hostSeat,
+      visibility: p.visibility,
     });
     remember(r);
   }

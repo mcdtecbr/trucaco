@@ -4,6 +4,7 @@
  * gravada em `matches.seed` como qualquer outra.
  */
 import { log } from '../logger';
+import { NO_EFFORT_POLICY } from '../progression/achievements';
 import type { TrucoRoomConfig } from './TrucoRoom';
 
 const UINT32_MAX = 2 ** 32 - 1;
@@ -37,10 +38,32 @@ export function resolveTrucoSeed(
   return Number(raw);
 }
 
-/** Configuração da sala derivada do ambiente (hoje só a semente). */
+/**
+ * `TRUCO_PROGRESSION_RELAXED=1`: política de progressão SEM anti-farm, SÓ para dev/test (o E2E joga
+ * partidas rápidas de 4 convidados, que a política padrão não pontua). Falha FECHADO: fora de
+ * `NODE_ENV=development|test` o servidor recusa subir, como `AUTH_TEST_IDENTITY`.
+ */
+export function resolveRelaxedProgression(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const raw = env['TRUCO_PROGRESSION_RELAXED'];
+  if (raw === undefined || raw === '' || raw === '0') return false;
+  if (raw !== '1') throw new Error('TRUCO_PROGRESSION_RELAXED deve ser 1 ou ficar vazia.');
+  const nodeEnv = env['NODE_ENV'];
+  if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+    throw new Error('TRUCO_PROGRESSION_RELAXED só é permitido em development/test.');
+  }
+  return true;
+}
+
+/** Configuração da sala derivada do ambiente (semente e política de progressão de teste). */
 export function roomConfigFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): TrucoRoomConfig {
   const rngSeed = resolveTrucoSeed(env);
-  return rngSeed === undefined ? {} : { rngSeed };
+  const relaxed = resolveRelaxedProgression(env);
+  return {
+    ...(rngSeed === undefined ? {} : { rngSeed }),
+    ...(relaxed ? { progressionPolicy: NO_EFFORT_POLICY } : {}),
+  };
 }

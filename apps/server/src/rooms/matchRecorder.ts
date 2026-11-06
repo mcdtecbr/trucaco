@@ -72,6 +72,7 @@ export class MatchRecorder {
   private gameCount = 0;
   private finalized = false;
   private saving: Promise<boolean> | null = null;
+  private savedId: string | null = null;
 
   constructor(private readonly init: RecorderInit) {}
 
@@ -164,8 +165,20 @@ export class MatchRecorder {
    * Prisma/constraint). Idempotente: chamar duas vezes devolve a mesma promessa.
    */
   save(repo: MatchRepository, input: FinishedMatchInput, roomId: string): Promise<boolean> {
-    this.saving ??= persistWithRetry(repo, input, roomId);
+    const capture: Pick<MatchRepository, 'saveMatch'> = {
+      saveMatch: async (i) => {
+        const id = await repo.saveMatch(i);
+        this.savedId = id;
+        return id;
+      },
+    };
+    this.saving ??= persistWithRetry(capture, input, roomId);
     return this.saving;
+  }
+
+  /** Id da partida gravada (`null` até a gravação dar certo). */
+  get matchId(): string | null {
+    return this.savedId;
   }
 
   /** Promessa da gravação em curso (ou `null` se nunca começou). */
@@ -181,7 +194,7 @@ const sleep = (ms: number): Promise<void> =>
   });
 
 export async function persistWithRetry(
-  repo: MatchRepository,
+  repo: Pick<MatchRepository, 'saveMatch'>,
   input: FinishedMatchInput,
   roomId: string,
   attempts: number = PERSIST_ATTEMPTS,

@@ -62,6 +62,8 @@ interface Harness {
   table: TableController;
   sent: ClientMessage[];
   clock: ReturnType<typeof fakeTimers>;
+  /** Menu da mesa já aberto na montagem (padrão dos testes; falso nos testes das camadas). */
+  menu: boolean;
 }
 
 function Screen({ h }: { h: Harness }) {
@@ -73,6 +75,7 @@ function Screen({ h }: { h: Harness }) {
     <TableView
       vm={vm}
       layout="phone"
+      defaultMenuOpen={h.menu}
       banner={null}
       connected
       busy={s.busy}
@@ -114,6 +117,7 @@ function Screen({ h }: { h: Harness }) {
               connected: true,
               nicknameOf: (seat) => vm.seats[seat]?.nickname ?? '',
               mySeat: vm.mySeat,
+              scopes: ['table'],
               on: {
                 setTab: (scope) => table.setChatTab(scope),
                 setDraft: (text) => table.setChatDraft(s.chatTab, text),
@@ -130,9 +134,6 @@ function Screen({ h }: { h: Harness }) {
       on={{
         pressCard: (id) => table.pressCard(id),
         act: (id) => void table.act(id),
-        confirmSelected: () => {
-          if (s.selected !== null) void table.act(s.selected);
-        },
         dismissError: () => table.clearError(),
         toggleCover: () => undefined,
         voteCancel: () => void table.voteCancel(),
@@ -152,7 +153,7 @@ let root: Root | null = null;
 let host: HTMLElement;
 let h: Harness;
 
-function mount(state: unknown): void {
+function mount(state: unknown, menu = true): void {
   const store = createTableStore();
   const clock = fakeTimers();
   const sent: ClientMessage[] = [];
@@ -164,7 +165,7 @@ function mount(state: unknown): void {
     },
     timers: clock.timers,
   });
-  h = { store, table, sent, clock };
+  h = { store, table, sent, clock, menu };
   table.applyState(state);
   const r = createRoot(host);
   root = r;
@@ -204,15 +205,15 @@ afterEach(() => {
 });
 
 describe('mesa: interação real', () => {
-  it('carta: o toque seleciona e o botão de confirmar envia play', () => {
+  it('carta: um toque já envia play, e o toque duplo não envia de novo', () => {
     mount(snapshot());
     const card = host.querySelector('[aria-label*="três de paus"]');
     expect(card).not.toBeNull();
     click(card as HTMLElement);
-    expect(h.sent).toEqual([]);
-    expect(h.store.getState().selected).toBe('play:3paus');
-    click(must('confirm-play'));
     expect(h.sent).toEqual([{ type: 'play', card: { rank: '3', suit: 'paus' } }]);
+    click(card as HTMLElement);
+    expect(h.sent).toHaveLength(1);
+    expect(byTestId('confirm-play')).toBeNull();
   });
 
   it('carta fora de legalActions não envia nada', () => {
@@ -226,7 +227,6 @@ describe('mesa: interação real', () => {
     click(card as HTMLElement);
     click(card as HTMLElement);
     expect(h.store.getState().selected).toBeNull();
-    expect(byTestId('confirm-play')).toBeNull();
     expect(h.sent).toEqual([]);
   });
 
@@ -240,17 +240,26 @@ describe('mesa: interação real', () => {
     expect((must('chat-input') as HTMLInputElement).value).toBe('');
   });
 
-  it('chat da dupla: a aba Dupla envia scope partner e mostra a dica de privacidade', () => {
+  it('em jogo só existe o chat da mesa: sem aba Dupla, e scope partner nunca sai', () => {
     mount(snapshot());
     click(must('open-chat'));
-    click(must('chat-tab-partner'));
-    expect(host.textContent).toContain('Só a sua dupla vê esta conversa.');
-    type(must('chat-input'), 'tenho zap');
-    click(must('chat-send'));
-    expect(h.sent).toEqual([{ type: 'chat', scope: 'partner', text: 'tenho zap' }]);
-    // Rascunhos separados por aba: a Mesa continua vazia.
-    click(must('chat-tab-table'));
-    expect((must('chat-input') as HTMLInputElement).value).toBe('');
+    expect(byTestId('chat-tab-partner')).toBeNull();
+    expect(host.textContent).not.toContain('Só a sua dupla vê esta conversa.');
+    expect(h.table.sendChat('partner', 'tenho zap')).toBe(false);
+    expect(h.sent).toEqual([]);
+  });
+
+  it('histórico das jogadas: recolhido por padrão; o botão expande e recolhe com aria-expanded', () => {
+    mount(snapshot());
+    act(() => h.table.onChat({ scope: 'table', seat: 1, text: 'oi', at: 1 }));
+    const toggle = () => must('score-history-toggle');
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(byTestId('score-history')).toBeNull();
+    click(toggle());
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(byTestId('score-history')?.textContent).toContain('Nenhuma mão concluída ainda.');
+    click(toggle());
+    expect(byTestId('score-history')).toBeNull();
   });
 
   it('frase rápida sai como phraseId', () => {
@@ -568,17 +577,19 @@ describe('5b: efeitos e som na mesa', () => {
 });
 
 describe('5D: combinar sinais', () => {
-  it('abre pela mesa com os 16 sinais, sugestão como placeholder e contador 0/60', () => {
+  const opt = (sig: string, id: string) => byTestId(`code-option-${sig}-${id}`);
+
+  it('abre pela mesa com os 16 sinais, cada um com a lista fixa de 7 significados', () => {
     mount(snapshot());
     expect(byTestId('codes-panel')).toBeNull();
     click(must('open-codes'));
     expect(byTestId('codes-panel')).not.toBeNull();
     for (const s of SIGNALS) {
-      const input = must(`code-input-${s.id}`) as HTMLInputElement;
-      expect(input.value).toBe('');
-      expect(input.placeholder).toBe(`Ex.: ${s.meaning}`);
-      expect(must(`code-count-${s.id}`).textContent).toBe('0/60');
+      expect(host.querySelectorAll(`[data-testid^="code-option-${s.id}-"]`)).toHaveLength(7);
+      expect(host.querySelector(`input[data-testid="code-input-${s.id}"]`)).toBeNull();
     }
+    expect(opt('wink', 'zap')?.getAttribute('role')).toBe('radio');
+    expect(opt('wink', 'zap')?.textContent).toBe('ZAP / manilha de paus');
     expect(must('codes-partner').textContent).toBe('Parceiro: Caio');
     expect(must('codes-guest').textContent).toBe(GUEST_CODES_NOTE);
     expect(must('codes-privacy').textContent).toContain('adversários veem o sinal');
@@ -586,82 +597,66 @@ describe('5D: combinar sinais', () => {
     expect(byTestId('codes-panel')).toBeNull();
   });
 
-  it('digitar atualiza o contador; Salvar só habilita com mudança e envia setCode', () => {
+  it('um toque escolhe e envia setCode com o texto; o eco marca a opção; toque duplo envia uma vez', () => {
     mount(snapshot());
     click(must('open-codes'));
-    const save = () => must('code-save-wink') as HTMLButtonElement;
-    expect(save().getAttribute('aria-disabled')).toBe('true');
-    type(must('code-input-wink'), 'tenho o zap');
-    expect(must('code-count-wink').textContent).toBe('11/60');
-    expect(save().getAttribute('aria-disabled')).not.toBe('true');
-    click(save());
-    expect(h.sent).toEqual([{ type: 'setCode', signalId: 'wink', meaning: 'tenho o zap' }]);
-    // O servidor ecoa o mapa: o campo segue o servidor e o botão volta a desabilitar.
-    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: 0, at: 1 }));
-    expect((must('code-input-wink') as HTMLInputElement).value).toBe('tenho o zap');
-    expect(save().getAttribute('aria-disabled')).toBe('true');
+    click(must('code-option-wink-zap'));
+    click(must('code-option-wink-zap'));
+    click(must('code-option-nod-tres'));
+    expect(h.sent).toEqual([
+      { type: 'setCode', signalId: 'wink', meaning: 'ZAP / manilha de paus' },
+    ]);
+    act(() => h.table.onCodes({ codes: { wink: 'ZAP / manilha de paus' }, by: 0, at: 1 }));
+    expect(must('code-option-wink-zap').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('toque duplo em Salvar envia uma vez; o botão volta após o eco e o erro antigo some', () => {
+  it('significado escolhido some das opções dos outros sinais, "Nada" fica, e trocar libera', () => {
     mount(snapshot());
     click(must('open-codes'));
-    type(must('code-input-wink'), 'tenho o zap');
-    click(must('code-save-wink'));
-    expect(must('code-save-wink').getAttribute('aria-disabled')).toBe('true');
-    click(must('code-save-wink'));
-    expect(h.sent).toHaveLength(1);
-    act(() => h.table.onServerError({ code: 'RATE_LIMITED' }));
-    expect(byTestId('codes-error')).not.toBeNull();
-    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: 0, at: 1 }));
-    expect(byTestId('codes-error')).toBeNull();
+    act(() => h.table.onCodes({ codes: { wink: 'ZAP / manilha de paus' }, by: 0, at: 1 }));
+    expect(opt('nod', 'zap')).toBeNull();
+    expect(opt('nod', 'nada')).not.toBeNull();
+    expect(opt('wink', 'zap')).not.toBeNull();
+    act(() => h.table.onCodes({ codes: { wink: '3' }, by: 0, at: 2 }));
+    expect(opt('nod', 'zap')).not.toBeNull();
+    expect(opt('nod', 'tres')).toBeNull();
   });
 
-  it('draft decomposto (NFD) casa com o eco normalizado (NFC) do servidor', () => {
+  it('"Nada" envia meaning vazio (limpa)', () => {
     mount(snapshot());
+    act(() => h.table.onCodes({ codes: { nod: '2' }, by: -1, at: 1 }));
     click(must('open-codes'));
-    type(must('code-input-wink'), 'coração'.normalize('NFD'));
-    click(must('code-save-wink'));
-    act(() => h.table.onCodes({ codes: { wink: 'coração' }, by: 0, at: 1 }));
-    expect(must('code-save-wink').getAttribute('aria-disabled')).toBe('true');
-    expect((must('code-input-wink') as HTMLInputElement).value).toBe('coração');
-  });
-
-  it('apagar: campo esvaziado vira "Apagar" e envia meaning vazio', () => {
-    mount(snapshot());
-    act(() => h.table.onCodes({ codes: { nod: 'sim' }, by: -1, at: 1 }));
-    click(must('open-codes'));
-    type(must('code-input-nod'), '');
-    expect(must('code-save-nod').textContent).toBe('Apagar');
-    click(must('code-save-nod'));
+    click(must('code-option-nod-nada'));
     expect(h.sent).toEqual([{ type: 'setCode', signalId: 'nod', meaning: '' }]);
   });
 
-  it('a edição do parceiro aparece ao vivo no campo (sem rascunho local)', () => {
+  it('a escolha do parceiro aparece ao vivo', () => {
     mount(snapshot());
     click(must('open-codes'));
-    act(() => h.table.onCodes({ codes: { smile: 'blefe' }, by: 2, at: 1 }));
-    expect((must('code-input-smile') as HTMLInputElement).value).toBe('blefe');
+    act(() => h.table.onCodes({ codes: { smile: '2' }, by: 2, at: 1 }));
+    expect(must('code-option-smile-dois').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('texto recusado mostra o erro em pt-BR e nada é enviado', () => {
+  it('combinado antigo em texto livre aparece como "Personalizado" e pode ser trocado', () => {
     mount(snapshot());
+    act(() => h.table.onCodes({ codes: { wink: 'tenho o zap' }, by: -1, at: 1 }));
     click(must('open-codes'));
-    type(must('code-input-wink'), 'a‍b');
-    click(must('code-save-wink'));
-    expect(h.sent).toEqual([]);
-    expect(must('codes-error').textContent).toContain('Texto não aceito');
+    expect(must('code-custom-wink').textContent).toBe('Personalizado: tenho o zap');
+    click(must('code-option-wink-copas'));
+    expect(h.sent).toEqual([
+      { type: 'setCode', signalId: 'wink', meaning: 'Sete Copas / manilha de copas' },
+    ]);
   });
 
   it('erro RATE_LIMITED do servidor aparece no painel', () => {
     mount(snapshot());
     click(must('open-codes'));
-    type(must('code-input-wink'), 'zap');
-    click(must('code-save-wink'));
+    click(must('code-option-wink-zap'));
     act(() => h.table.onServerError({ code: 'RATE_LIMITED' }));
     expect(must('codes-error').textContent).toContain('Aguarde um segundo');
   });
 
-  it('sem parceiro humano: aviso, campos desabilitados e nada é enviado', () => {
+  it('sem parceiro humano: aviso, opções desabilitadas e nada é enviado', () => {
     mount(
       snapshot({
         players: [0, 1, 2, 3].map((i) =>
@@ -671,8 +666,8 @@ describe('5D: combinar sinais', () => {
     );
     click(must('open-codes'));
     expect(must('codes-no-partner').textContent).toBe(NO_PARTNER_NOTE);
-    expect((must('code-input-wink') as HTMLInputElement).readOnly).toBe(true);
-    click(must('code-save-wink'));
+    expect(must('code-option-wink-zap').getAttribute('aria-disabled')).toBe('true');
+    click(must('code-option-wink-zap'));
     expect(h.sent).toEqual([]);
   });
 
@@ -705,18 +700,24 @@ describe('5D: combinar sinais', () => {
     click(must('signal-toggle'));
     expect(host.querySelector('img[src="x"]')).toBeNull();
     expect(must('signal-meaning-wink').textContent).toBe('<img src=x onerror=alert(1)>');
+    click(must('open-menu'));
     click(must('open-codes'));
-    expect((must('code-input-wink') as HTMLInputElement).value).toBe(
-      '<img src=x onerror=alert(1)>',
+    expect(host.querySelector('img[src="x"]')).toBeNull();
+    expect(must('code-custom-wink').textContent).toBe(
+      'Personalizado: <img src=x onerror=alert(1)>',
     );
   });
 
-  it('adversário (assento 1) sem codes: painel vazio e nenhum significado no painel de sinais', () => {
+  it('adversário (assento 1) sem codes: nenhum significado no painel de sinais; nenhuma opção marcada', () => {
     mount(snapshot({ privates: priv(1) }));
     click(must('signal-toggle'));
     expect(host.querySelector('[data-testid^="signal-meaning-"]')).toBeNull();
+    click(must('open-menu'));
     click(must('open-codes'));
-    expect((must('code-input-wink') as HTMLInputElement).value).toBe('');
+    // Sem combinado vale "Nada"; nenhum outro significado vem marcado.
+    expect(
+      host.querySelector('[data-testid^="code-option-wink-"][aria-checked="true"]')?.textContent,
+    ).toBe('Nada');
   });
 });
 
@@ -823,10 +824,51 @@ describe('5D: sala de espera', () => {
     click(must('open-codes'));
     expect(byTestId('codes-panel')).not.toBeNull();
     expect(must('codes-partner').textContent).toBe('Parceiro: Caio');
-    act(() => table.onCodes({ codes: { wink: 'zap' }, by: -1, at: 1 }));
-    expect((must('code-input-wink') as HTMLInputElement).value).toBe('zap');
+    act(() => table.onCodes({ codes: { wink: 'ZAP / manilha de paus' }, by: -1, at: 1 }));
+    expect(must('code-option-wink-zap').getAttribute('aria-checked')).toBe('true');
     act(() => r.render(<Waiting mySeat={-1} />));
     expect(byTestId('open-codes')).toBeNull();
     expect(byTestId('codes-panel')).toBeNull();
+  });
+});
+
+describe('camadas da mesa: menu, histórico e sinais', () => {
+  it('uma camada por vez: histórico, menu e sinais se fecham entre si', () => {
+    mount(snapshot(), false);
+    click(must('score-history-toggle'));
+    expect(byTestId('score-history')).not.toBeNull();
+    click(must('open-menu'));
+    expect(byTestId('table-menu')).not.toBeNull();
+    expect(byTestId('score-history')).toBeNull();
+    click(must('signal-toggle'));
+    expect(byTestId('signal-grid')).not.toBeNull();
+    expect(byTestId('table-menu')).toBeNull();
+    click(must('score-history-toggle'));
+    expect(byTestId('signal-grid')).toBeNull();
+    expect(byTestId('score-history')).not.toBeNull();
+  });
+
+  it('tocar fora (fundo transparente) fecha o menu e o histórico', () => {
+    mount(snapshot(), false);
+    click(must('open-menu'));
+    click(must('layer-backdrop'));
+    expect(byTestId('table-menu')).toBeNull();
+    expect(byTestId('layer-backdrop')).toBeNull();
+    click(must('score-history-toggle'));
+    click(must('layer-backdrop'));
+    expect(byTestId('score-history')).toBeNull();
+  });
+
+  it('o menu tem papel de menu e vem logo depois da barra de placar', () => {
+    mount(snapshot(), false);
+    click(must('open-menu'));
+    expect(must('table-menu').getAttribute('role')).toBe('menu');
+    const html = host.innerHTML;
+    expect(html.indexOf('data-testid="score-fixed"')).toBeLessThan(
+      html.indexOf('data-testid="table-menu"'),
+    );
+    expect(html.indexOf('data-testid="table-menu"')).toBeLessThan(
+      html.indexOf('data-testid="turn-timer"'),
+    );
   });
 });

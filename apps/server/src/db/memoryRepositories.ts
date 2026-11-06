@@ -19,8 +19,10 @@ import {
   type MatchSummary,
   type NewGuestInput,
   type NewReportInput,
+  type NewSocialUserInput,
   type PartnerCodesMap,
   type ReportRecord,
+  type SocialProviderId,
   type UserRecord,
   type UserRepository,
 } from './types';
@@ -33,6 +35,7 @@ import {
   clampLimit,
   decodeCursor,
   encodeCursor,
+  nicknameSkeleton,
   normalizeId,
   orderPair,
   validateNickname,
@@ -59,6 +62,8 @@ export class MemoryStore {
   readonly stats = new Map<string, StatsRecord & { readonly userId: string }>();
   /** Partidas já avaliadas (`progression_applied`). */
   readonly progressionApplied = new Set<string>();
+  /** Dessas, as aplicadas só para estatística (anti-farm barrou conquistas e missões). */
+  readonly progressionUnscored = new Set<string>();
 }
 
 interface StoredMatch {
@@ -93,9 +98,54 @@ export class MemoryUserRepository implements UserRepository {
       nickname,
       createdAt: now,
       lastSeenAt: now,
+      linkedAt: null,
     };
     this.store.users.set(user.id, user);
     return user;
+  }
+
+  async createSocialUser(input: NewSocialUserInput): Promise<UserRecord> {
+    const nickname = validateNickname(input.nickname);
+    assertProviderSubject(input.providerSubject);
+    const lower = nickname.toLowerCase();
+    for (const user of this.store.users.values()) {
+      if (user.nickname.toLowerCase() === lower) throw new NicknameTakenError();
+      if (user.provider === input.provider && user.providerSubject === input.providerSubject) {
+        throw new ProviderSubjectTakenError();
+      }
+    }
+    const now = new Date();
+    const user: UserRecord = {
+      id: randomUUID(),
+      provider: input.provider,
+      providerSubject: input.providerSubject,
+      nickname,
+      createdAt: now,
+      lastSeenAt: now,
+      linkedAt: null,
+    };
+    this.store.users.set(user.id, user);
+    return user;
+  }
+
+  async linkProvider(
+    rawId: string,
+    provider: SocialProviderId,
+    providerSubject: string,
+  ): Promise<UserRecord | null> {
+    const id = normalizeId(rawId);
+    assertProviderSubject(providerSubject);
+    // Trecho síncrono (sem `await` entre a checagem e a gravação): atômico no event loop.
+    const user = this.store.users.get(id);
+    if (user === undefined || user.provider !== 'guest') return null;
+    for (const other of this.store.users.values()) {
+      if (other.provider === provider && other.providerSubject === providerSubject) {
+        throw new ProviderSubjectTakenError();
+      }
+    }
+    const linked: UserRecord = { ...user, provider, providerSubject, linkedAt: new Date() };
+    this.store.users.set(id, linked);
+    return linked;
   }
 
   async findById(id: string): Promise<UserRecord | null> {
@@ -124,8 +174,13 @@ export class MemoryUserRepository implements UserRepository {
     const user = this.store.users.get(id);
     if (user === undefined) throw new InvalidInputError('Usuário inexistente.');
     const lower = nickname.toLowerCase();
+    const skeleton = nicknameSkeleton(nickname);
     for (const other of this.store.users.values()) {
-      if (other.id !== id && other.nickname.toLowerCase() === lower) throw new NicknameTakenError();
+      if (other.id === id) continue;
+      // Mesmo apelido sem diferenciar caixa OU mesmo esqueleto (letra parecida), como no Postgres.
+      if (other.nickname.toLowerCase() === lower || nicknameSkeleton(other.nickname) === skeleton) {
+        throw new NicknameTakenError();
+      }
     }
     this.store.users.set(id, { ...user, nickname });
   }
@@ -221,8 +276,28 @@ export class MemoryUserRepository implements UserRepository {
       ...r,
       reporterId: r.reporterId === id ? null : r.reporterId,
       reportedId: r.reportedId === id ? null : r.reportedId,
+      // LGPD: o texto livre escrito pelo titular some; as denúncias contra ele ficam.
+      text: r.reporterId === id ? null : r.text,
     }));
     return true;
+  }
+
+  async countReportsAgainst(rawId: string, since: Date): Promise<number> {
+    const id = normalizeId(rawId);
+    return this.store.reports.filter(
+      (r) => r.reportedId === id && !r.throttled && r.createdAt.getTime() >= since.getTime(),
+    ).length;
+  }
+
+  async sharedMatchSince(userA: string, userB: string, since: Date): Promise<boolean> {
+    const a = normalizeId(userA);
+    const b = normalizeId(userB);
+    return this.store.matches.some(
+      (m) =>
+        m.input.endedAt.getTime() >= since.getTime() &&
+        m.input.players.some((p) => p.userId === a) &&
+        m.input.players.some((p) => p.userId === b),
+    );
   }
 
   async createReport(input: NewReportInput): Promise<ReportRecord> {
@@ -238,6 +313,15 @@ export class MemoryUserRepository implements UserRepository {
     if (matchId !== null && !this.store.matches.some((m) => m.id === matchId)) {
       throw new InvalidInputError('Usuário ou partida inexistente.');
     }
+    // Espelha UNIQUE (reporter_id, reported_id, match_id): com match_id nulo o SQL não tem unicidade.
+    if (
+      matchId !== null &&
+      this.store.reports.some(
+        (r) => r.reporterId === reporterId && r.reportedId === reportedId && r.matchId === matchId,
+      )
+    ) {
+      throw new InvalidInputError('Registro duplicado.');
+    }
     const report: ReportRecord = {
       id: randomUUID(),
       reporterId,
@@ -247,6 +331,7 @@ export class MemoryUserRepository implements UserRepository {
       text: input.text ?? null,
       status: 'open',
       createdAt: new Date(),
+      throttled: input.throttled === true,
     };
     this.store.reports.push(report);
     return report;

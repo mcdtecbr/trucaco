@@ -16,6 +16,7 @@ import {
   useSessionStore,
 } from '../store/sessionStore';
 import { SettingsView } from './SettingsView';
+import { useSocialAuth } from './useSocialAuth';
 
 export function SettingsScreen() {
   const router = useRouter();
@@ -28,6 +29,9 @@ export function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const provider = useSessionStore(selectProvider);
   const alive = useRef(true);
+  const userId = useSessionStore((st) => st.user?.id ?? null);
+  const epoch = useRef(0);
+  const social = useSocialAuth('link', () => undefined);
   const [blocksState, setBlocksState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [blocks, setBlocks] = useState<readonly BlockedUser[]>([]);
   const [blocksError, setBlocksError] = useState<string | null>(null);
@@ -44,23 +48,28 @@ export function SettingsScreen() {
   }, []);
 
   const loadBlocks = useCallback(async (): Promise<void> => {
+    const my = epoch.current;
     setBlocksState('loading');
     setBlocksError(null);
     try {
       const res = await getApp().session.api.blocks();
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setBlocks(res.blocks);
       setBlocksState('ready');
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current || my !== epoch.current) return;
       setBlocksError(messageForError(e));
       setBlocksState('error');
     }
   }, []);
 
+  // Troca de usuário: a lista de bloqueados do anterior não pode ficar na tela.
   useEffect(() => {
+    epoch.current += 1;
+    setBlocks([]);
+    setUnblocking(null);
     void loadBlocks();
-  }, [loadBlocks]);
+  }, [loadBlocks, userId]);
 
   const unblock = async (userId: string): Promise<void> => {
     if (unblocking !== null) return;
@@ -150,11 +159,16 @@ export function SettingsScreen() {
       saved={saved}
       appVersion={version}
       sound={{ prefs: audioPrefs, onChange: (patch) => audio.setPrefs(patch) }}
+      legal={{ onTerms: () => router.push('/terms'), onPrivacy: () => router.push('/privacy') }}
       account={{
         provider,
         blocks: { state: blocksState, items: blocks, error: blocksError, busyId: unblocking },
         deletion: { step: deleteStep, busy: deleting, error: deleteError },
+        social,
         on: {
+          achievements: () => router.push('/achievements'),
+          missions: () => router.push('/missions'),
+          login: () => router.push('/login'),
           profile: () => router.push('/profile'),
           unblock: (id) => void unblock(id),
           retryBlocks: () => void loadBlocks(),

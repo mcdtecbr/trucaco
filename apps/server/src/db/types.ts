@@ -87,10 +87,22 @@ export interface UserRecord {
   readonly nickname: string;
   readonly createdAt: Date;
   readonly lastSeenAt: Date;
+  /** Quando o convidado foi vinculado a um provedor (6F). `null` = nunca vinculado (convidado ou conta social nascida social). */
+  readonly linkedAt: Date | null;
 }
 
 export interface NewGuestInput {
   /** Identificador aleatório gerado pelo servidor (não é segredo de sessão). */
+  readonly providerSubject: string;
+  readonly nickname: string;
+}
+
+/** Provedores sociais (os que não são `guest`). */
+export type SocialProviderId = Exclude<AuthProviderId, 'guest'>;
+
+export interface NewSocialUserInput {
+  readonly provider: SocialProviderId;
+  /** `sub` VERIFICADO do idToken. */
   readonly providerSubject: string;
   readonly nickname: string;
 }
@@ -102,6 +114,8 @@ export interface NewReportInput {
   readonly reason: ReportReasonId;
   /** Até 500 caracteres. */
   readonly text?: string | undefined;
+  /** Gravada acima do teto por denunciado/hora (padrão false). */
+  readonly throttled?: boolean | undefined;
 }
 
 export interface ReportRecord {
@@ -113,6 +127,7 @@ export interface ReportRecord {
   readonly text: string | null;
   readonly status: 'open' | 'reviewed' | 'dismissed';
   readonly createdAt: Date;
+  readonly throttled: boolean;
 }
 
 export interface BlockedUserRecord {
@@ -130,6 +145,20 @@ export type PartnerCodesMap = { readonly [signalId: string]: string };
 export interface UserRepository {
   /** Lança `NicknameTakenError` (apelido repetido, sem diferenciar caixa) ou `InvalidInputError`. */
   createGuest(input: NewGuestInput): Promise<UserRecord>;
+  /** Conta nascida social (login social sem convidado prévio). `NicknameTakenError` ou `ProviderSubjectTakenError` (corrida). */
+  createSocialUser(input: NewSocialUserInput): Promise<UserRecord>;
+  /**
+   * Vínculo ATÔMICO do convidado: só vira `provider`/`subject` se o usuário AINDA é `guest` (um UPDATE
+   * condicional; dois vínculos concorrentes do mesmo convidado, ou do mesmo `sub` por dois convidados,
+   * nunca passam os dois). O `id` não muda: histórico, progressão, avatar e combinados ficam. Devolve o
+   * usuário atualizado, ou `null` se não existe ou já não é convidado. `ProviderSubjectTakenError` se o
+   * `sub` já pertence a outra conta.
+   */
+  linkProvider(
+    id: string,
+    provider: SocialProviderId,
+    providerSubject: string,
+  ): Promise<UserRecord | null>;
   findById(id: string): Promise<UserRecord | null>;
   findByProvider(provider: AuthProviderId, providerSubject: string): Promise<UserRecord | null>;
   touchLastSeen(id: string, at: Date): Promise<void>;
@@ -157,13 +186,23 @@ export interface UserRepository {
    * partida). Sem `matchId`: uma denúncia sem partida do mesmo par nas últimas 24 h.
    */
   hasReport(reporterId: string, reportedId: string, matchId: string | null): Promise<boolean>;
+  /** Denúncias NÃO limitadas (`throttled = false`) contra `reportedId` desde `since` (teto global por denunciado, auditoria 6I). */
+  countReportsAgainst(reportedId: string, since: Date): Promise<number>;
 
   /**
    * Apaga o usuário. Cascatas do banco: avatar, bloqueios (nos dois sentidos) e combinados somem;
    * `match_players.user_id` e `reports.reporter_id/reported_id` viram NULL (anonimização; denúncias contra
-   * a conta ficam). `true` se existia. Sessões (Redis) são revogadas por quem chama.
+   * a conta ficam como prova de moderação). O texto livre (`reports.text`) das denúncias ESCRITAS pelo
+   * titular é anulado na mesma transação (LGPD). `true` se existia. Sessões (Redis) são revogadas por
+   * quem chama.
    */
   deleteUser(id: string): Promise<boolean>;
+
+  /**
+   * Os dois foram jogadores (qualquer assento, qualquer dupla, partida `finished` ou `cancelled`) de uma
+   * mesma partida terminada em `since` ou depois. Valida denúncia sem `matchId`.
+   */
+  sharedMatchSince(userA: string, userB: string, since: Date): Promise<boolean>;
 
   /** Existe partida `finished` em que os dois foram jogadores da MESMA dupla (`team`). */
   havePlayedTogether(userA: string, userB: string): Promise<boolean>;
@@ -363,13 +402,17 @@ export interface ProgressionRepository {
    * Aplica a progressão de UMA partida a todos os usuários, numa transação, e é IDEMPOTENTE por `matchId`:
    * a primeira chamada grava e devolve `applied: true` com os desbloqueios novos; qualquer outra (inclusive
    * simultânea) devolve `applied: false` sem escrever. O nível de cada conquista é derivado do progresso
-   * final (`achievementLevelFor`) e nunca diminui. Missão: progresso limitado à meta, conclusão marcada uma vez.
+   * final (`achievementLevelFor`) e nunca diminui (`progressSet` também só sobe: `GREATEST`). Missão: progresso limitado à meta, conclusão marcada uma vez.
+   * `options.scored` (padrão true) = false marca a partida como SÓ ESTATÍSTICA: `user_stats` soma normalmente, mas
+   * ela não entra nas contagens anti-farm nem em `countWinsTogether`; o chamador não deve mandar conquistas nem
+   * missões nesse caso.
    * `InvalidInputError` se `matchId` não existir, usuário inexistente, id fora do catálogo, `periodKey`
    * inválido, delta negativo/fracionário ou `won > played`. Tudo ou nada.
    */
   applyMatchProgress(
     matchId: string,
     deltas: readonly UserProgressDelta[],
+    options?: { readonly scored?: boolean },
   ): Promise<ApplyProgressResult>;
   /** Linhas existentes (conquistas sem linha ainda não foram tocadas: o chamador completa pelo catálogo). */
   listAchievements(userId: string): Promise<readonly AchievementRecord[]>;
@@ -377,6 +420,24 @@ export interface ProgressionRepository {
   listMissions(userId: string, periodKeys: readonly string[]): Promise<readonly MissionRecord[]>;
   /** Uma linha por variante já jogada. */
   getStats(userId: string): Promise<readonly StatsRecord[]>;
+  /**
+   * Partidas `finished` que os dois venceram juntos (mesma dupla, dupla vencedora) e que JÁ foram aplicadas
+   * (`progression_applied`) e PONTUADAS (`scored`), sem bot em nenhum assento. Alimenta `dupla_afinada`. A partida em avaliação ainda
+   * NÃO está marcada: quem chama soma 1.
+   */
+  countWinsTogether(userA: string, userB: string): Promise<number>;
+  /**
+   * Partidas JÁ aplicadas e PONTUADAS (`progression_applied.scored`) em que os dois jogaram (qualquer
+   * assento) e que terminaram em `[since, until)`. Alimenta o teto de progressão por par de usuários.
+   */
+  countMatchesTogether(userA: string, userB: string, since: Date, until: Date): Promise<number>;
+  /**
+   * Partidas PONTUADAS (`scored`) de mesa privada em que `userId` jogou e que terminaram em `[since, until)`.
+   * Alimenta o teto diário por usuário em mesa privada.
+   */
+  countScoredPrivateMatches(userId: string, since: Date, until: Date): Promise<number>;
+  /** Quantos dos usuários existentes são convidados (`provider = guest`). Usuário apagado não conta. */
+  countGuests(userIds: readonly string[]): Promise<number>;
   /** `null` se o usuário não existe (mesmo resultado para apagado). */
   getPublicProfile(userId: string): Promise<PublicProfileRecord | null>;
   /**

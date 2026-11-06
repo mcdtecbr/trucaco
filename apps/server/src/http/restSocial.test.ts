@@ -16,7 +16,13 @@ import type { FinishedMatchInput, UserRepository } from '../db/types';
 import { setLogSink } from '../logger';
 import { emitBlockChange, onBlockChange, onUserDeleted } from '../social/blockBus';
 import type { BlockChange } from '../social/blockBus';
-import { MAX_BLOCKS_PER_USER, installBaseMiddleware, mountFallbacks, mountRest } from './rest';
+import {
+  MAX_BLOCKS_PER_USER,
+  REPORTS_PER_REPORTED_PER_HOUR,
+  installBaseMiddleware,
+  mountFallbacks,
+  mountRest,
+} from './rest';
 
 setLogSink(() => undefined);
 
@@ -227,6 +233,11 @@ describe('GET /matches', () => {
   });
 });
 
+const afterEachOff: (() => void)[] = [];
+afterEach(() => {
+  for (const off of afterEachOff.splice(0)) off();
+});
+
 describe('bloqueio', () => {
   it('POST bloqueia (204), GET lista com apelido, é idempotente e publica a mudança', async () => {
     const { call, guest } = await start();
@@ -258,9 +269,12 @@ describe('bloqueio', () => {
     });
   });
 
-  it('a si mesmo: INVALID_BLOCK; inexistente ou apagado: o MESMO USER_NOT_FOUND', async () => {
+  it('a si mesmo: INVALID_BLOCK; inexistente ou apagado: 204 igual ao sucesso, sem gravar nem publicar', async () => {
     const { call, guest, repos } = await start();
     const [a, b] = [await guest(), await guest()];
+    const seen: BlockChange[] = [];
+    const off = onBlockChange((c) => seen.push(c));
+    afterEachOff.push(off);
     const self = await call('POST', '/me/blocks', {
       token: a.accessToken,
       body: { userId: a.user.id },
@@ -276,10 +290,31 @@ describe('bloqueio', () => {
       token: a.accessToken,
       body: { userId: randomUUID() },
     });
-    expect(gone.status).toBe(404);
-    expect(ghost.status).toBe(404);
-    expect(await gone.json()).toEqual(await ghost.json());
+    expect(gone.status).toBe(204);
+    expect(ghost.status).toBe(204);
+    expect(await gone.text()).toBe(await ghost.text());
     expect(await repos.users.listBlockedIds(a.user.id)).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it('com o teto cheio, alvo existente e inexistente dão a MESMA resposta (400)', async () => {
+    const { call, guest, repos } = await start();
+    const a = await guest();
+    for (let i = 0; i < MAX_BLOCKS_PER_USER; i++) {
+      const u = await repos.users.createGuest({
+        providerSubject: `g${i}`,
+        nickname: `Cheio${String(i).padStart(3, '0')}`,
+      });
+      await repos.users.addBlock(a.user.id, u.id);
+    }
+    const real = await guest();
+    const answers: unknown[] = [];
+    for (const userId of [real.user.id, randomUUID()]) {
+      const res = await call('POST', '/me/blocks', { token: a.accessToken, body: { userId } });
+      answers.push([res.status, await res.json()]);
+    }
+    expect(answers[0]).toEqual([400, { error: { code: 'INVALID_BLOCK' } }]);
+    expect(answers[1]).toEqual(answers[0]);
   });
 
   it('corpo inválido: INVALID_BODY (id que não é UUID, chave extra, vazio)', async () => {
@@ -360,7 +395,7 @@ describe('bloqueio', () => {
         expect(await code(res)).toBe('RATE_LIMITED');
       }
     }
-    expect(statuses).toEqual([404, 404, 429]);
+    expect(statuses).toEqual([204, 204, 429]);
   });
 
   it('preflight do navegador libera o método DELETE', async () => {
@@ -373,6 +408,11 @@ describe('bloqueio', () => {
   });
 });
 
+type Repos = Awaited<ReturnType<typeof start>>['repos'];
+/** Partida terminada em comum entre os usuários (valida denúncia sem `matchId`). */
+const shareMatch = (repos: Repos, ids: string[], endedAt: Date = new Date()): Promise<string> =>
+  repos.matches.saveMatch(finishedMatch([...ids, null, null, null].slice(0, 4), endedAt));
+
 describe('POST /reports', () => {
   const report = (reportedId: string, extra: object = {}) => ({
     userId: reportedId,
@@ -383,6 +423,7 @@ describe('POST /reports', () => {
   it('grava, responde 201 {} sem eco e normaliza o texto', async () => {
     const { call, guest, repos } = await start();
     const [a, b] = [await guest(), await guest()];
+    await shareMatch(repos, [a.user.id, b.user.id]);
     const res = await call('POST', '/reports', {
       token: a.accessToken,
       body: report(b.user.id.toUpperCase(), { text: 'xingou\nna mesa' }),
@@ -400,9 +441,10 @@ describe('POST /reports', () => {
     });
   });
 
-  it('contra si mesmo: INVALID_REPORT; denunciado inexistente ou apagado: 201 igual e nada gravado', async () => {
+  it('contra si mesmo, inexistente ou apagado: INVALID_REPORT (mesma resposta) e nada gravado', async () => {
     const { call, guest, repos } = await start();
     const [a, b] = [await guest(), await guest()];
+    await shareMatch(repos, [a.user.id, b.user.id]);
     const self = await call('POST', '/reports', { token: a.accessToken, body: report(a.user.id) });
     expect(self.status).toBe(400);
     expect(await code(self)).toBe('INVALID_REPORT');
@@ -412,10 +454,68 @@ describe('POST /reports', () => {
       token: a.accessToken,
       body: report(randomUUID()),
     });
-    expect(gone.status).toBe(201);
-    expect(ghost.status).toBe(201);
+    // apagado some de `match_players`: sem partida em comum, igual a um id que nunca existiu
+    expect(gone.status).toBe(400);
+    expect(ghost.status).toBe(400);
     expect(await gone.json()).toEqual(await ghost.json());
     expect(repos.store.reports).toHaveLength(0);
+  });
+
+  it('sem matchId: só com partida terminada em comum na janela de 7 dias (qualquer dupla)', async () => {
+    const { call, guest, repos } = await start();
+    const [a, b, c, d] = [await guest(), await guest(), await guest(), await guest()];
+    const stranger = await call('POST', '/reports', {
+      token: a.accessToken,
+      body: report(b.user.id),
+    });
+    expect(stranger.status).toBe(400);
+    expect(await code(stranger)).toBe('INVALID_REPORT');
+    // partida antiga (fora da janela)
+    await shareMatch(repos, [a.user.id, b.user.id], new Date(Date.now() - 8 * 24 * 3_600_000));
+    expect(
+      (await call('POST', '/reports', { token: a.accessToken, body: report(b.user.id) })).status,
+    ).toBe(400);
+    // adversários (assentos 0 e 1, duplas diferentes) numa partida recente
+    await shareMatch(repos, [c.user.id, d.user.id], new Date(Date.now() - 6 * 24 * 3_600_000));
+    expect(
+      (await call('POST', '/reports', { token: c.accessToken, body: report(d.user.id) })).status,
+    ).toBe(201);
+    expect(repos.store.reports).toHaveLength(1);
+  });
+
+  it('teto global por denunciado: acima de REPORTS_PER_REPORTED_PER_HOUR responde 201 e grava com throttled', async () => {
+    const { call, guest, repos } = await start();
+    const target = await guest();
+    for (let i = 0; i < REPORTS_PER_REPORTED_PER_HOUR + 2; i++) {
+      const r = await guest();
+      await shareMatch(repos, [r.user.id, target.user.id]);
+      const res = await call('POST', '/reports', {
+        token: r.accessToken,
+        body: report(target.user.id),
+      });
+      expect(res.status).toBe(201);
+    }
+    // todas gravadas; só as acima do teto ficam marcadas throttled (fora da fila prioritária)
+    expect(repos.store.reports).toHaveLength(REPORTS_PER_REPORTED_PER_HOUR + 2);
+    expect(repos.store.reports.filter((r) => r.throttled)).toHaveLength(2);
+    expect(
+      repos.store.reports.slice(0, REPORTS_PER_REPORTED_PER_HOUR).some((r) => r.throttled),
+    ).toBe(false);
+  });
+
+  it('repetida com matchId: o UNIQUE barra a corrida (InvalidInputError) e nada é regravado', async () => {
+    const { guest, repos } = await start();
+    const [a, b] = [await guest(), await guest()];
+    const matchId = await shareMatch(repos, [a.user.id, b.user.id]);
+    const input = {
+      reporterId: a.user.id,
+      reportedId: b.user.id,
+      matchId,
+      reason: 'other',
+    } as const;
+    await repos.users.createReport(input);
+    await expect(repos.users.createReport(input)).rejects.toThrow(/duplicado/);
+    expect(repos.store.reports).toHaveLength(1);
   });
 
   it('matchId: só vale se denunciante e denunciado jogaram; repetida (mesma partida) é 201 sem regravar', async () => {
@@ -513,8 +613,9 @@ describe('POST /reports', () => {
   });
 
   it('5 denúncias por hora por usuário: a 6ª é 429 (mesmo inválida conta); outro usuário não é afetado', async () => {
-    const { call, guest } = await start();
+    const { call, guest, repos } = await start();
     const [a, b, other] = [await guest(), await guest(), await guest()];
+    await shareMatch(repos, [a.user.id, b.user.id, other.user.id]);
     for (let i = 0; i < 5; i++) {
       const res = await call('POST', '/reports', { token: a.accessToken, body: report(b.user.id) });
       expect(res.status).toBe(201);
@@ -547,6 +648,14 @@ describe('DELETE /me', () => {
       reportedId: a.user.id,
       matchId,
       reason: 'cheating',
+      text: 'texto do b contra a',
+    });
+    await repos.users.createReport({
+      reporterId: a.user.id,
+      reportedId: c.user.id,
+      matchId,
+      reason: 'other',
+      text: 'texto livre da a',
     });
     const deleted: string[] = [];
     const off = onUserDeleted((id) => deleted.push(id));
@@ -570,8 +679,13 @@ describe('DELETE /me', () => {
       code: 'INVALID_REFRESH_TOKEN',
     });
     // partida e denúncia ficam, anonimizadas
-    expect(repos.store.reports).toHaveLength(1);
-    expect(repos.store.reports[0]?.reportedId).toBeNull();
+    expect(repos.store.reports).toHaveLength(2);
+    // contra o titular: fica (prova de moderação), com o texto de quem denunciou
+    const against = repos.store.reports.find((r) => r.reporterId === b.user.id);
+    expect(against).toMatchObject({ reportedId: null, text: 'texto do b contra a' });
+    // escrita pelo titular: o texto livre some (LGPD); o resto da linha fica anonimizado
+    const filed = repos.store.reports.find((r) => r.reportedId === c.user.id);
+    expect(filed).toMatchObject({ reporterId: null, text: null, reason: 'other' });
     const page = await repos.matches.listForUser(b.user.id);
     expect(page.items[0]?.players.map((p) => p.userId)).toEqual([
       null,

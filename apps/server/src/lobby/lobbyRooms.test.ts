@@ -219,7 +219,7 @@ describe('mesa privada por código, partida até o fim e registro', () => {
     const heard: string[] = [];
     tb.clients[2]!.onMessage('chat', (m: { text?: string }) => heard.push(m.text ?? ''));
     await until(() => tb.room.series !== null, 'série iniciada');
-    tb.clients[0]!.send('chat', { scope: 'partner', text: SECRET });
+    tb.clients[0]!.send('chat', { scope: 'table', text: SECRET });
     tb.clients[1]!.send('signal', { signalId: 'piscar_olho' });
     tb.clients[3]!.send('sfx', { sfxId: 'risada' });
     tb.clients[3]!.send('chat', { scope: 'table', text: `${SECRET}-mesa` });
@@ -270,7 +270,7 @@ describe('mesa privada por código, partida até o fim e registro', () => {
     expect(everything).not.toMatch(/"type":"(chat|signal|sfx)"/);
     expect(everything).not.toContain('piscar_olho');
     expect(everything).not.toContain('risada');
-    // ...mas o parceiro de fato recebeu (a varredura não é vazia por falta de envio)
+    // ...mas a mesa de fato recebeu (a varredura não é vazia por falta de envio)
     expect(heard).toContain(SECRET);
     // idempotente: depois de a sala fechar (onDispose) continua um registro só
     await until(() => tb.room.state.phase === 'finished', 'fim');

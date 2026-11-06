@@ -18,6 +18,10 @@ const STATUS_COLOR: Readonly<Record<AvatarStatus, string>> = {
   bot: colors.textMuted,
 };
 
+/** Altura da linha do apelido sob o avatar na mesa e espaço até o avatar (px). */
+export const SEAT_NAME_H = 16;
+export const SEAT_NAME_GAP = 2;
+
 /** Primeira letra do apelido (code point inteiro), ou `?` se vazio. Texto puro. */
 export function initialOf(nickname: string): string {
   const first = [...nickname.trim()][0];
@@ -45,6 +49,17 @@ export interface AvatarPlaceholderProps {
   /** Destaca quem joga agora. */
   readonly active?: boolean;
   readonly layout?: 'row' | 'column';
+  /** Raio do anel do avatar desenhado (px). Omitido = anel redondo; informado = quadrado arredondado. */
+  readonly ringRadius?: number;
+  /**
+   * Apelido numa linha logo abaixo do avatar, fora do quadrado (altura fixa `SEAT_NAME_H`), com o ponto
+   * de conexão ao lado do texto. O status só vira texto quando não é "online".
+   */
+  readonly nameBelow?: boolean;
+  /** Largura da linha do apelido (px); omitida = largura do conteúdo. */
+  readonly nameWidth?: number;
+  /** Espaço entre o avatar e o apelido (px). Padrão `SEAT_NAME_GAP`. */
+  readonly nameGap?: number;
   /**
    * Avatar desenhado pelo app (`<Avatar>` de `@trucaco/avatar`; `ui` não depende desse pacote). Quando
    * presente e a vaga não está vazia, substitui o círculo com a inicial; o anel de time e o destaque
@@ -76,6 +91,9 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
       <View
         style={[
           p.avatar !== undefined && !empty ? styles.ring : styles.circle,
+          p.avatar !== undefined && !empty && p.ringRadius !== undefined
+            ? { borderRadius: p.ringRadius }
+            : null,
           empty && styles.circleEmpty,
           team !== null && !empty && { borderColor: team.main },
           p.active === true && styles.active,
@@ -86,11 +104,35 @@ export function AvatarPlaceholder(p: AvatarPlaceholderProps) {
         ) : (
           <Text style={styles.initial}>{empty ? '·' : initialOf(p.nickname)}</Text>
         )}
-        {status !== undefined && !empty ? (
+        {p.nameBelow !== true && status !== undefined && !empty ? (
           <View style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]} />
         ) : null}
       </View>
-      <View style={[styles.texts, column && styles.textsColumn]}>
+      {p.nameBelow === true ? (
+        <View
+          style={[
+            styles.nameRow,
+            {
+              marginTop: p.nameGap ?? SEAT_NAME_GAP,
+              ...(p.nameWidth !== undefined ? { width: p.nameWidth } : {}),
+            },
+          ]}
+          pointerEvents="none"
+          testID="seat-name"
+        >
+          {status !== undefined && !empty ? (
+            <View style={[styles.nameDot, { backgroundColor: STATUS_COLOR[status] }]} />
+          ) : null}
+          <Text style={styles.nameText} numberOfLines={1}>
+            {[name, status === 'away' || status === 'bot' ? STATUS_TEXT[status] : '']
+              .filter((x) => x !== '')
+              .join(' · ')}
+          </Text>
+        </View>
+      ) : null}
+      <View
+        style={[styles.texts, column && styles.textsColumn, p.nameBelow === true && styles.hidden]}
+      >
         <Text style={styles.nick} numberOfLines={column ? 2 : 1}>
           {name}
         </Text>
@@ -142,6 +184,23 @@ const styles = StyleSheet.create({
     borderRadius: radius.round,
     borderWidth: 2,
     borderColor: colors.background,
+  },
+  hidden: { display: 'none' },
+  nameRow: {
+    height: SEAT_NAME_H,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  nameDot: { width: 8, height: 8, borderRadius: radius.round, flexShrink: 0 },
+  nameText: {
+    flexShrink: 1,
+    color: colors.text,
+    fontSize: fontSize.caption,
+    lineHeight: SEAT_NAME_H,
+    fontWeight: fontWeight.bold,
+    textAlign: 'center',
   },
   initial: { color: colors.onPrimary, fontSize: fontSize.large, fontWeight: fontWeight.heavy },
   texts: { flexShrink: 1 },

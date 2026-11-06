@@ -60,10 +60,12 @@ describe('códigos e rotas da Fase 6', () => {
 });
 
 describe('parseSocialAuthRequest / parseLinkRequest', () => {
-  it('aceita com e sem nonce', () => {
-    expect(parseSocialAuthRequest({ provider: 'google', idToken: 'a.b.c' })).toEqual({
+  it('o nonce é obrigatório', () => {
+    expect(parseSocialAuthRequest({ provider: 'google', idToken: 'a.b.c' })).toBeNull();
+    expect(parseSocialAuthRequest({ provider: 'google', idToken: 'a.b.c', nonce: 'n' })).toEqual({
       provider: 'google',
       idToken: 'a.b.c',
+      nonce: 'n',
     });
     expect(parseLinkRequest({ provider: 'apple', idToken: 'x', nonce: 'n1' })).toEqual({
       provider: 'apple',
@@ -90,8 +92,10 @@ describe('parseSocialAuthRequest / parseLinkRequest', () => {
 
   it('limites de tamanho', () => {
     const ok = 'a'.repeat(ID_TOKEN_MAX_LENGTH);
-    expect(parseSocialAuthRequest({ provider: 'google', idToken: ok })).not.toBeNull();
-    expect(parseSocialAuthRequest({ provider: 'google', idToken: ok + 'a' })).toBeNull();
+    expect(parseSocialAuthRequest({ provider: 'google', idToken: ok, nonce: 'n' })).not.toBeNull();
+    expect(
+      parseSocialAuthRequest({ provider: 'google', idToken: ok + 'a', nonce: 'n' }),
+    ).toBeNull();
     const n = 'n'.repeat(NONCE_MAX_LENGTH);
     expect(parseSocialAuthRequest({ provider: 'apple', idToken: 'x', nonce: n })).not.toBeNull();
     expect(parseSocialAuthRequest({ provider: 'apple', idToken: 'x', nonce: n + 'n' })).toBeNull();
@@ -110,8 +114,13 @@ describe('parseSocialAuthRequest / parseLinkRequest', () => {
     const nullProto = Object.assign(Object.create(null) as object, {
       provider: 'google',
       idToken: 'x',
+      nonce: 'n',
     });
-    expect(parseSocialAuthRequest(nullProto)).toEqual({ provider: 'google', idToken: 'x' });
+    expect(parseSocialAuthRequest(nullProto)).toEqual({
+      provider: 'google',
+      idToken: 'x',
+      nonce: 'n',
+    });
     expect(({} as Record<string, unknown>)['admin']).toBeUndefined();
   });
 });

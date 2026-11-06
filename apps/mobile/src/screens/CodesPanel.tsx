@@ -1,17 +1,16 @@
 /**
- * Painel "Combinar sinais" (apresentação pura): os 16 sinais do catálogo, cada um com um campo para o
- * significado combinado com o parceiro. Abre na sala de espera (a "preparação") e na mesa. O combinado
- * é privado da dupla: o servidor só o envia aos dois assentos. Todo texto vai como `<Text>`/`TextInput`
- * (nunca HTML). O significado tradicional do catálogo é só sugestão (placeholder), nunca valor salvo.
+ * Painel "Combinar sinais" (apresentação pura): os 16 sinais do catálogo, cada um com a ESCOLHA do
+ * significado (lista fixa em `codeMeanings.ts`; um significado vale para um sinal só, "Nada" repete). Abre na sala de espera (a "preparação") e na mesa. O combinado
+ * é privado da dupla: o servidor só o envia aos dois assentos. Todo texto vai como `<Text>` (nunca HTML).
+ * Combinado antigo em texto livre aparece como "Personalizado: ..." até ser trocado.
  */
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SIGNALS } from '@trucaco/avatar';
-import { PARTNER_CODE_MAX_LENGTH } from '@trucaco/protocol';
 import type { SignalId } from '@trucaco/protocol';
-import { colors, fontSize, fontWeight, radius, spacing } from '@trucaco/ui';
+import { MIN_TOUCH, colors, fontSize, fontWeight, radius, spacing } from '@trucaco/ui';
 import { Button } from '../ui/Button';
-import { TextField } from '../ui/TextField';
+import { customText, meaningText, optionsFor, selectedMeaning } from './codeMeanings';
 
 export const GUEST_CODES_NOTE = 'Como convidado, seu combinado some ao sair da conta.';
 export const NO_PARTNER_NOTE =
@@ -36,81 +35,70 @@ export interface CodesPanelProps {
   };
 }
 
-/** O servidor guarda o texto em NFC e sem bordas: compara na mesma forma. */
-const clean = (s: string): string => s.normalize('NFC').trim();
 const PENDING_TIMEOUT_MS = 2000;
-
-const chars = (s: string): number => Array.from(s).length;
 
 function CodeRow({
   id,
   name,
-  suggestion,
-  saved,
+  codes,
   canEdit,
-  onSave,
+  locked,
+  onPick,
 }: {
   id: SignalId;
   name: string;
-  suggestion: string;
-  saved: string;
+  codes: Readonly<Partial<Record<SignalId, string>>>;
   canEdit: boolean;
-  onSave(id: SignalId, meaning: string): boolean;
+  locked: boolean;
+  onPick(id: SignalId, meaning: string): void;
 }) {
-  // `undefined` = sem edição em curso: o campo mostra o que o servidor tem (inclusive a edição do parceiro).
-  const [draft, setDraft] = useState<string | undefined>(undefined);
-  // Enviado e ainda sem eco do servidor: bloqueia novo envio (evita RATE_LIMITED de toque duplo).
-  const [pending, setPending] = useState(false);
-  useEffect(() => {
-    // O servidor refletiu o que digitei (ou o parceiro chegou ao mesmo texto): volta a seguir o servidor.
-    if (draft !== undefined && clean(draft) === saved) setDraft(undefined);
-  }, [draft, saved]);
-  useEffect(() => {
-    setPending(false);
-  }, [saved]);
-  useEffect(() => {
-    if (!pending) return undefined;
-    const t = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
-    return () => clearTimeout(t);
-  }, [pending]);
-  const value = draft ?? saved;
-  const dirty = draft !== undefined && clean(draft) !== saved;
-  const erasing = dirty && clean(draft) === '';
-  const save = () => {
-    if (draft === undefined || !canEdit || pending) return;
-    if (onSave(id, draft)) setPending(true);
-  };
+  const saved = codes[id] ?? '';
+  const current = selectedMeaning(saved);
+  const custom = customText(saved);
+  const options = optionsFor(id, codes);
+  const disabled = !canEdit || locked;
   return (
     <View style={styles.row} testID={`code-row-${id}`}>
-      <TextField
-        label={name}
-        value={value}
-        onChangeText={setDraft}
-        placeholder={`Ex.: ${suggestion}`}
-        maxLength={PARTNER_CODE_MAX_LENGTH}
-        autoCapitalize="sentences"
-        disabled={!canEdit}
-        onSubmit={() => {
-          if (dirty) save();
-        }}
-        testID={`code-input-${id}`}
-      />
-      <View style={styles.rowFoot}>
-        <Text
-          style={styles.count}
-          accessibilityLabel={`${chars(value)} de ${PARTNER_CODE_MAX_LENGTH} caracteres`}
-          testID={`code-count-${id}`}
-        >
-          {`${chars(value)}/${PARTNER_CODE_MAX_LENGTH}`}
-        </Text>
-        <Button
-          label={erasing ? 'Apagar' : 'Salvar'}
-          variant="secondary"
-          disabled={!canEdit || !dirty || pending}
-          hint={`Salva o significado de ${name} para você e seu parceiro`}
-          onPress={save}
-          testID={`code-save-${id}`}
-        />
+      <Text style={styles.rowTitle}>{name}</Text>
+      <View
+        accessibilityRole="radiogroup"
+        accessibilityLabel={`Significado de ${name}`}
+        style={styles.options}
+      >
+        {custom !== null ? (
+          <View
+            accessible
+            accessibilityRole="radio"
+            accessibilityState={{ checked: true, disabled: true }}
+            accessibilityLabel={`Personalizado: ${custom}, escolhido`}
+            style={[styles.option, styles.optionOn]}
+            testID={`code-custom-${id}`}
+          >
+            <Text style={styles.optionText}>{`Personalizado: ${custom}`}</Text>
+          </View>
+        ) : null}
+        {options.map((m) => {
+          const checked = current !== null && current.id === m.id;
+          const text = meaningText(m);
+          return (
+            <Pressable
+              key={m.id}
+              accessibilityRole="radio"
+              accessibilityState={{ checked, disabled }}
+              accessibilityLabel={text}
+              aria-checked={checked}
+              aria-disabled={disabled}
+              disabled={disabled}
+              onPress={() => {
+                if (!checked) onPick(id, m.label);
+              }}
+              style={[styles.option, checked && styles.optionOn, disabled && styles.optionOff]}
+              testID={`code-option-${id}-${m.id}`}
+            >
+              <Text style={styles.optionText}>{text}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
@@ -118,6 +106,19 @@ function CodeRow({
 
 export function CodesPanel(p: CodesPanelProps) {
   const canEdit = p.connected && p.partnerName !== null;
+  // Enviado e ainda sem eco do servidor: bloqueia nova escolha (o servidor limita 1 edição por segundo).
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    setPending(false);
+  }, [p.codes]);
+  useEffect(() => {
+    if (!pending) return undefined;
+    const t = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [pending]);
+  const pick = (id: SignalId, meaning: string): void => {
+    if (p.on.save(id, meaning)) setPending(true);
+  };
   return (
     <View style={styles.panel} testID="codes-panel" accessibilityViewIsModal>
       <View style={styles.header}>
@@ -152,10 +153,10 @@ export function CodesPanel(p: CodesPanelProps) {
             key={s.id}
             id={s.id}
             name={s.name}
-            suggestion={s.meaning}
-            saved={p.codes[s.id] ?? ''}
+            codes={p.codes}
             canEdit={canEdit}
-            onSave={p.on.save}
+            locked={pending}
+            onPick={pick}
           />
         ))}
       </ScrollView>
@@ -189,6 +190,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.surface,
   },
-  rowFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  count: { color: colors.textMuted, fontSize: fontSize.caption },
+  rowTitle: { color: colors.text, fontSize: fontSize.body, fontWeight: fontWeight.bold },
+  options: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  option: {
+    minHeight: MIN_TOUCH,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  optionOn: { backgroundColor: colors.surfaceAlt, borderColor: colors.primary, borderWidth: 2 },
+  optionOff: { opacity: 0.55 },
+  optionText: { color: colors.text, fontSize: fontSize.small },
 });

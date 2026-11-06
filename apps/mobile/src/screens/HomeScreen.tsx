@@ -44,6 +44,7 @@ export function HomeScreen() {
       onEntered: (roomCode) =>
         router.push({ pathname: '/table/[code]', params: { code: roomCode } }),
       abandon: () => void app.rooms.leave(),
+      fillBots: () => app.table.fillBots(),
     });
   }, [router]);
 
@@ -77,6 +78,7 @@ export function HomeScreen() {
         dismissResumeNotice: () => lobbyStore.getState().setResumeNotice(null),
         table: setTable,
         create: () => void controller.createTable(table),
+        playVsBots: () => void controller.createTable(table, { fillBots: true }),
         code: (text) => setCode(normalizeCodeInput(text)),
         join: () => void controller.joinByCode(code),
         queueForm: setQueueForm,
@@ -85,6 +87,8 @@ export function HomeScreen() {
         settings: () => router.push('/settings'),
         avatar: () => router.push('/avatar'),
         profile: () => router.push('/profile'),
+        missions: () => router.push('/missions'),
+        achievements: () => router.push('/achievements'),
       }}
     />
   );

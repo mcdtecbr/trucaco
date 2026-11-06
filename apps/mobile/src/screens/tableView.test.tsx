@@ -5,7 +5,7 @@ import { player, priv, snapshot } from '../table/snapshotFixtures';
 import { finishedResult, rematchView, secondsLeft } from '../table/tableRoute';
 import { ChatPanel } from './ChatPanel';
 import { FinishedView } from './FinishedView';
-import { TableView } from './TableView';
+import { TableView, metricsFor } from './TableView';
 import type { TableViewProps } from './TableView';
 
 const noop = vi.fn();
@@ -40,7 +40,6 @@ function html(state: unknown, over: Partial<TableViewProps> = {}): string {
     on: {
       pressCard: noop,
       act: noop,
-      confirmSelected: noop,
       dismissError: noop,
       toggleCover: noop,
       voteCancel: noop,
@@ -60,6 +59,7 @@ describe('TableView', () => {
   it('celular: mão, quatro jogadores, vira, placar e sonda de estado', () => {
     const out = html(snapshot());
     expect(out).toContain('data-testid="table"');
+    expect(out).toContain('table-felt');
     expect(out).toContain('três de paus');
     for (let i = 1; i < 4; i++) expect(out).toContain(`table-seat-${i}`);
     expect(out).toContain('Ana, online');
@@ -114,13 +114,12 @@ describe('TableView', () => {
     expect(html(snapshot(), { banner: 'closed' })).toContain('A conexão com a mesa foi encerrada.');
   });
 
-  it('carta selecionada mostra o botão de confirmar; erro e presença aparecem como texto', () => {
+  it('sem botão de confirmar; erro e presença aparecem como texto', () => {
     const out = html(snapshot(), {
-      selected: 'play:3paus',
       errorText: 'Não é a sua vez.',
       presenceNote: 'Caio está ausente.',
     });
-    expect(out).toContain('Jogar três de paus');
+    expect(out).not.toContain('confirm-play');
     expect(out).toContain('Não é a sua vez.');
     expect(out).toContain('Caio está ausente.');
   });
@@ -131,9 +130,13 @@ describe('TableView', () => {
     expect(out).toContain('aria-disabled="true"');
   });
 
-  it('largo: lateral com histórico aberto e vira; Mineiro lista as manilhas fixas', () => {
+  it('largo: placar fixo compacto com histórico recolhido, vira na lateral; Mineiro sem texto de manilhas', () => {
     const wide = html(snapshot(), { layout: 'wide' });
-    expect(wide).toContain('Histórico das mãos');
+    expect(wide).toContain('score-fixed');
+    expect(wide).toContain('score-ad');
+    expect(html(snapshot(), { layout: 'wide', scoreAd: null })).not.toContain('score-ad');
+    expect(wide).toContain('aria-expanded="false"');
+    expect(wide).not.toContain('Histórico das mãos');
     const mineiro = html(
       snapshot({
         options: { variant: 'mineiro' },
@@ -141,8 +144,53 @@ describe('TableView', () => {
       }),
       { layout: 'wide' },
     );
-    expect(mineiro).toContain('Manilhas:');
-    expect(mineiro).toContain('4♣');
+    expect(mineiro).not.toContain('Manilhas:');
+    expect(mineiro).not.toContain('data-testid="manilhas"');
+  });
+
+  it('apelido numa linha abaixo do avatar (fora do quadrado) nos quatro assentos', () => {
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout });
+      expect(out.match(/data-testid="seat-name"/g)?.length, layout).toBe(4);
+    }
+  });
+
+  it('monte no canto com a vira saindo por baixo e a legenda da manilha; Mineiro sem vira', () => {
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout });
+      expect(out).toContain('data-testid="deck-group"');
+      expect(out).toContain('data-testid="vira-card"');
+      expect(out).toContain('Vira: ');
+      // a vira não está mais no canto superior direito (um só monte, uma só vira)
+      expect(out.match(/data-testid="vira-card"/g)?.length).toBe(1);
+    }
+    const mineiro = html(
+      snapshot({
+        options: { variant: 'mineiro' },
+        hand: { viraRank: '', viraSuit: '', manilhaRank: '', manilhaCards: ['4paus'] },
+      }),
+    );
+    expect(mineiro).toContain('data-testid="deck-group"');
+    expect(mineiro).not.toContain('data-testid="vira-card"');
+  });
+
+  it('chat fixo: campo e Enviar visíveis sem abrir camada; some quando o painel completo abre', () => {
+    const chatDock = {
+      lines: [{ id: '1', author: 'Ana', text: 'oi <b>x</b>' }],
+      draft: '',
+      connected: true,
+      unread: 2,
+      errorText: null,
+      on: { setDraft: noop, send: noop, expand: noop },
+    };
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout, chatDock });
+      expect(out, layout).toContain('chat-dock-input');
+      expect(out).toContain('chat-dock-send');
+      expect(out).toContain('2 mensagens novas');
+      expect(out).toContain('oi &lt;b&gt;x&lt;/b&gt;');
+    }
+    expect(html(snapshot())).not.toContain('chat-dock');
   });
 
   it('confirmação de sair e apelido como texto puro (sem HTML interpretado)', () => {
@@ -271,10 +319,9 @@ describe('TableView: 3H2', () => {
         hand: { special: 'maoDeFerro' },
         privates: priv(0, { legalActions: ['playBlind:0', 'playBlind:1', 'playBlind:2'] }),
       }),
-      { selected: 'playBlind:1' },
     );
     expect(out).toContain('Carta 1 de 3, às cegas');
-    expect(out).toContain('Jogar a carta 2');
+    expect(out).toContain('Carta 2 de 3, às cegas');
   });
 
   it('botão Cobrir só existe com playCovered legal; modo ligado marca o botão', () => {
@@ -287,9 +334,8 @@ describe('TableView: 3H2', () => {
     expect(html(state)).toContain('cover-toggle');
     expect(html(state, { coverMode: true })).toContain('Cobrir: ligado');
     expect(html(snapshot())).not.toContain('cover-toggle');
-    expect(html(state, { coverMode: true, selected: 'playCovered:3paus' })).toContain(
-      'Jogar coberta: três de paus',
-    );
+    expect(html(state, { coverMode: true })).toContain('Jogar coberta: três de paus');
+    expect(html(state)).not.toContain('Jogar coberta');
   });
 
   it('a última vaza fica na mesa por um instante, com o vencedor', () => {
@@ -308,9 +354,9 @@ describe('TableView: 3H2', () => {
   });
 
   it('votar para cancelar: contagem e estado de "já votou"', () => {
-    const out = html(snapshot({ cancelVotes: [1] }));
+    const out = html(snapshot({ cancelVotes: [1] }), { defaultMenuOpen: true });
     expect(out).toContain('Cancelar mesa (1)');
-    const voted = html(snapshot({ cancelVotes: [0] }));
+    const voted = html(snapshot({ cancelVotes: [0] }), { defaultMenuOpen: true });
     expect(voted).toContain('Você já votou');
     expect(voted).toContain('Cancelar: você votou (1)');
   });
@@ -334,7 +380,7 @@ describe('TableView: 3H2', () => {
     expect(out).not.toContain('Truco!');
   });
 
-  it('histórico detalhado: lances da mão e da mão em curso', () => {
+  it('histórico detalhado recolhido por padrão: nada das jogadas aparece até expandir', () => {
     const out = html(snapshot(), {
       layout: 'wide',
       handLog: ['Bia jogou rei de ouros.'],
@@ -349,9 +395,9 @@ describe('TableView: 3H2', () => {
         },
       ],
     });
-    expect(out).toContain('Vaza 1: Você levou.');
-    expect(out).toContain('Mão 1 em curso');
-    expect(out).toContain('Bia jogou rei de ouros.');
+    expect(out).not.toContain('Vaza 1: Você levou.');
+    expect(out).not.toContain('Bia jogou rei de ouros.');
+    expect(out).toContain('score-history-toggle');
   });
 });
 
@@ -393,7 +439,23 @@ describe('ChatPanel', () => {
   it('o painel aparece na mesa quando aberto', () => {
     const out = html(snapshot(), { chatPanel: props, chatUnreadTotal: 3 });
     expect(out).toContain('chat-panel');
-    expect(out).toContain('Chat (3)');
+    expect(out).toContain('Chat, 3 mensagens novas');
+  });
+
+  it('com o painel completo aberto o chat fixo some (um só campo de texto na tela)', () => {
+    const chatDock = {
+      lines: [],
+      draft: '',
+      connected: true,
+      unread: 0,
+      errorText: null,
+      on: { setDraft: noop, send: noop, expand: noop },
+    };
+    for (const layout of ['phone', 'landscape', 'wide'] as const) {
+      const out = html(snapshot(), { layout, chatPanel: props, chatDock });
+      expect(out, layout).toContain('chat-panel');
+      expect(out).not.toContain('chat-dock');
+    }
   });
 });
 
@@ -530,5 +592,70 @@ describe('FinishedView: revanche', () => {
     expect(secondsLeft(10_000, 4_000, 3_000)).toBe(3);
     expect(secondsLeft(10_000, 9_500, 0)).toBe(1);
     expect(secondsLeft(10_000, 20_000, 0)).toBe(0);
+  });
+});
+
+describe('TableView: disposição por layout', () => {
+  it('avatares grandes, quadrados e sem mudar com o layout além do tamanho', () => {
+    const phone = metricsFor('phone');
+    expect(phone.avatar).toBeGreaterThanOrEqual(72);
+    expect(phone.avatar).toBeLessThanOrEqual(80);
+    expect(metricsFor('landscape').avatar).toBeGreaterThanOrEqual(64);
+    expect(metricsFor('wide').avatar).toBeGreaterThan(phone.avatar);
+    expect(metricsFor('landscape').trick).toBe('row');
+    expect(metricsFor('phone').trick).toBe('cross');
+  });
+
+  for (const layout of ['phone', 'landscape', 'wide'] as const) {
+    it(`${layout}: placar no topo, quatro assentos, dock com mão, sinais e menu`, () => {
+      const out = html(snapshot(), { layout });
+      expect(out).toContain('score-fixed');
+      expect(out).toContain('data-testid="my-seat"');
+      for (let i = 1; i < 4; i++) expect(out).toContain(`table-seat-${i}`);
+      expect(out).toContain('data-testid="dock"');
+      expect(out).toContain('data-testid="my-hand"');
+      expect(out).toContain('data-testid="signal-toggle"');
+      expect(out).toContain('data-testid="open-chat"');
+      expect(out).toContain('data-testid="leave-table"');
+      expect(out).toContain('data-testid="score-history-toggle"');
+      expect(out).toContain('data-testid="turn-timer"');
+      // Ordem de leitura: placar, mesa (assentos e vez), mão e depois as ações da dock.
+      expect(out.indexOf('score-fixed')).toBeLessThan(out.indexOf('turn-text'));
+      expect(out.indexOf('turn-text')).toBeLessThan(out.indexOf('data-testid="my-hand"'));
+    });
+  }
+
+  it('histórico fica só como ícone no topo, recolhido; o menu fecha por padrão', () => {
+    const out = html(snapshot());
+    expect(out).not.toContain('Histórico das mãos');
+    expect(out).not.toContain('data-testid="table-menu"');
+    expect(html(snapshot(), { defaultMenuOpen: true })).toContain('data-testid="table-menu"');
+  });
+
+  it('o botão de aposta fica sempre no canto, depois de correr e aceitar', () => {
+    const out = html(
+      snapshot({
+        hand: {
+          phase: 'betPending',
+          turn: 0,
+          actingSeat: 1,
+          pending: { fromSeat: 0, fromTeam: 0, toLevel: 1, responderSeat: 1 },
+          pendingValue: 3,
+          nextBetValue: 6,
+        },
+        privates: priv(1, { legalActions: ['accept', 'run', 'bet'] }),
+      }),
+    );
+    expect(out.indexOf('data-testid="bet-run"')).toBeLessThan(out.indexOf('data-testid="bet-bet"'));
+    expect(out.indexOf('data-testid="bet-accept"')).toBeLessThan(
+      out.indexOf('data-testid="bet-bet"'),
+    );
+    expect(out).toContain('Seis!');
+  });
+
+  it('costas das cartas só nos outros três assentos durante a mão', () => {
+    const out = html(snapshot());
+    expect(out.match(/data-testid="card-backs"/g)?.length ?? 0).toBeLessThanOrEqual(3);
+    expect(out).toContain('card-backs');
   });
 });

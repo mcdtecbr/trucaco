@@ -56,6 +56,8 @@ export interface HomeViewProps {
     dismissResumeNotice(): void;
     table(next: TableForm): void;
     create(): void;
+    /** Cria mesa privada com as opções acima e já preenche as vagas com bots. */
+    playVsBots?(): void;
     code(text: string): void;
     join(): void;
     queueForm(next: QueueForm): void;
@@ -64,6 +66,8 @@ export interface HomeViewProps {
     settings(): void;
     avatar(): void;
     profile(): void;
+    missions?(): void;
+    achievements?(): void;
   };
 }
 
@@ -141,6 +145,16 @@ export function HomeView(p: HomeViewProps) {
           disabled={locked || waiting('create')}
           testID="create-submit"
         />
+        {p.on.playVsBots !== undefined ? (
+          <Button
+            label="Jogar contra bots"
+            variant="secondary"
+            hint="Cria uma mesa privada com as opções acima e preenche as vagas com bots. Não conta para conquistas nem ranking."
+            onPress={p.on.playVsBots}
+            disabled={locked || waiting('create')}
+            testID="play-vs-bots"
+          />
+        ) : null}
       </Card>
 
       <Card>
@@ -221,6 +235,24 @@ export function HomeView(p: HomeViewProps) {
         disabled={locked}
         testID="open-profile"
       />
+      {p.on.missions !== undefined ? (
+        <Button
+          label="Missões"
+          variant="secondary"
+          onPress={p.on.missions}
+          disabled={locked}
+          testID="open-missions"
+        />
+      ) : null}
+      {p.on.achievements !== undefined ? (
+        <Button
+          label="Conquistas"
+          variant="secondary"
+          onPress={p.on.achievements}
+          disabled={locked}
+          testID="open-achievements"
+        />
+      ) : null}
       <Button
         label="Configurações"
         variant="secondary"

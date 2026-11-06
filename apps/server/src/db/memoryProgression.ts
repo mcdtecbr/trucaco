@@ -44,6 +44,7 @@ export class MemoryProgressionRepository implements ProgressionRepository {
   async applyMatchProgress(
     rawMatchId: string,
     rawDeltas: readonly UserProgressDelta[],
+    options: { readonly scored?: boolean } = {},
   ): Promise<ApplyProgressResult> {
     const matchId = normalizeId(rawMatchId);
     const deltas = assertProgressDeltas(rawDeltas);
@@ -56,6 +57,7 @@ export class MemoryProgressionRepository implements ProgressionRepository {
     }
     for (const d of deltas) this.requireUser(d.userId);
     this.store.progressionApplied.add(matchId);
+    if (options.scored === false) this.store.progressionUnscored.add(matchId);
     const now = new Date();
     const unlocked: AchievementUnlock[] = [];
     const missionsCompleted: MissionCompletion[] = [];
@@ -74,7 +76,9 @@ export class MemoryProgressionRepository implements ProgressionRepository {
         const previousLevel = old?.level ?? 0;
         const progress = Math.min(
           PROGRESS_CAP,
-          a.progressSet ?? (old?.progress ?? 0) + (a.progressDelta ?? 0),
+          a.progressSet === undefined
+            ? (old?.progress ?? 0) + (a.progressDelta ?? 0)
+            : Math.max(old?.progress ?? 0, a.progressSet),
         );
         const level = Math.max(previousLevel, achievementLevelFor(a.achievementId, progress));
         const unlockedAt = old?.unlockedAt ?? (level > 0 ? (a.unlockedAt ?? now) : null);
@@ -159,6 +163,69 @@ export class MemoryProgressionRepository implements ProgressionRepository {
       .filter((r) => r.userId === id)
       .map(({ variant, played, won }) => ({ variant, played, won }))
       .sort((a, b) => byText(a.variant, b.variant));
+  }
+
+  async countWinsTogether(rawA: string, rawB: string): Promise<number> {
+    const a = normalizeId(rawA);
+    const b = normalizeId(rawB);
+    if (a === b) return 0;
+    return this.store.matches.filter(
+      (m) =>
+        this.isScored(m.id) &&
+        m.input.status === 'finished' &&
+        m.input.players.every((p) => p.botFrom === null) &&
+        m.input.winnerTeam !== null &&
+        m.input.players.some((p) => p.userId === a && p.team === m.input.winnerTeam) &&
+        m.input.players.some((p) => p.userId === b && p.team === m.input.winnerTeam),
+    ).length;
+  }
+
+  async countMatchesTogether(
+    rawA: string,
+    rawB: string,
+    since: Date,
+    until: Date,
+  ): Promise<number> {
+    const a = normalizeId(rawA);
+    const b = normalizeId(rawB);
+    if (a === b) return 0;
+    return this.store.matches.filter((m) => {
+      const end = m.input.endedAt.getTime();
+      return (
+        this.isScored(m.id) &&
+        end >= since.getTime() &&
+        end < until.getTime() &&
+        m.input.players.some((p) => p.userId === a) &&
+        m.input.players.some((p) => p.userId === b)
+      );
+    }).length;
+  }
+
+  async countScoredPrivateMatches(rawUser: string, since: Date, until: Date): Promise<number> {
+    const id = normalizeId(rawUser);
+    return this.store.matches.filter((m) => {
+      const end = m.input.endedAt.getTime();
+      return (
+        this.isScored(m.id) &&
+        m.input.visibility === 'private' &&
+        end >= since.getTime() &&
+        end < until.getTime() &&
+        m.input.players.some((p) => p.userId === id)
+      );
+    }).length;
+  }
+
+  private isScored(matchId: string): boolean {
+    return (
+      this.store.progressionApplied.has(matchId) && !this.store.progressionUnscored.has(matchId)
+    );
+  }
+
+  async countGuests(userIds: readonly string[]): Promise<number> {
+    const ids = new Set(userIds.map(normalizeId));
+    let n = 0;
+    for (const id of ids) if (this.store.users.get(id)?.provider === 'guest') n++;
+    return n;
   }
 
   async getPublicProfile(rawId: string): Promise<PublicProfileRecord | null> {

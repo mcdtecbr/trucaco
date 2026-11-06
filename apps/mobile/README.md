@@ -49,9 +49,11 @@ Cores, espaçamentos e raios vêm de `@trucaco/ui` (`tokens.ts`), que também te
 Sem UI; as telas consomem estes módulos.
 
 - `api.ts`: cliente REST tipado por `@trucaco/protocol`. Refresh em fila única, uma repetição por requisição, 503/rede/timeout nunca descartam a sessão (`ApiError.isUnavailable`). Nada é logado.
-- `tokenStorage.{ts,web.ts,native.ts}`: refresh token e metadados mínimos (`localStorage` na web, `expo-secure-store` no nativo, memória como degradação). O access token vive só em memória.
+- `tokenStorage.{ts,web.ts,native.ts}`: nativo guarda refresh token e metadados mínimos em `expo-secure-store` (memória como degradação). **Web (7A): o refresh vive em cookie httpOnly emitido pelo servidor e o JS nunca o vê**; o `localStorage` (`trucaco.session.v2`) guarda só `{ userId, nickname }`. O access token vive só em memória. `platform.ts`/`platform.web.ts` (`usesCookieSession`) escolhem o modo.
+- **Sessão web por cookie** (`api.ts`, `session.ts`): `/auth/*` leva `X-Client: web` e `credentials: 'include'` quando o servidor está em outra origem (dev); refresh e logout vão com corpo vazio; apagar conta usa `DELETE /auth/account`. No boot a sessão chama `POST /auth/refresh` (corpo vazio) e lê o usuário em `GET /me`. Quem ainda tem refresh no `localStorage` v1 (Fase 3) é migrado uma vez: o refresh vai no corpo, o servidor emite o cookie e a chave antiga é apagada.
+- **Login social e vínculo**: `GET /auth/nonce` antes de abrir o provedor; o nonce vai ao SDK (`IdentityProvider.getCredential(nonce)`) e é reenviado, obrigatório, em `POST /auth/google|apple|link`.
 - `session.ts`: restaurar, convidado se não houver, `ensureAccessToken()` (renova com menos de 60 s, ajustável por `refreshAheadMs`), logout que sempre limpa o armazenamento local (e invalida um `start()` em voo).
-- **Várias abas (web)**: o refresh é rotativo com detecção de reuso, então a renovação roda dentro de `navigator.locks` (`refreshLock.ts`, lock `trucaco-refresh`) e, antes de cada POST, relê o armazenamento e adota o refresh que outra aba já rotacionou. O evento `storage` também atualiza o refresh em memória sem renovar. No nativo (processo único) não há lock.
+- **Várias abas (nativo/legado; no web por cookie o navegador compartilha o cookie e só o lock vale)**: o refresh é rotativo com detecção de reuso, então a renovação roda dentro de `navigator.locks` (`refreshLock.ts`, lock `trucaco-refresh`) e, antes de cada POST, relê o armazenamento e adota o refresh que outra aba já rotacionou. O evento `storage` também atualiza o refresh em memória sem renovar. No nativo (processo único) não há lock.
 - **Refresh perdido**: timeout, rede ou corpo inválido em `/auth/refresh` repetem UMA vez na hora com o mesmo refresh (dentro da graça de 20 s do servidor); se a repetição falhar, a sessão fica `unavailable` e o refresh antigo é mantido. Limite conhecido: com a rede fora por mais de 20 s depois de uma resposta perdida, a próxima tentativa é reuso e o servidor revoga a família (mitigação futura: graça maior no servidor). Um refresh bem-sucedido depois disso volta o estado para `authenticated`.
 - `colyseus.ts`: `createGameClient(session)`, `joinWithReservation`, `reconnect`, `trackEvents` (salto de `seq` marca `desynced`). **O JWT do upgrade do WebSocket vai SEMPRE em `Sec-WebSocket-Protocol: trucaco.bearer, <jwt>`**, via transporte próprio no lugar do transporte do SDK: o SDK 0.18.9 não entrega o JWT no upgrade no navegador nem no React Native (ver o comentário no topo do arquivo). Nunca use `client.auth.token` nem ponha JWT na URL (o cliente força `http.authToken` indefinido para não vazar `_authToken` do `localStorage` do SDK).
 
@@ -139,11 +141,11 @@ Variáveis do E2E: `E2E_SKIP_BUILD=1` reaproveita o `dist-e2e/` (iteração ráp
 - **Partes do jogador**: `src/table/avatarParts.ts` converte `players[i].avatar` (string JSON) em `AvatarParts`. Vazio, JSON inválido ou partes fora do catálogo viram `DEFAULT_AVATAR_PARTS`. O resultado é cacheado por texto, para o `<Avatar>` memoizado não re-renderizar a cada patch.
 - **Onde aparece**: `TableView` (os 4 assentos) e `WaitingRoomView` (o placeholder só aparece em vaga).
 - **Sinal recebido**: `roomService` entrega `signal` ao `tableController.onSignal`. Se o assento está livre, anima já; se está animando, entra na fila de 1 posição por assento, e o excedente é descartado. O anúncio para o leitor de tela ("Fulano: piscar um olho") sai sempre. Fim da animação: `onSignalEnd`, com timer de segurança de `MAX_SIGNAL_DURATION_MS + 500` ms.
-- **Painel de sinais** (`src/screens/SignalPanel.tsx`): 12 botões, um por sinal do catálogo. O sinal é enviado ao **segurar 400 ms** (`SIGNAL_HOLD_MS`); toque rápido não envia. Ativação por leitor de tela (sem `onPressIn`) envia pelo `accessibilityActions`. O cooldown de 3 s (`SIGNAL_COOLDOWN_MS`) é só espelhado na UI; quem decide é o servidor (`RATE_LIMITED`).
+- **Painel de sinais** (`src/screens/SignalPanel.tsx`): um botão por sinal do catálogo, enviado com um toque. O cooldown de 3 s (`SIGNAL_COOLDOWN_MS`) é só espelhado na UI; quem decide é o servidor (`RATE_LIMITED`).
 - **Movimento reduzido**: `src/platform/useReduceMotion.ts` lê `AccessibilityInfo` (na web, o `prefers-reduced-motion`). Com ele ligado, o sinal vira um destaque estático (borda branca) de 1 s, e o avatar ocioso para de animar.
 - **Criador de avatar** (`/avatar`, `src/screens/AvatarEditorScreen.tsx` e `AvatarEditorView.tsx`): escolhe uma variante por parte (8 partes, nomes em `PART_VARIANT_NAMES`), pré-visualiza com `<Avatar>` e salva com `PUT /me/avatar`. "Salvar" fica desligado sem mudança. Entradas: "Meu avatar" em Início (`open-avatar`) e "Editar avatar" em Configurações (`settings-avatar`).
-- **E2E**: `e2e/avatar.spec.ts` (3 cenários): segurar o botão envia o sinal e os 4 navegadores veem o marcador `avatar-<assento>-signal-<id>`; o editor salva e o avatar persiste ao recarregar; o editor abre pelas Configurações.
-- **Não validado**: aparência em aparelho, iOS, Android, leitor de tela, e o "segurar" com dedo real. Só Chromium.
+- **E2E**: `e2e/avatar.spec.ts` (3 cenários): um toque no botão envia o sinal e os 4 navegadores veem o marcador `avatar-<assento>-signal-<id>`; o editor salva e o avatar persiste ao recarregar; o editor abre pelas Configurações.
+- **Não validado**: aparência em aparelho, iOS, Android, leitor de tela, e o toque com dedo real. Só Chromium.
 
 ### Desempenho do avatar
 
@@ -212,6 +214,15 @@ Código em `src/audio/`. Os arquivos de `assets/audio/` são **placeholders sile
 - **Apagar conta** (Configurações): dois passos, um aviso com "Continuar" e a confirmação final "Apagar minha conta para sempre". `session.deleteAccount()` manda o refresh atual como prova. Em sucesso, limpa tudo local e vai a `signedOut`. Em erro, a sessão continua como estava e a mensagem aparece na tela.
 - **Não verificado**: E2E novo para histórico, bloqueio e apagar conta (não escrito). Os testes são de unidade e de tela (`profile.test.tsx`, `history.test.ts`, `moderation.test.ts`, `session.account.test.ts`). Nada disso foi visto em aparelho.
 - **Resíduo no aparelho**: depois de apagar a conta, `trucaco.muted.v1` (silenciados) e o `sessionStorage` continuam.
+
+## Login, vínculo, conquistas e missões (Fase 6, bloco 6G)
+
+- **Entrar** (`app/login.tsx`): convidado e os botões Google e Apple. Os dois botões aparecem sempre, mas só ficam disponíveis quando o aparelho tem o SDK registrado (`registerIdentityProvider`, em `src/net/identity.ts`) **e** o servidor lista o provedor em `GET /health` (`socialProviders`). Hoje nenhum SDK é registrado no app (`expo-auth-session` não é dependência), então o login social não funciona de ponta a ponta. Sem SDK, o botão mostra "ainda não está disponível neste aparelho".
+- **Vincular conta** (Configurações, só para convidado): `runSocialAuth` com `mode: 'link'` (`src/lobby/socialAuth.ts`). `PROVIDER_TAKEN` oferece "entrar na conta existente", e o convidado atual é perdido (fusão de contas fora da fase).
+- **Conquistas** (`app/achievements.tsx`): catálogo inteiro, nível 0 = bloqueada. **Missões** (`app/missions.tsx`): as diárias sorteadas e a semanal. Ambas com atalho na tela inicial (`HomeView`).
+- **Resultado** (`FinishedView`): "Conquista desbloqueada!" com as conquistas que subiram de nível nesta partida.
+- **Perfil público** (`app/profile/[id].tsx`, `GET /users/:id`): apelido, avatar, conquistas e partidas e vitórias por variante. Nunca mostra histórico nem provedor.
+- **Não verificado**: nada disso em aparelho, e o E2E de vínculo chama `POST /auth/link` pela API com o idToken de teste (`test:<sub>`) antes de conferir a tela.
 
 ## Reserva, saída e a verificar
 

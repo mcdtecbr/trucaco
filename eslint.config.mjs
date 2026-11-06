@@ -15,6 +15,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.expo/**',
       '**/dist-e2e/**',
+      '**/dist-e2e-same/**',
       '**/playwright-report/**',
       '**/test-results/**',
     ],

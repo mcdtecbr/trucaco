@@ -39,3 +39,4 @@ export { applySeriesAction, cancelSeries, gamesToWin, isSeriesOver, startSeries 
 export type { SeriesConfig, SeriesState, StartSeriesParams } from './series';
 export { legalActions, pendingSeat } from './legal';
 export { botAction } from './bot';
+export type { BotProfile } from './bot';

@@ -70,8 +70,10 @@ describe('CORS pelo servidor real', () => {
         .split(',')
         .map((s) => s.trim());
       expect(methods).toEqual(expect.arrayContaining(['GET', 'POST', 'PUT', 'OPTIONS']));
-      expect(res.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type');
-      expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+      expect(res.headers.get('access-control-allow-headers')).toBe(
+        'Authorization, Content-Type, X-Client',
+      );
+      expect(res.headers.get('access-control-allow-credentials')).toBe('true');
     },
   );
 

@@ -1,0 +1,72 @@
+# Staging LOCAL: a imagem de produção (servidor + web na mesma origem) com Postgres e Redis descartáveis.
+# Serve para jogar e testar antes de qualquer deploy. NÃO é produção: o JWT_SECRET abaixo é público no repositório.
+#
+#   docker compose -f infra/docker-compose.staging.yml up -d --build
+#   abrir http://localhost:25670   (4 abas anônimas = 4 jogadores)
+#   docker compose -f infra/docker-compose.staging.yml down -v    (apaga também os dados)
+#
+# Postgres e Redis NÃO publicam porta no host (só a rede interna), então não colidem com o `pnpm db:up`.
+name: trucaco-staging
+
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: trucaco
+      POSTGRES_PASSWORD: staging_descartavel
+      POSTGRES_DB: trucaco
+    volumes:
+      - staging-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U trucaco -d trucaco']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    # Igual à produção: sem evicção e com persistência.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - staging-redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Como o `release_command` da Fly: aplica as migrações antes do servidor subir.
+  migrate:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.server
+    image: trucaco-server:staging
+    command:
+      ['sh', '-c', 'cd /app/migrate && node node_modules/prisma/build/index.js migrate deploy']
+    environment:
+      DATABASE_URL: postgresql://trucaco:staging_descartavel@postgres:5432/trucaco
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    image: trucaco-server:staging
+    environment:
+      NODE_ENV: production
+      PORT: '2567'
+      DATABASE_URL: postgresql://trucaco:staging_descartavel@postgres:5432/trucaco
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: staging-local-jwt-secret-descartavel-0123456789abcdef-nao-usar-em-producao
+      WEB_DIST_DIR: /app/web
+    ports:
+      - '25670:2567'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  staging-pg:
+  staging-redis:

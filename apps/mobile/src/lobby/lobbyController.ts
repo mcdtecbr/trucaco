@@ -36,6 +36,8 @@ export interface LobbyDeps {
   onEntered(code: string): void;
   /** Saiu da tela no meio da entrada: larga a sala recém-aberta. */
   abandon?(): void;
+  /** "Jogar contra bots": pede ao host para preencher as vagas (uma vez, depois de sentar). */
+  fillBots?(): boolean;
   pollMs?: number;
   /** Relógio injetável (epoch ms), usado no `retryUntil` do Retry-After. */
   now?: () => number;
@@ -53,7 +55,8 @@ export interface QueueChoices {
 }
 
 export interface LobbyController {
-  createTable(choices: TableChoices): Promise<void>;
+  /** `fillBots`: depois de sentar na mesa nova, preenche as vagas com bots (uma tentativa, sem laço). */
+  createTable(choices: TableChoices, opts?: { fillBots?: boolean }): Promise<void>;
   joinByCode(input: string): Promise<void>;
   startQueue(choices: QueueChoices): Promise<void>;
   cancelQueue(): Promise<void>;
@@ -92,7 +95,11 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
     failures = 0;
   }
 
-  async function enterReservation(scope: LobbyScope, reservation: SeatReservation): Promise<void> {
+  async function enterReservation(
+    scope: LobbyScope,
+    reservation: SeatReservation,
+    fillBots = false,
+  ): Promise<void> {
     state().setBusy('entering');
     try {
       const code = await deps.enter(reservation);
@@ -105,6 +112,14 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
         throw invalidResponse();
       } else {
         deps.onEntered(code);
+        // Uma única tentativa: se falhar, o host ainda tem o botão na sala de espera.
+        if (fillBots) {
+          try {
+            deps.fillBots?.();
+          } catch {
+            // Sem laço nem erro na tela do lobby.
+          }
+        }
       }
     } catch (e) {
       state().setQueue({ status: 'idle' });
@@ -175,7 +190,7 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
   }
 
   return {
-    async createTable(choices) {
+    async createTable(choices, opts) {
       if (!isFree()) return;
       const request: CreateTableRequest = {
         variant: choices.variant,
@@ -193,7 +208,7 @@ export function createLobbyController(deps: LobbyDeps): LobbyController {
       try {
         const res = await api.createTable(request);
         if (!isCreateTableResponse(res)) throw invalidResponse();
-        await enterReservation('create', res.reservation);
+        await enterReservation('create', res.reservation, opts?.fillBots === true);
       } catch (e) {
         fail('create', e);
         state().setBusy('none');

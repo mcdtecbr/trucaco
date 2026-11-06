@@ -1,6 +1,6 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { LiveRegion, useAnnouncer, useLayoutMode } from '@trucaco/ui';
+import { LiveRegion, useAnnouncer, useTableLayout } from '@trucaco/ui';
 import type { ChatScope, LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import type { ChatPanelProps } from './ChatPanel';
 import { useAudioPrefs } from '../audio/useAudioPrefs';
@@ -9,9 +9,11 @@ import { isE2EMode } from '../net/config';
 import { useReduceMotion } from '../platform/useReduceMotion';
 import { SHARE_DONE_TEXT, SHARE_FAILED_TEXT, SHARE_LABEL, shareCode } from '../platform/shareCode';
 import { getApp } from '../services/app';
+import { captureBaseline, startGainWatch } from '../room/achievementWatch';
+import { progressStore, useProgressStore } from '../store/progressStore';
 import { useRoomStore } from '../store/roomStore';
 import { selectProvider, useSessionStore } from '../store/sessionStore';
-import { tableStore, effectiveDeadline, useTableStore } from '../table/tableStore';
+import { effectiveDeadline, useTableStore } from '../table/tableStore';
 import {
   connectionBanner,
   finishedResult,
@@ -20,13 +22,20 @@ import {
   roomViewFor,
 } from '../table/tableRoute';
 import { useMutedNames, mutedStore } from '../store/mutedStore';
-import { buildChatPanelProps, muteFeedback, mutesFor, visibleBubbles } from './chatPanelProps';
+import {
+  buildChatPanelProps,
+  chatDockLines,
+  muteFeedback,
+  mutesFor,
+  visibleBubbles,
+} from './chatPanelProps';
 import { buildCodesPanelProps } from './codesPanelProps';
 import type { CodesPanelProps } from './CodesPanel';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
-import { decideWaitingRoute, exitTable } from './waitingRoute';
+import type { BotControls } from './WaitingRoomView';
+import { BOT_ERRORS, canManageBots, decideWaitingRoute, exitTable } from './waitingRoute';
 
 /**
  * Rota `/table/[code]`: a UMA tela dona da sala. Alterna a visão por fase (`waiting` -> espera,
@@ -53,6 +62,9 @@ export function TableRoomScreen() {
 }
 
 /** Props do painel de chat a partir do store da mesa (compartilhado entre espera e mesa). */
+/** Em jogo só há o chat da mesa; o da dupla fica na sala de espera. */
+const IN_GAME_CHAT_SCOPES: readonly ChatScope[] = ['table'];
+
 function useChatPanel(
   nicknameOf: (seat: number) => string,
   mySeat: number,
@@ -124,6 +136,9 @@ function JoinedTable() {
   const mySeat = useRoomStore((s) => s.mySeat);
   const tablePhase = useRoomStore((s) => s.tablePhase);
   const errorCode = useRoomStore((s) => s.errorCode);
+  const hostSeat = useRoomStore((s) => s.hostSeat);
+  const visibility = useRoomStore((s) => s.visibility);
+  const tableError = useTableStore((s) => s.errorCode);
   const chatPanel = useChatPanel(
     (seat) => seats.find((x) => x.seat === seat)?.nickname ?? '',
     mySeat,
@@ -137,6 +152,14 @@ function JoinedTable() {
   const codesPanel = useCodesPanel(seats, mySeat, connection === 'connected');
   const chatUnreadTotal = useTableStore((s) => s.chatUnread.table + s.chatUnread.partner);
   const reduceMotion = useReduceMotion();
+  // Foto das conquistas ao entrar na mesa: o fim da partida compara com ela (melhor esforço).
+  useEffect(() => {
+    let stop = false;
+    void captureBaseline(getApp().session.api, progressStore, () => stop);
+    return () => {
+      stop = true;
+    };
+  }, []);
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle');
 
   // Saiu da tela (voltar, trocar de rota, fechar): sai da sala de forma consentida. Deps `[]`: a troca
@@ -158,6 +181,18 @@ function JoinedTable() {
     return () => table.setAnnouncer(null);
   }, [announce]);
 
+  // Só o host de mesa privada vê os controles de bots (o servidor valida de novo).
+  const bots: BotControls | null = canManageBots({ mySeat, hostSeat, visibility })
+    ? {
+        errorText:
+          tableError !== null && BOT_ERRORS.includes(tableError) ? errorMessage(tableError) : null,
+        on: {
+          setBot: (seat, enabled) => void getApp().table.setBotSeat(seat, enabled),
+          fill: () => void getApp().table.fillBots(),
+        },
+      }
+    : null;
+
   const view = roomViewFor(tablePhase);
   let body;
   if (view === 'playing') body = <PlayingTable onLeave={leave} />;
@@ -178,6 +213,7 @@ function JoinedTable() {
         chatUnreadTotal={chatUnreadTotal}
         codesPanel={codesPanel}
         reduceMotion={reduceMotion}
+        bots={bots}
         on={{
           share,
           leave,
@@ -196,6 +232,13 @@ function JoinedTable() {
 }
 
 function FinishedTable({ onLeave }: { onLeave(): void }) {
+  const router = useRouter();
+  const gains = useProgressStore((s) => s.gains);
+  const outcome = useTableStore((s) => finishedResult(s.vm).outcome);
+  useEffect(
+    () => startGainWatch({ api: getApp().session.api, store: progressStore, outcome }),
+    [outcome],
+  );
   const vm = useTableStore((s) => s.vm);
   const history = useTableStore((s) => s.history);
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
@@ -214,12 +257,14 @@ function FinishedTable({ onLeave }: { onLeave(): void }) {
           : null
       }
       onRematch={() => void getApp().table.voteRematch()}
+      gains={gains}
+      onOpenAchievements={() => router.push('/achievements')}
     />
   );
 }
 
 function PlayingTable({ onLeave }: { onLeave(): void }) {
-  const layout = useLayoutMode();
+  const layout = useTableLayout();
   const connection = useRoomStore((s) => s.connection);
   const vm = useTableStore((s) => s.vm);
   const busy = useTableStore((s) => s.busy);
@@ -245,15 +290,24 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
     (seat) => vm?.seats[seat]?.nickname ?? '',
     vm?.mySeat ?? -1,
     connection === 'connected',
-    undefined,
+    IN_GAME_CHAT_SCOPES,
     (seat) => vm?.seats[seat]?.isBot === true || vm?.seats[seat]?.status === 'bot',
   );
   const codesPanel = useCodesPanel(vm?.seats ?? [], vm?.mySeat ?? -1, connection === 'connected');
   const mutedNames = useMutedNames();
-  const bubbles = visibleBubbles(
-    rawBubbles,
-    mutesFor(vm?.seats ?? [], vm?.mySeat ?? -1, mutedNames),
-  );
+  const chat = useTableStore((s) => s.chat);
+  const chatDraftTable = useTableStore((s) => s.chatDraft.table);
+  const chatError = useTableStore((s) => s.chatError);
+  const nicknameOf = (seat: number): string => vm?.seats[seat]?.nickname ?? '';
+  // O chat fixo da mesa mostra as mensagens recentes: enquanto ele está visível (painel completo
+  // fechado), as mensagens da mesa contam como lidas.
+  const tableUnread = chatUnread.table;
+  const dockVisible = chatPanel === null;
+  useEffect(() => {
+    if (dockVisible && tableUnread > 0) getApp().table.markTableChatSeen();
+  }, [dockVisible, tableUnread]);
+  const mutes = mutesFor(vm?.seats ?? [], vm?.mySeat ?? -1, mutedNames);
+  const bubbles = visibleBubbles(rawBubbles, mutes);
   const clockOffsetMs = useTableStore((s) => s.clockOffsetMs);
   const deadlineAt = useTableStore((s) => effectiveDeadline(s));
   const leaveConfirm = useTableStore((s) => s.leaveConfirm);
@@ -275,8 +329,20 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       lingering={lingering}
       coverMode={coverMode}
       probe={isE2EMode()}
-      chatUnreadTotal={chatUnread.table + chatUnread.partner}
+      chatUnreadTotal={chatUnread.table}
       chatPanel={chatPanel}
+      chatDock={{
+        lines: chatDockLines(chat, vm.mySeat, nicknameOf, mutes),
+        draft: chatDraftTable,
+        connected: connection === 'connected',
+        unread: 0,
+        errorText: chatError === null ? null : errorMessage(chatError),
+        on: {
+          setDraft: (text: string) => table.setChatDraft('table', text),
+          send: () => void table.sendChat('table', chatDraftTable),
+          expand: () => table.setChatOpen(true),
+        },
+      }}
       codes={codes}
       codesPanel={codesPanel}
       partnerSignalNote={partnerSignalNote}
@@ -293,16 +359,13 @@ function PlayingTable({ onLeave }: { onLeave(): void }) {
       }}
       signals={signals}
       reduceMotion={reduceMotion}
+      animateDeal={!isE2EMode()}
       deadlineAt={deadlineAt}
       clockOffsetMs={clockOffsetMs}
       leaveConfirm={leaveConfirm}
       on={{
         pressCard: (id: LegalActionId) => table.pressCard(id),
         act: (id: LegalActionId) => void table.act(id),
-        confirmSelected: () => {
-          const sel = tableStore.getState().selected;
-          if (sel !== null) void table.act(sel);
-        },
         dismissError: () => table.clearError(),
         toggleCover: () => table.setCoverMode(!coverMode),
         voteCancel: () => void table.voteCancel(),

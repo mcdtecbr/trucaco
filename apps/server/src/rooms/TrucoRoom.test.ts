@@ -3,6 +3,7 @@
  * UM `Server` por arquivo (o matchmaker é global). Variações de configuração do SERVIDOR (semente,
  * prazo, placar inicial) entram como nomes de sala extras; o cliente nunca as controla.
  */
+import { NO_EFFORT_POLICY } from '../progression/achievements';
 import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { matchMaker } from '@colyseus/core';
@@ -20,7 +21,13 @@ import { mulberry32, nextSeat, pendingSeat, teamOf } from '@trucaco/rules';
 import type { Card, SeriesState } from '@trucaco/rules';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { NotPartnersError } from '../db/types';
-import type { FinishedMatchInput, MatchRepository, PartnerCodesMap } from '../db/types';
+import type {
+  FinishedMatchInput,
+  MatchRepository,
+  PartnerCodesMap,
+  ProgressionRepository,
+  UserProgressDelta,
+} from '../db/types';
 import { TruthLog, eventViolations, leakViolations } from '../game/leakdetect';
 import type { RefHolder } from '../game/leakdetect';
 import { setLogSink } from '../logger';
@@ -49,6 +56,48 @@ const fakeRepo: MatchRepository = {
   },
   listForUser: () => Promise.resolve({ items: [], nextCursor: null }),
 };
+
+/** Progressão (Fase 6): guarda o que a sala aplicar; a variante `fail` sempre rejeita. */
+const progressCalls: { matchId: string; deltas: readonly UserProgressDelta[] }[] = [];
+const progressRepo = {
+  applyMatchProgress: (matchId: string, deltas: readonly UserProgressDelta[]) => {
+    progressCalls.push({ matchId, deltas });
+    return Promise.resolve({ applied: true, unlocked: [], missionsCompleted: [] });
+  },
+  countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
+const failingCalls: (readonly UserProgressDelta[])[] = [];
+const failingProgressRepo = {
+  applyMatchProgress: (_matchId: string, deltas: readonly UserProgressDelta[]) => {
+    failingCalls.push(deltas);
+    return Promise.reject(new Error('banco fora'));
+  },
+  countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
+
+/** Progressão que só termina quando o teste manda (prova que o dispose espera por ela). */
+const progressGate: { release: () => void }[] = [];
+const gatedProgressRepo = {
+  applyMatchProgress: () =>
+    new Promise((resolve) => {
+      progressGate.push({
+        release: () => resolve({ applied: true, unlocked: [], missionsCompleted: [] }),
+      });
+    }),
+  countWinsTogether: () => Promise.resolve(1),
+  countMatchesTogether: () => Promise.resolve(0),
+  countGuests: () => Promise.resolve(0),
+  countScoredPrivateMatches: () => Promise.resolve(0),
+  listAchievements: () => Promise.resolve([]),
+} as unknown as ProgressionRepository;
 
 /** Repositório cuja gravação só termina quando o teste manda (prova que o dispose espera). */
 const gateCalls: { input: FinishedMatchInput; release: () => void }[] = [];
@@ -152,6 +201,40 @@ const VARIANTS: Record<string, TrucoRoomConfig> = {
     botThinkMs: 20,
     turnTimeoutMs: 60_000,
     matches: fakeRepo,
+  },
+  'truco-prog': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    signalCooldownMs: 50,
+    matches: fakeRepo,
+    progression: progressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
+  },
+  'truco-prog-gate': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: fakeRepo,
+    progression: gatedProgressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
+  },
+  'truco-prog-fail': {
+    ...FAST,
+    rngSeed: 13,
+    initialScores: [11, 11],
+    reconnectSeconds: 5,
+    botThinkMs: 20,
+    turnTimeoutMs: 60_000,
+    matches: fakeRepo,
+    progression: failingProgressRepo,
+    progressionPolicy: NO_EFFORT_POLICY,
   },
   'truco-rematch-short': {
     ...FAST,
@@ -1908,7 +1991,9 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
   });
 
   it('(c) chat da dupla só vai ao parceiro (e eco); adversários nunca, nem em reconexão ou replay', async () => {
-    const game = await startedRec('truco-soc');
+    // Chat da dupla só existe na espera: 3 sentados, o 4º entra depois (e a série começa).
+    const game = await createGame('truco-soc', OPTS, 3);
+    expect(game.server.series).toBeNull();
     const secret = 'segredo-azul-42';
     SECRETS.push(secret);
     try {
@@ -1923,6 +2008,10 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       expect(got).toMatchObject({ scope: 'partner', seat: 0, text: secret });
       await sleep(QUIET_MS);
       expect(inboxOf(game.players[1] as Player).chats).toEqual([]);
+      // o 4º assento entra e a série começa: nada de histórico
+      await joinAgain(game, 3);
+      await until(() => game.server.series !== null, 'série iniciada');
+      await settle(game, 'início');
       expect(inboxOf(game.players[3] as Player).chats).toEqual([]);
       // adversários caem e voltam: nada de replay
       for (const s of [1, 3]) await dropSeat(game, s);
@@ -1972,10 +2061,14 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
       );
       await sleep(QUIET_MS);
       expect(inboxOf(p0).chats.map((c) => c.text)).toEqual(['da mesa']);
-      // chat da dupla não é filtrado pelo bloqueio
+      // chat da dupla não existe em jogo: ignorado, sem entrega nem eco
       await sleep(450);
       p0.room.send('chat', { scope: 'partner', text: 'da dupla' });
-      await until(() => inboxOf(p2).chats.some((c) => c.text === 'da dupla'), 'dupla entregue');
+      await sleep(QUIET_MS);
+      for (const p of [p0, p1, p2, p3]) {
+        expect(inboxOf(p).chats.some((c) => c.text === 'da dupla')).toBe(false);
+      }
+      expect(p0.errors).toEqual([]);
       // desbloqueio ao vivo: volta a chegar
       emitBlockChange({ blockerId: 'user-0', blockedId: 'user-2', active: false });
       emitBlockChange({ blockerId: 'user-1', blockedId: 'user-0', active: false });
@@ -1989,14 +2082,14 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
   });
 
   it('(c2) frase rápida da dupla segue a mesma privacidade', async () => {
-    const game = await startedRec('truco-soc');
+    // Na espera, com 3 sentados: seat 2 fala ao parceiro (seat 0); seat 1 é adversário.
+    const game = await createGame('truco-soc', OPTS, 3);
     const phraseId = QUICK_PHRASE_IDS[0] as string;
-    (game.players[1] as Player).room.send('chat', { scope: 'partner', phraseId });
-    await until(() => inboxOf(game.players[3] as Player).chats.length === 1, 'parceiro do 1');
-    expect(inboxOf(game.players[3] as Player).chats[0]).toMatchObject({ seat: 1, phraseId });
+    (game.players[2] as Player).room.send('chat', { scope: 'partner', phraseId });
+    await until(() => inboxOf(game.players[0] as Player).chats.length === 1, 'parceiro do 2');
+    expect(inboxOf(game.players[0] as Player).chats[0]).toMatchObject({ seat: 2, phraseId });
     await sleep(QUIET_MS);
-    expect(inboxOf(game.players[0] as Player).chats).toEqual([]);
-    expect(inboxOf(game.players[2] as Player).chats).toEqual([]);
+    expect(inboxOf(game.players[1] as Player).chats).toEqual([]);
   });
 
   it('(d) chat da mesa chega aos 4, com o assento do remetente', async () => {
@@ -2012,20 +2105,24 @@ describe('TrucoRoom: sinais, sfx e chat (2F)', () => {
     // away: janela aberta
     const a = await startedRec('truco-soc');
     await dropSeat(a, 2);
+    // chat da dupla é ignorado em jogo: nem o eco chega; a mesa segue valendo
     (a.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o ausente' });
-    await until(() => inboxOf(a.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    (a.players[1] as Player).room.send('chat', { scope: 'table', text: 'mesa-ausente' });
+    await until(() => inboxOf(a.players[0] as Player).chats.length === 1, 'chat da mesa');
+    expect(inboxOf(a.players[0] as Player).chats[0]).toMatchObject({ scope: 'table' });
     const back = await rejoin(a, 2);
     await until(() => statusOf(a, 2) === 'connected', 'voltou');
     await sleep(QUIET_MS);
     expect(inboxOf(back).chats).toEqual([]);
-    expect(inboxOf(a.players[1] as Player).chats).toEqual([]);
+    expect(inboxOf(a.players[1] as Player).chats.map((c) => c.text)).toEqual(['mesa-ausente']);
     await t.cleanup();
     // bot: janela expirou
     const b = await startedRec('truco-soc-short');
     await dropSeat(b, 2);
     await until(() => (b.server.state.players[2] as { isBot: boolean }).isBot, 'bot assumiu');
     (b.players[0] as Player).room.send('chat', { scope: 'partner', text: 'para o bot' });
-    await until(() => inboxOf(b.players[0] as Player).chats.length === 1, 'eco ao remetente');
+    (b.players[1] as Player).room.send('chat', { scope: 'table', text: 'mesa-bot' });
+    await until(() => inboxOf(b.players[0] as Player).chats.length === 1, 'chat da mesa');
     const owner = await joinAgain(b, 2);
     await until(() => statusOf(b, 2) === 'connected', 'dono retomou');
     await sleep(QUIET_MS);
@@ -2209,6 +2306,66 @@ describe('TrucoRoom: revanche ("Jogar de novo")', () => {
     await settle(game, 'fim');
     return game;
   }
+
+  it('progressão: aplicada após gravar a partida, com sinais por assento', async () => {
+    savedMatches.length = 0;
+    progressCalls.length = 0;
+    const game = await startedRec('truco-prog');
+    const p1 = game.players[1] as Player;
+    p1.room.send('signal', { signalId: 'wink' });
+    await until(() => game.players.every((p) => inboxOf(p).signals.length === 1), 'sinal nos 4');
+    await drive(game, () => hasWinner(game), 'fim da série');
+    await until(() => progressCalls.length === 1, 'progressão aplicada');
+    const call = progressCalls[0] as (typeof progressCalls)[number];
+    expect(call.matchId).toBe('1'); // id devolvido por `saveMatch`
+    expect(call.deltas).toHaveLength(4);
+    expect(call.deltas.every((d) => d.played === 1)).toBe(true);
+    expect(call.deltas.filter((d) => d.won === 1)).toHaveLength(2);
+    const byAch = (d: UserProgressDelta | undefined): string[] =>
+      (d?.achievements ?? []).map((a) => a.achievementId);
+    for (const d of call.deltas) expect(byAch(d)).toContain('maratona');
+    // Só o assento que sinalizou ganha `sinaleiro`.
+    expect(call.deltas.filter((d) => byAch(d).includes('sinaleiro'))).toHaveLength(1);
+    expect(byAch(call.deltas[1])).toContain('sinaleiro');
+    expect(savedMatches).toHaveLength(1);
+  });
+
+  it('progressão com banco fora não derruba a sala nem a gravação; o log não tem PII', async () => {
+    savedMatches.length = 0;
+    failingCalls.length = 0;
+    const lines = logLines.length;
+    const game = await finished('truco-prog-fail');
+    await until(() => savedMatches.length === 1, 'partida gravada');
+    await until(() => failingCalls.length === 1, 'progressão tentada');
+    await until(
+      () => logLines.slice(lines).some((l) => l.includes('falha ao aplicar progressão')),
+      'log de erro',
+    );
+    await settle(game, 'após a falha da progressão');
+    expect(game.server.state.phase).toBe('finished');
+    expect(game.server.series?.winner).not.toBeNull();
+    const errors = logLines.slice(lines).filter((l) => l.includes('falha ao aplicar progressão'));
+    expect(errors).toHaveLength(1);
+    // Só nome do erro e código: nem a mensagem original nem userId de ninguém.
+    expect(errors[0]).not.toContain('banco fora');
+    for (const d of failingCalls[0] ?? []) expect(errors[0]).not.toContain(d.userId);
+  });
+
+  it('onDispose espera a progressão em andamento', async () => {
+    savedMatches.length = 0;
+    progressGate.length = 0;
+    const game = await finished('truco-prog-gate');
+    await until(() => progressGate.length === 1, 'progressão iniciada');
+    let done = false;
+    const disposing = Promise.resolve(game.server.onDispose()).then(() => {
+      done = true;
+    });
+    await sleep(300);
+    expect(done).toBe(false);
+    (progressGate[0] as { release: () => void }).release();
+    await disposing;
+    expect(done).toBe(true);
+  });
 
   it('publica a janela no fim com vencedor e NÃO na série cancelada', async () => {
     const game = await finished();
@@ -2897,20 +3054,20 @@ describe('TrucoRoom: chat da dupla na espera e combinado de sinais (Fase 5)', ()
     assertNoLeaks(game);
   });
 
-  it('chat da dupla em jogo: adversários nunca recebem (nos 4 assentos)', async () => {
+  it('chat da dupla em jogo é ignorado nos 4 assentos (nem eco, nem parceiro, nem adversário)', async () => {
     const game = await started();
     for (let seat = 0; seat < 4; seat++) {
       at(game, seat).room.send('chat', { scope: 'partner', text: `dupla-${seat}` });
       await sleep(80);
     }
-    await until(() => game.players.every((p) => inboxOf(p).chats.length >= 2), 'entregues');
     await sleep(QUIET_MS);
     for (let seat = 0; seat < 4; seat++) {
-      const got = inboxOf(at(game, seat))
-        .chats.map((c) => c.seat)
-        .sort();
-      expect(got).toEqual([seat, (seat + 2) % 4].sort());
+      expect(inboxOf(at(game, seat)).chats).toEqual([]);
+      expect(at(game, seat).errors).toEqual([]);
     }
+    // chat da mesa segue valendo e chega aos 4
+    at(game, 0).room.send('chat', { scope: 'table', text: 'mesa-ok' });
+    await until(() => game.players.every((p) => inboxOf(p).chats.length === 1), 'mesa nos 4');
     assertNoLeaks(game);
   });
 

@@ -11,6 +11,7 @@ import { MemoryTokenStore, TokenStoreUnavailableError, type TokenStore } from '.
 import { createMemoryRepositories } from '../db';
 import type { UserRepository } from '../db/types';
 import { setLogSink } from '../logger';
+import type { TrustProxy } from '../rateLimit';
 import { installBaseMiddleware, mountFallbacks, mountRest } from './rest';
 
 const SECRET = new TextEncoder().encode('segredo-de-teste-com-32-bytes-ou-mais!!');
@@ -28,7 +29,7 @@ const CFG: AuthConfig = {
 interface Opts {
   limits?: Partial<RestLimits>;
   corsOrigins?: string[];
-  trustProxy?: boolean;
+  trustProxy?: TrustProxy;
   users?: UserRepository;
   cfg?: Partial<AuthConfig>;
   tokens?: TokenStore;
@@ -53,7 +54,7 @@ async function start(opts: Opts = {}) {
     users,
     limits: { ...DEFAULT_LIMITS, perIpPerMin: 10_000, perUserPerMin: 10_000, ...opts.limits },
     corsOrigins: opts.corsOrigins ?? [],
-    trustProxy: opts.trustProxy === true,
+    trustProxy: opts.trustProxy ?? false,
   });
   mountFallbacks(app);
   const server = await new Promise<HttpServer>((resolve) => {
@@ -620,17 +621,23 @@ describe('POST /auth/logout', () => {
   });
 });
 
-describe('stubs, 404 e 405', () => {
-  it('Google, Apple e link respondem 501 (link exige auth)', async () => {
+describe('login social sem credenciais, 404 e 405', () => {
+  it('sem verificador configurado: Google/Apple/link respondem SOCIAL_LOGIN_DISABLED (link exige auth)', async () => {
     const { call, guest } = await start();
     const g = await guest();
     for (const path of ['/auth/google', '/auth/apple']) {
-      const res = await call('POST', path, { body: { idToken: 'x' } });
-      expect(res.status).toBe(501);
-      expect(await code(res)).toBe('NOT_IMPLEMENTED');
+      const provider = path.slice('/auth/'.length);
+      const res = await call('POST', path, { body: { provider, idToken: 'x', nonce: 'n' } });
+      expect(res.status).toBe(503);
+      expect(await code(res)).toBe('SOCIAL_LOGIN_DISABLED');
     }
     expect((await call('POST', '/auth/link', { body: {} })).status).toBe(401);
-    expect((await call('POST', '/auth/link', { token: g.accessToken, body: {} })).status).toBe(501);
+    const link = await call('POST', '/auth/link', {
+      token: g.accessToken,
+      body: { provider: 'google', idToken: 'x', nonce: 'n' },
+    });
+    expect(link.status).toBe(503);
+    expect(await code(link)).toBe('SOCIAL_LOGIN_DISABLED');
   });
 
   it('404 e 405 genéricos, sem eco da entrada nem stack', async () => {
@@ -689,7 +696,8 @@ describe('CORS', () => {
     const { call } = await start({ corsOrigins: ['https://app.trucaco.com'] });
     const ok = await call('GET', '/me', { headers: { origin: 'https://app.trucaco.com' } });
     expect(ok.headers.get('access-control-allow-origin')).toBe('https://app.trucaco.com');
-    expect(ok.headers.get('access-control-allow-credentials')).toBeNull();
+    // cookie do refresh do web: credenciais só para origem da lista
+    expect(ok.headers.get('access-control-allow-credentials')).toBe('true');
     expect(ok.headers.get('vary')).toContain('Origin');
     const pre = await call('OPTIONS', '/auth/refresh', {
       headers: { origin: 'https://app.trucaco.com', 'access-control-request-method': 'POST' },
@@ -749,6 +757,22 @@ describe('rate limit REST', () => {
       (await on.call('POST', '/auth/guest', { headers: { 'x-forwarded-for': '8.8.8.2, 7.7.7.8' } }))
         .status,
     ).toBe(201);
+  });
+
+  it('TRUST_PROXY por cabeçalho (Fly-Client-IP): vale o IP do cabeçalho, X-Forwarded-For forjado não conta', async () => {
+    const on = await start({
+      limits: { guestPerIpPerHour: 1 },
+      trustProxy: { header: 'fly-client-ip' },
+    });
+    const ask = (flyIp: string, xff: string) =>
+      on.call('POST', '/auth/guest', {
+        headers: { 'fly-client-ip': flyIp, 'x-forwarded-for': xff },
+      });
+    expect((await ask('203.0.113.1', '1.1.1.1')).status).toBe(201);
+    // mesmo IP do proxy, XFF diferente (forjado pelo cliente): mesmo balde
+    expect((await ask('203.0.113.1', '2.2.2.2')).status).toBe(429);
+    // outro IP do proxy: outro balde
+    expect((await ask('203.0.113.2', '1.1.1.1')).status).toBe(201);
   });
 
   it('/auth/refresh: limite por IP; rotas autenticadas: limite por usuário e por IP', async () => {

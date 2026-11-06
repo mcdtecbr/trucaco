@@ -1,11 +1,12 @@
 /**
- * Contrato de persistência da sessão. Só o REFRESH token e metadados mínimos são persistidos; o
- * access token vive somente em memória (`session.ts`). Implementações por plataforma:
- * `tokenStorage.native.ts` (expo-secure-store) e `tokenStorage.web.ts` (localStorage). O Metro resolve
- * o arquivo certo por extensão; `tokenStorage.ts` (memória) serve a testes e ao typecheck.
+ * Contrato de persistência da sessão. Nunca o access token (só em memória, `session.ts`). Nativo: o REFRESH
+ * token e metadados mínimos (`tokenStorage.native.ts`, expo-secure-store). Web: só o usuário (dica de UI,
+ * `tokenStorage.web.ts`), SEM refresh: ele vive no cookie httpOnly do servidor. O Metro resolve o arquivo
+ * certo por extensão; `tokenStorage.ts` (memória) serve a testes e ao typecheck.
  */
 export interface StoredSession {
-  readonly refreshToken: string;
+  /** Ausente no web (cookie). No web, presente só para um refresh LEGADO do `localStorage` a migrar. */
+  readonly refreshToken?: string;
   readonly userId: string;
   readonly nickname: string;
 }
@@ -23,8 +24,40 @@ export interface TokenStorage {
 
 export const STORAGE_KEY = 'trucaco.session.v1';
 
+/** Chave do web depois da 7A: só `{ userId, nickname }`, nunca refresh. A `STORAGE_KEY` v1 é legado a migrar. */
+export const WEB_STORAGE_KEY = 'trucaco.session.v2';
+
 export function serializeSession(s: StoredSession): string {
-  return JSON.stringify({ refreshToken: s.refreshToken, userId: s.userId, nickname: s.nickname });
+  return JSON.stringify({
+    ...(s.refreshToken !== undefined ? { refreshToken: s.refreshToken } : {}),
+    userId: s.userId,
+    nickname: s.nickname,
+  });
+}
+
+/** Web: grava só o usuário (dica de UI); o refresh jamais entra aqui. */
+export function serializeWebUser(s: StoredSession): string {
+  return JSON.stringify({ userId: s.userId, nickname: s.nickname });
+}
+
+/** Web: lê `{ userId, nickname }` (ignora qualquer `refreshToken` que apareça). */
+export function parseWebUser(raw: string | null | undefined): StoredSession | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  try {
+    const x: unknown = JSON.parse(raw);
+    if (typeof x !== 'object' || x === null) return null;
+    const o = x as Record<string, unknown>;
+    if (
+      typeof o['userId'] === 'string' &&
+      o['userId'] !== '' &&
+      typeof o['nickname'] === 'string'
+    ) {
+      return { userId: o['userId'], nickname: o['nickname'] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Aceita só a forma esperada; qualquer outra coisa (corrompido, versão antiga) vira `null`. */

@@ -15,9 +15,10 @@ import type { Format, RoomOptions, Visibility } from './room';
  * (`ServerError`). Conjunto = catálogo congelado em `apps/server/src/errorCodes.contract.test.ts`
  * mais `INVALID_REFRESH_TOKEN` (emitido por variável, em `/auth/refresh`) e `BO3_REQUIRES_PRIVATE`
  * (vem de `validateRoomOptions`). Em ordem alfabética.
- * Fase 6 (contrato 6A, ainda não emitidos pelo servidor até os blocos 6B a 6F): `ALREADY_LINKED` (409),
+ * Fase 6 (contrato 6A; todos emitidos desde o 6F): `ALREADY_LINKED` (409),
  * `INVALID_BLOCK` (400), `INVALID_ID_TOKEN` (401), `INVALID_REPORT` (400), `PROVIDER_TAKEN` (409),
- * `SOCIAL_LOGIN_DISABLED` (503) e `USER_NOT_FOUND` (404).
+ * `SOCIAL_LOGIN_DISABLED` (503) e `USER_NOT_FOUND` (404). `NOT_IMPLEMENTED` (501) não é mais emitido
+ * (era o stub de `/auth/link|google|apple`); fica na lista por compatibilidade com o cliente.
  */
 export const HTTP_ERROR_CODES = [
   'ALREADY_IN_TABLE',
@@ -104,6 +105,23 @@ export interface TokenPairResponse {
   readonly expiresIn: number;
 }
 
+/**
+ * Sessão do WEB (requisição com `X-Client: web`): o refresh vai em cookie httpOnly e NÃO vem no corpo.
+ * Vale para `/auth/guest`, `/auth/refresh`, `/auth/google|apple` e `/auth/link`: o corpo é a resposta
+ * normal sem `refreshToken`. O nativo (sem o cabeçalho) segue recebendo o par completo.
+ */
+export type WebSessionResponse<T extends TokenPairResponse = TokenPairResponse> = Omit<
+  T,
+  'refreshToken'
+> & { readonly refreshToken?: never };
+
+/** Cabeçalho que marca o cliente web (força preflight CORS entre origens e liga o cookie do refresh). */
+export const WEB_CLIENT_HEADER = 'X-Client';
+export const WEB_CLIENT_VALUE = 'web';
+/** Cookie httpOnly do refresh no web: `HttpOnly; SameSite=Strict; Path=/auth` (`Secure` fora de dev). */
+export const REFRESH_COOKIE_NAME = 'refresh';
+export const REFRESH_COOKIE_PATH = '/auth';
+
 /** `POST /auth/guest` -> 201. */
 export interface GuestAuthResponse extends TokenPairResponse {
   readonly user: { readonly id: string; readonly nickname: string };
@@ -165,6 +183,8 @@ export type QueueStatusResponse =
 export interface HealthResponse {
   readonly status: 'ok';
   readonly protocol: number;
+  /** Provedores de login social ligados neste servidor (vazio = só convidado). O cliente esconde os botões dos outros. */
+  readonly socialProviders: readonly SocialProvider[];
 }
 
 /** Corpos de requisição, para o cliente tipar o que envia. */
@@ -197,6 +217,9 @@ export const HTTP_ROUTES = {
   authGoogle: '/auth/google',
   authApple: '/auth/apple',
   authLink: '/auth/link',
+  authNonce: '/auth/nonce',
+  /** `DELETE` com o refresh do cookie (web); o nativo segue em `DELETE /me` com `{ refreshToken }`. */
+  authAccount: '/auth/account',
   matches: '/matches',
   myAchievements: '/me/achievements',
   myMissions: '/me/missions',
@@ -213,6 +236,8 @@ export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number];
 /** Limites de entrada (validados antes de qualquer lógica; o servidor reaplica o rate limit). */
 export const ID_TOKEN_MAX_LENGTH = 4096;
 export const NONCE_MAX_LENGTH = 128;
+/** Validade do nonce de `GET /auth/nonce` (uso único), em segundos. */
+export const NONCE_TTL_SECONDS = 300;
 export const REFRESH_TOKEN_MAX_LENGTH = 1024;
 export const REPORT_TEXT_MAX_LENGTH = 500;
 /** Denúncias por usuário por hora (rate limit no servidor, em memória do processo). */
@@ -234,13 +259,24 @@ export const REPORT_REASONS = [
 ] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
 
-/** `POST /auth/google` e `POST /auth/apple` (sem Bearer): `provider` tem de bater com a rota. */
+/** `GET /auth/nonce` -> 200 (sem Bearer, limitado por IP). `503 SOCIAL_LOGIN_DISABLED` sem provedor ligado. */
+export interface NonceResponse {
+  /** Aleatório, de uso único, vale `expiresIn` segundos. Vai ao provedor no pedido do idToken. */
+  readonly nonce: string;
+  readonly expiresIn: number;
+}
+
+/**
+ * `POST /auth/google` e `POST /auth/apple` (sem Bearer): `provider` tem de bater com a rota. O `nonce` é
+ * OBRIGATÓRIO: pegue em `GET /auth/nonce`, mande ao provedor e reenvie o mesmo aqui. A claim `nonce` do
+ * idToken tem de ser igual a ele (Apple também aceita o SHA-256 em hex dele).
+ */
 export interface SocialAuthRequest {
   readonly provider: SocialProvider;
   /** JWT de identidade emitido pelo provedor. Uso único. Nunca logar. */
   readonly idToken: string;
-  /** Nonce enviado ao provedor, quando o fluxo o usa. */
-  readonly nonce?: string;
+  /** Nonce emitido por `GET /auth/nonce`. Uso único. */
+  readonly nonce: string;
 }
 
 /** `POST /auth/link` (Bearer, convidado): mesma forma do login social; o `userId` vem do token. */
@@ -385,7 +421,6 @@ export function parseSocialAuthRequest(raw: unknown): SocialAuthRequest | null {
   const { provider, idToken } = rec;
   if (!isSocialProvider(provider)) return null;
   if (!boundedString(idToken, ID_TOKEN_MAX_LENGTH)) return null;
-  if (!Object.hasOwn(rec, 'nonce')) return { provider, idToken };
   const nonce = rec['nonce'];
   if (!boundedString(nonce, NONCE_MAX_LENGTH)) return null;
   return { provider, idToken, nonce };

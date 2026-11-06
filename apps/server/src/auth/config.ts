@@ -4,6 +4,7 @@
  * morre no restart). O segredo só vem do ambiente; nunca há valor padrão.
  */
 import { randomBytes } from 'node:crypto';
+import type { TrustProxy } from '../rateLimit';
 
 export interface AuthConfig {
   /** Chave HS256 (bytes). Mínimo de 32 bytes. */
@@ -34,6 +35,20 @@ export interface RestLimits {
   readonly perIpPerMin: number;
   /** Rotas autenticadas por `userId` por minuto. */
   readonly perUserPerMin: number;
+  /** `POST /auth/google|apple|link` por IP por minuto. */
+  readonly socialPerIpPerMin: number;
+  /** `GET /auth/nonce` por IP por minuto. */
+  readonly noncePerIpPerMin: number;
+  /** `GET /auth/nonce` no servidor inteiro por minuto (teto contra enchente com muitos IPs). */
+  readonly nonceGlobalPerMin: number;
+}
+
+/** Login social: client IDs por provedor (vazio = desligado) e o verificador de teste (só dev/test). */
+export interface SocialConfig {
+  readonly googleClientIds: readonly string[];
+  readonly appleClientIds: readonly string[];
+  /** `AUTH_TEST_IDENTITY=1`: aceita `test:<sub>` como idToken. Recusado fora de development/test. */
+  readonly testIdentity: boolean;
 }
 
 export interface ServerConfig {
@@ -44,8 +59,29 @@ export interface ServerConfig {
   /** `null` = tokens em memória (só dev/test). */
   readonly redisUrl: string | null;
   readonly corsOrigins: readonly string[];
-  readonly trustProxy: boolean;
+  readonly trustProxy: TrustProxy;
   readonly limits: RestLimits;
+  readonly social: SocialConfig;
+}
+
+const NOT_A_HEADER = new Set(['yes', 'no', 'on', 'off', 'null', 'none', 'undefined']);
+
+/**
+ * `TRUST_PROXY`: `false` (padrão), `true` (último item de `X-Forwarded-For`) ou o NOME de um cabeçalho que
+ * o proxy confiável define (ex.: `Fly-Client-IP`). Outro valor (`1`, `yes`...) é recusado: evita ligar
+ * por engano um cabeçalho que não existe.
+ */
+export function parseTrustProxy(raw: string | undefined): TrustProxy {
+  const v = raw?.trim() ?? '';
+  const lower = v.toLowerCase();
+  if (lower === '' || lower === 'false') return false;
+  if (lower === 'true') return true;
+  if (!/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(v) || NOT_A_HEADER.has(lower)) {
+    throw new Error(
+      'TRUST_PROXY deve ser true, false ou o nome de um cabeçalho (ex.: Fly-Client-IP).',
+    );
+  }
+  return { header: lower };
 }
 
 export const JWT_SECRET_MIN_BYTES = 32;
@@ -60,7 +96,30 @@ export const DEFAULT_LIMITS: RestLimits = {
   refreshPerIpPerMin: 30,
   perIpPerMin: 120,
   perUserPerMin: 60,
+  socialPerIpPerMin: 20,
+  noncePerIpPerMin: 30,
+  nonceGlobalPerMin: 300,
 };
+
+/** Client IDs separados por vírgula; itens vazios e repetidos somem. Cada um com até 256 caracteres visíveis. */
+function parseClientIds(env: Env, name: string): string[] {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return [];
+  const ids = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s !== ''),
+    ),
+  ];
+  for (const id of ids) {
+    if (id.length > 256 || !/^[\x21-\x7e]+$/.test(id)) {
+      throw new Error(`${name} contém um client ID inválido.`);
+    }
+  }
+  return ids;
+}
 
 export const isDevLike = (nodeEnv: string | undefined): boolean =>
   nodeEnv === 'development' || nodeEnv === 'test';
@@ -120,6 +179,15 @@ function resolveSecret(env: Env, devLike: boolean): Uint8Array {
   return bytes;
 }
 
+function resolveTestIdentity(env: Env, devLike: boolean): boolean {
+  const raw = env['AUTH_TEST_IDENTITY'];
+  if (raw === undefined || raw === '' || raw === '0') return false;
+  if (raw !== '1') throw new Error('AUTH_TEST_IDENTITY deve ser 1 ou ficar vazia.');
+  // Falha FECHADO: o verificador de teste aceita qualquer `sub`. Nunca fora de development/test.
+  if (!devLike) throw new Error('AUTH_TEST_IDENTITY só é permitido em development/test.');
+  return true;
+}
+
 export function loadServerConfig(env: Env = process.env): ServerConfig {
   const nodeEnv = env['NODE_ENV'];
   const devLike = isDevLike(nodeEnv);
@@ -153,7 +221,7 @@ export function loadServerConfig(env: Env = process.env): ServerConfig {
     },
     redisUrl,
     corsOrigins: parseOrigins(env['CORS_ORIGINS']),
-    trustProxy: env['TRUST_PROXY'] === 'true',
+    trustProxy: parseTrustProxy(env['TRUST_PROXY']),
     limits: {
       guestPerIpPerHour: intInRange(
         env,
@@ -184,6 +252,32 @@ export function loadServerConfig(env: Env = process.env): ServerConfig {
         1,
         100_000,
       ),
+      socialPerIpPerMin: intInRange(
+        env,
+        'AUTH_SOCIAL_PER_IP_PER_MIN',
+        DEFAULT_LIMITS.socialPerIpPerMin,
+        1,
+        10_000,
+      ),
+      noncePerIpPerMin: intInRange(
+        env,
+        'AUTH_NONCE_PER_IP_PER_MIN',
+        DEFAULT_LIMITS.noncePerIpPerMin,
+        1,
+        10_000,
+      ),
+      nonceGlobalPerMin: intInRange(
+        env,
+        'AUTH_NONCE_GLOBAL_PER_MIN',
+        DEFAULT_LIMITS.nonceGlobalPerMin,
+        1,
+        1_000_000,
+      ),
+    },
+    social: {
+      googleClientIds: parseClientIds(env, 'GOOGLE_CLIENT_IDS'),
+      appleClientIds: parseClientIds(env, 'APPLE_CLIENT_IDS'),
+      testIdentity: resolveTestIdentity(env, devLike),
     },
   };
 }

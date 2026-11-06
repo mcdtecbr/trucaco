@@ -20,6 +20,7 @@ import { createResumeRecorder, createTableResume } from '../room/tableResume';
 import type { TableResumeController } from '../room/tableResume';
 import { lobbyStore } from '../store/lobbyStore';
 import { mutedStore } from '../store/mutedStore';
+import { progressStore } from '../store/progressStore';
 import { roomStore } from '../store/roomStore';
 import { bindSession, sessionStore } from '../store/sessionStore';
 import { createTableController } from '../table/tableController';
@@ -105,13 +106,22 @@ export function getApp(): App {
     },
     enter: (reservation) => roomsRef.enter(reservation),
   });
-  // A sessão acabou (logout ou refresh recusado): larga a sala, esquece a mesa e zera o lobby.
+  // A sessão acabou (logout ou refresh recusado) OU o usuário trocou (entrar em conta social, outra aba):
+  // larga a sala, esquece a mesa e zera lobby e progresso. Nada de um usuário pode vazar para o outro.
+  const resetAccountState = (): void => {
+    recorder.clear();
+    void roomsRef.leave();
+    lobbyStore.getState().reset();
+    progressStore.getState().reset();
+  };
   sessionStore.subscribe((s, prev) => {
     if (s.status === 'signedOut' && prev.status !== 'signedOut') {
-      recorder.clear();
-      void roomsRef.leave();
-      lobbyStore.getState().reset();
+      resetAccountState();
+      return;
     }
+    const before = prev.user?.id ?? null;
+    const now = s.user?.id ?? null;
+    if (before !== null && now !== null && before !== now) resetAccountState();
   });
   app = { session, rooms: roomsRef, table, audio, resume, gameClient };
   return app;

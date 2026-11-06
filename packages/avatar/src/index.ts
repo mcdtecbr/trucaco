@@ -19,7 +19,12 @@ export {
 export { RIVE_CONTRACT, RIVE_IDLE_STATES, RIVE_INPUT_DOCS, RIVE_MAX_BYTES } from './riveContract';
 export { Avatar, pickRenderer, DEFAULT_AVATAR_SIZE } from './Avatar';
 export type { AvatarProps, AvatarRendererId } from './Avatar';
-export { AvatarFallback, type AvatarFallbackProps } from './AvatarFallback';
+export {
+  AvatarFallback,
+  SQUARE_RADIUS,
+  SQUARE_ZOOM,
+  type AvatarFallbackProps,
+} from './AvatarFallback';
 export {
   useSignalAnimation,
   useIdleAnimation,

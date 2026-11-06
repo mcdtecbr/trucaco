@@ -73,6 +73,12 @@ export interface TableViewModel {
   readonly ironHand: boolean;
   readonly mySeat: number;
   readonly myTeam: 0 | 1;
+  /** Assento do host (`-1` = sem host); só ele mexe nos bots de vaga na espera. */
+  readonly hostSeat: number;
+  /** Eu sou o host (só UX: o servidor valida). */
+  readonly isHost: boolean;
+  /** `private` | `public` | `''`. Bots de vaga só existem em mesa privada. */
+  readonly visibility: string;
   /** Sempre 4 entradas, por assento. */
   readonly seats: readonly SeatView[];
   readonly byPosition: Readonly<Record<ScreenPosition, SeatView>>;
@@ -86,6 +92,8 @@ export interface TableViewModel {
   readonly handPhase: HandPhaseId | '';
   readonly special: string;
   readonly handNumber: number;
+  /** Assento do pé (quem embaralha); -1 se o servidor ainda não publicou. */
+  readonly pe: number;
   readonly handValue: number;
   readonly vira: { readonly rank: string; readonly suit: string };
   /** Cartas manilha (para destaque). Paulista: todas as de `manilhaRank`; Mineiro: as fixas. */
@@ -285,6 +293,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
   const series = rec(s['series']);
   const game = rec(s['game']);
   const options = rec(s['options']);
+  const hostSeat = Math.trunc(num(s['hostSeat'], ABSENT));
   const phaseRaw = s['phase'];
   const phase: TablePhase | '' = isTablePhase(phaseRaw) ? phaseRaw : '';
   const rematchVotes = list(s['rematchVotes']).filter((x): x is number => typeof x === 'number');
@@ -299,6 +308,9 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
     ironHand: bool(options['ironHand']),
     mySeat: me,
     myTeam,
+    hostSeat,
+    isHost: me >= 0 && hostSeat === me,
+    visibility: str(options['visibility']),
     seats,
     byPosition,
     myHand,
@@ -308,6 +320,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
     handPhase,
     special,
     handNumber: num(game['handNumber']),
+    pe: num(game['pe'], ABSENT),
     handValue: num(hand['value']),
     vira: { rank: str(hand['viraRank']), suit: str(hand['viraSuit']) },
     manilhas,

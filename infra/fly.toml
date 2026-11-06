@@ -1,0 +1,61 @@
+# Fly.io, beta (Fase 7B). Uma máquina, sem autoscale: o estado das salas, a fila e os limitadores vivem
+# em memória por processo (multi-instância fica para a Fase 8). Veja infra/README.md.
+#
+# Deploy (a partir da RAIZ do repositório, nunca de dentro de infra/):
+#   fly deploy . --config infra/fly.toml --dockerfile infra/Dockerfile.server --remote-only
+# Segredos NUNCA entram aqui: `fly secrets set` (lista em infra/README.md).
+
+# Nome do app na Fly (domínio padrão: <app>.fly.dev).
+app = "trucaco-beta-marcelo"
+# gru = São Paulo, a região mais próxima dos jogadores. Confirme com `fly platform regions` se está
+# disponível para a organização (e se o Postgres gerenciado existe nela); senão use a mais próxima (ex.: scl, iad).
+primary_region = "gru"
+
+# Chaves do nível do app (doc da Fly): sinal e tempo de parada em segundos. O servidor trata SIGTERM e
+# SIGINT com desligamento limpo e fecha as conexões nesse prazo.
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+# O web é exportado sem EXPO_PUBLIC_SERVER_URL: em produção o cliente usa a origem da própria página.
+
+[env]
+NODE_ENV = "production"
+PORT = "2567"
+# A Fly define Fly-Client-IP e sobrescreve o valor do cliente; sem isso o limite de convidados por IP
+# enxerga só o IP do proxy e tranca o beta inteiro. Validar no 1º deploy (infra/README.md).
+TRUST_PROXY = "Fly-Client-IP"
+# Web na mesma origem: o servidor serve o export do Expo copiado para a imagem.
+WEB_DIST_DIR = "/app/web"
+RETENTION_ENABLED = "true"
+# CORS_ORIGINS fica VAZIO de propósito (mesma origem não precisa de CORS). Não defina.
+
+[deploy]
+# Migração Prisma numa máquina temporária ANTES de trocar a versão; se falhar, o deploy é abortado.
+# Recebe os secrets (DATABASE_URL). É o único caminho de migração em produção.
+release_command = "sh -c 'cd /app/migrate && node node_modules/prisma/build/index.js migrate deploy'"
+strategy = "rolling"
+
+[http_service]
+internal_port = 2567
+force_https = true
+# Sempre uma máquina ligada: parar ou escalar a zero derrubaria as mesas em andamento.
+auto_stop_machines = "off"
+auto_start_machines = false
+min_machines_running = 1
+
+# WebSocket (Colyseus) passa pelo http_service. Conexões simultâneas por máquina, não requisições.
+[http_service.concurrency]
+type = "connections"
+soft_limit = 200
+hard_limit = 250
+
+[[http_service.checks]]
+grace_period = "20s"
+interval = "30s"
+method = "GET"
+timeout = "5s"
+path = "/health"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"

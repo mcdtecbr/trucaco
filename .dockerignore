@@ -7,9 +7,17 @@
 **/.expo
 **/coverage
 docs
-assets
-.env
-.env.*
-!.env.example
+assets/rive/source
+assets/rive/test_matrix
+**/.env
+**/.env.*
+!**/.env.example
 *.md
+# Exceção depois de `docs` e `*.md` (a última regra que casa vence): textos legais embutidos no bundle web
+# por apps/mobile/scripts/gen-legal.mjs.
+!docs/legal
+!docs/legal/**
 **/src/generated
+**/dist-e2e*
+**/test-results*
+**/playwright-report

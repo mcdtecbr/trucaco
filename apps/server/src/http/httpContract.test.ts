@@ -5,6 +5,7 @@
  */
 import { ERROR_CODES, HTTP_ERROR_CODES, WS_BEARER_PROTOCOL } from '@trucaco/protocol';
 import type {
+  SocialAuthResponse,
   CreateTableResponse,
   GuestAuthResponse,
   HealthResponse,
@@ -23,26 +24,36 @@ import { buildHealth } from '../index';
 import type { SeatReservation as ServerReservation, QueueStatus } from '../lobby/lobby';
 
 /**
- * Códigos da Fase 6 declarados no protocol (bloco 6A) e ainda não emitidos pelo servidor. Cada bloco
- * (6B a 6F) remove daqui os que passar a emitir; a lista tem de ficar vazia ao fim da fase.
+ * Códigos da Fase 6 declarados no protocol (bloco 6A) e ainda não emitidos pelo servidor. Vazio desde o
+ * 6F (todos os códigos da fase são emitidos).
  */
-const PENDING_PHASE6 = [
-  'ALREADY_LINKED',
-  'INVALID_ID_TOKEN',
-  'PROVIDER_TAKEN',
-  'SOCIAL_LOGIN_DISABLED',
-];
+const PENDING_PHASE6: string[] = [];
+
+/**
+ * Códigos que o protocol mantém por compatibilidade com o cliente (mapa de mensagens em `apps/mobile`)
+ * mas o servidor não emite mais: `NOT_IMPLEMENTED` era o stub de `/auth/link|google|apple` (agora reais).
+ * Remover do protocol exige tirar a entrada do cliente junto.
+ */
+const RETIRED = ['NOT_IMPLEMENTED'];
 
 describe('contrato HTTP protocol <-> servidor', () => {
   it('todo item de PENDING_PHASE6 pertence a HTTP_ERROR_CODES', () => {
     for (const c of PENDING_PHASE6) expect(HTTP_ERROR_CODES as readonly string[]).toContain(c);
   });
 
-  it.todo('PENDING_PHASE6 vazio ao fim da fase 6 (bloco 6H)');
+  it('PENDING_PHASE6 está vazio (todos os códigos da Fase 6 são emitidos)', () => {
+    expect(PENDING_PHASE6).toEqual([]);
+  });
 
   it('HTTP_ERROR_CODES coincide com os códigos emitidos pelo servidor', () => {
-    const declared = HTTP_ERROR_CODES.filter((c) => !PENDING_PHASE6.includes(c));
+    const declared = HTTP_ERROR_CODES.filter(
+      (c) => !PENDING_PHASE6.includes(c) && !RETIRED.includes(c),
+    );
     expect([...declared].sort()).toEqual([...emittedHttpCodes()].sort());
+  });
+
+  it('o servidor não emite mais códigos aposentados', () => {
+    for (const c of RETIRED) expect(emittedHttpCodes().has(c)).toBe(false);
   });
 
   it('a varredura não ficou vazia', () => {
@@ -83,12 +94,13 @@ describe('contrato HTTP protocol <-> servidor', () => {
       createdAt: new Date(0).toISOString(),
       stats: { paulista: { played: 0, won: 0 }, mineiro: { played: 0, won: 0 } },
     };
-    const health: HealthResponse = buildHealth();
+    const health: HealthResponse = buildHealth(['google']);
     const logoutRefresh: LogoutRequest = { refreshToken: 'r' };
     const logoutAll: LogoutRequest = { all: true };
     // O serviço aceita exatamente a união do protocol.
     const svc: Parameters<AuthService['logout']>[1][] = [logoutRefresh, logoutAll];
-    expect([refresh, guest, queueResp, created, joined, me, health]).toHaveLength(7);
+    const social: SocialAuthResponse = { ...guest, created: true };
+    expect([refresh, guest, queueResp, created, joined, me, health, social]).toHaveLength(8);
     expect(svc).toHaveLength(2);
   });
 });

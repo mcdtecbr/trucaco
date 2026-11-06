@@ -363,3 +363,61 @@ describe('fila pública', () => {
     expect(t.api.joinQueue).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('jogar contra bots', () => {
+  it('depois de sentar na mesa nova pede fillBots uma única vez', async () => {
+    const store: LobbyStore = createLobbyStore();
+    const api = {
+      createTable: vi.fn(),
+      joinTable: vi.fn(),
+      joinQueue: vi.fn(),
+      queueStatus: vi.fn(),
+      leaveQueue: vi.fn(),
+    };
+    api.createTable.mockResolvedValue({ code: 'ABCDEFGH', reservation });
+    const order: string[] = [];
+    const fillBots = vi.fn(() => {
+      order.push('fill');
+      return false; // recusado: sem laço
+    });
+    const controller = createLobbyController({
+      api: api as unknown as LobbyApi,
+      store,
+      enter: async () => 'ABCDEFGH',
+      onEntered: () => order.push('entered'),
+      fillBots,
+    });
+    await controller.createTable(
+      { variant: 'paulista', format: 'single', ironHand: true },
+      { fillBots: true },
+    );
+    expect(api.createTable).toHaveBeenCalledWith(
+      expect.objectContaining({ visibility: 'private' }),
+    );
+    expect(fillBots).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['entered', 'fill']);
+    expect(store.getState().busy).toBe('none');
+  });
+
+  it('sem a opção (criar mesa comum) não preenche', async () => {
+    const store: LobbyStore = createLobbyStore();
+    const api = {
+      createTable: vi.fn(),
+      joinTable: vi.fn(),
+      joinQueue: vi.fn(),
+      queueStatus: vi.fn(),
+      leaveQueue: vi.fn(),
+    };
+    api.createTable.mockResolvedValue({ code: 'ABCDEFGH', reservation });
+    const fillBots = vi.fn(() => true);
+    const controller = createLobbyController({
+      api: api as unknown as LobbyApi,
+      store,
+      enter: async () => 'ABCDEFGH',
+      onEntered: () => undefined,
+      fillBots,
+    });
+    await controller.createTable({ variant: 'paulista', format: 'single', ironHand: true });
+    expect(fillBots).not.toHaveBeenCalled();
+  });
+});

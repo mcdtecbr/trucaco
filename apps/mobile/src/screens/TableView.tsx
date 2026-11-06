@@ -1,33 +1,56 @@
 /**
  * Mesa jogável (apresentação pura): recebe o `TableViewModel` e callbacks. Nenhuma regra de jogo aqui:
  * cartas e botões habilitados vêm de `legalActions`; valores de aposta e manilhas, do estado.
+ *
+ * Disposição (`layout`):
+ * - `phone` (retrato): barra de placar no topo, pano no centro com os avatares nas bordas, dock
+ *   embaixo (mão, sinais, cobrir e o botão de aposta no canto inferior direito).
+ * - `landscape` (celular deitado) e `wide` (web largo): mesa horizontal; parceiro em cima, adversários
+ *   nos lados, eu embaixo; mão ao centro, sinais à esquerda dela e aposta no canto direito.
  */
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { betCry, parseLegalAction } from '@trucaco/protocol';
+import { useEffect, useState } from 'react';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
+import { betCry } from '@trucaco/protocol';
 import type { LegalActionId, SfxId, SignalId } from '@trucaco/protocol';
 import {
   AvatarPlaceholder,
   BetButtons,
+  betButtons,
+  betCorner as betCornerSpecs,
+  cornerMinWidth,
   Card,
+  CardBacks,
+  cardSizes,
   ChatBubble,
   SpeechBubble,
   HandFan,
   MIN_TOUCH,
+  PEEK_PX,
   PlayedCards,
+  SEAT_NAME_GAP,
+  ScoreHistoryList,
   ScoreLayers,
-  SUIT_SYMBOL,
   TurnTimer,
-  Vira,
   canCover,
-  cardName,
   colors,
   fontSize,
   fontWeight,
+  isHorizontalTable,
   parseFace,
   radius,
   spacing,
 } from '@trucaco/ui';
-import type { HandResult, LayoutMode } from '@trucaco/ui';
+import type { HandResult, PeekDirection, TableLayout } from '@trucaco/ui';
 import type { SeatView, TableViewModel } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
 import type {
@@ -39,16 +62,47 @@ import type {
 } from '../table/tableStore';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
+import { ChatDock } from './ChatDock';
+import type { ChatDockProps } from './ChatDock';
 import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
-import { SeatAvatar } from './SeatAvatar';
-import { SignalPanel } from './SignalPanel';
+import { DealOverlay, useDealSequence } from '../table/DealOverlay';
+import { DeckGroup } from '../table/DeckGroup';
+import { ScoreAd } from '../table/ScoreAd';
+import {
+  CHAT_CORNER_MIN_WIDTH,
+  DECK_GROUP_W,
+  DECK_H,
+  DOCK_PAD_X,
+  DECK_IN_X,
+  DECK_W,
+  FELT_PAD,
+  PHONE_SIDE_SHIFT,
+  RING_PX,
+  estimateArena,
+  flexZones,
+  landscapeDockPlan,
+  landscapeGeometry,
+  phoneDockPlan,
+  trickFitScale,
+} from '../table/tableGeometry';
+import { TableFelt } from '../table/TableFelt';
+import type { TableAd } from '../table/ad';
+import {
+  SEAT_AVATAR_SIZE,
+  SEAT_AVATAR_TIGHT,
+  SHORT_PHONE_HEIGHT,
+  SeatAvatar,
+  TIGHT_LANDSCAPE_HEIGHT,
+  seatRingRadius,
+} from './SeatAvatar';
+import { SignalGrid, SignalToggle, useSignalPanel } from './SignalPanel';
 
 export interface TableViewProps {
   vm: TableViewModel;
-  layout: LayoutMode;
+  layout: TableLayout;
   banner: ConnectionBanner;
   /** Sem conexão ativa: nada é enviado. */
   connected: boolean;
@@ -68,6 +122,8 @@ export interface TableViewProps {
   probe: boolean;
   /** Painel de chat aberto (props prontas) ou null. */
   chatPanel: ChatPanelProps | null;
+  /** Chat fixo da mesa (campo + últimas mensagens). Omitido = só o botão do chat na barra. */
+  chatDock?: Omit<ChatDockProps, 'variant'>;
   chatUnreadTotal: number;
   /** Combinado da dupla (só a minha dupla o tem): aparece sob cada sinal no painel de sinais. */
   codes?: Readonly<Partial<Record<SignalId, string>>>;
@@ -81,21 +137,28 @@ export interface TableViewProps {
   speech?: Readonly<Record<number, SpeechBubbleEntry>>;
   /** Emoji do efeito engraçado por assento (~1,5 s). Omitido = nenhum. */
   sfxMarks?: Readonly<Record<number, SfxMarkEntry>>;
-  /** Painel de efeitos engraçados. Omitido = sem o botão. */
+  /** Painel de efeitos engraçados (no menu). Omitido = sem o botão. */
   soundboard?: { onSend(id: SfxId): boolean; silenced: boolean };
-  /** Atalho de som na mesa. Omitido = sem o botão. */
+  /** Atalho de som (no menu). Omitido = sem o botão. */
   sound?: { muted: boolean; onToggle(): void };
   /** Sinal animando por assento. */
   signals: Readonly<Record<number, ActiveSignal>>;
   /** Preferência do sistema: sem animação, só destaque estático. */
   reduceMotion: boolean;
+  /** Embaralhar, distribuir e recolher com animação. Omitido = desligado (só o estado final). */
+  animateDeal?: boolean;
+  /** Publicidade impressa no pano. Omitido = arte placeholder; `null` = sem publicidade. */
+  tableAd?: TableAd | null;
+  /** Publicidade na faixa do placar. Omitido = arte placeholder; `null` = sem publicidade. */
+  scoreAd?: TableAd | null;
   deadlineAt: number;
   clockOffsetMs: number;
   leaveConfirm: boolean;
+  /** Menu "⋯" já aberto na primeira renderização (testes de marcação estática). */
+  defaultMenuOpen?: boolean;
   on: {
     pressCard(id: LegalActionId): void;
     act(id: LegalActionId): void;
-    confirmSelected(): void;
     dismissError(): void;
     toggleCover(): void;
     voteCancel(): void;
@@ -111,6 +174,57 @@ export interface TableViewProps {
   };
 }
 
+/** Medidas e escolhas por disposição. */
+export interface TableMetrics {
+  readonly avatar: number;
+  readonly hand: 'md' | 'lg';
+  readonly played: 'sm' | 'md';
+  /** Escala visual da vaza. */
+  readonly trickScale: number;
+  /** Vaza em cruz ou em fileira (celular deitado: falta altura). */
+  readonly trick: 'cross' | 'row';
+  /** Para onde saem as costas das cartas de cada posição. */
+  readonly peek: Readonly<Record<'partner' | 'left' | 'right', PeekDirection>>;
+}
+
+export function metricsFor(layout: TableLayout, windowHeight?: number): TableMetrics {
+  switch (layout) {
+    case 'wide':
+      return {
+        avatar: SEAT_AVATAR_SIZE.wide,
+        hand: 'lg',
+        played: 'md',
+        trickScale: 1,
+        trick: 'cross',
+        peek: { partner: 'down', left: 'right', right: 'left' },
+      };
+    case 'landscape':
+      return {
+        avatar:
+          windowHeight !== undefined && windowHeight < TIGHT_LANDSCAPE_HEIGHT
+            ? SEAT_AVATAR_TIGHT
+            : SEAT_AVATAR_SIZE.landscape,
+        hand: 'md',
+        played: 'sm',
+        trickScale: 1,
+        trick: 'row',
+        peek: { partner: 'right', left: 'right', right: 'left' },
+      };
+    default:
+      return {
+        avatar:
+          windowHeight !== undefined && windowHeight < SHORT_PHONE_HEIGHT
+            ? SEAT_AVATAR_TIGHT + 4
+            : SEAT_AVATAR_SIZE.phone,
+        hand: windowHeight !== undefined && windowHeight < SHORT_PHONE_HEIGHT ? 'md' : 'lg',
+        played: 'sm',
+        trickScale: 1,
+        trick: 'cross',
+        peek: { partner: 'down', left: 'down', right: 'down' },
+      };
+  }
+}
+
 function seatCaption(s: SeatView, vm: TableViewModel): string {
   if (s.isTurn && vm.handPhase !== 'specialDecision') return 'vez';
   if (vm.phase === 'playing' && s.handSize > 0) {
@@ -119,18 +233,26 @@ function seatCaption(s: SeatView, vm: TableViewModel): string {
   return '';
 }
 
+type BubbleAnchor = 'center' | 'start' | 'end';
+
 function Bubble({
   seat,
   vm,
   bubbles,
   speech,
   marks,
+  anchor = 'center',
+  below = false,
 }: {
   seat: number;
   vm: TableViewModel;
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
   speech?: Readonly<Record<number, SpeechBubbleEntry>> | undefined;
   marks?: Readonly<Record<number, SfxMarkEntry>> | undefined;
+  /** Alinhamento do balão: assentos na borda não deixam o balão sair da tela. */
+  anchor?: BubbleAnchor;
+  /** Balão sob o avatar (parceiro, colado na borda de cima do pano). */
+  below?: boolean;
 }) {
   const b = bubbles[seat];
   const sp = speech?.[seat];
@@ -140,7 +262,15 @@ function Bubble({
   // Posição absoluta sobre o avatar: o balão aparece e some sem deslocar o layout. A fala (grande)
   // fica acima do chat quando os dois coexistem.
   return (
-    <View style={styles.bubbleSlot} pointerEvents="none">
+    <View
+      style={[
+        styles.bubbleSlot,
+        below ? styles.bubbleBelow : styles.bubbleAbove,
+        anchor === 'start' && styles.bubbleStart,
+        anchor === 'end' && styles.bubbleEnd,
+      ]}
+      pointerEvents="none"
+    >
       {mark !== undefined ? (
         // O anúncio para o leitor de tela sai pelo controlador: o emoji é só visual.
         <Text
@@ -171,36 +301,66 @@ interface SeatSignals {
   sfxMarks?: Readonly<Record<number, SfxMarkEntry>> | undefined;
   signals: Readonly<Record<number, ActiveSignal>>;
   reduceMotion: boolean;
+  avatarSize: number;
   onSignalEnd(seat: number, key: number): void;
 }
 
+/** Avatar quadrado com o apelido em faixa e, se for o caso, as costas das cartas saindo por trás. */
 function Seat({
   s,
   vm,
   bubbles,
   speech,
   fx,
+  peek,
+  anchor,
+  below,
+  testID,
+  own,
 }: {
   s: SeatView;
   vm: TableViewModel;
   bubbles: Readonly<Record<number, ChatBubbleEntry>>;
   speech?: Readonly<Record<number, SpeechBubbleEntry>> | undefined;
   fx: SeatSignals;
+  /** Ausente: assento sem costas de carta (o meu). */
+  peek?: PeekDirection;
+  anchor?: BubbleAnchor;
+  below?: boolean;
+  testID: string;
+  own?: boolean;
 }) {
   const status = s.nickname === '' && s.status === 'connected' ? 'empty' : s.status;
+  const cards = vm.phase === 'playing' ? s.handSize : 0;
   return (
-    <View testID={`table-seat-${s.seat}`} style={styles.seatBox}>
-      <Bubble seat={s.seat} vm={vm} bubbles={bubbles} speech={speech} marks={fx.sfxMarks} />
+    <View testID={testID} style={styles.seatBox}>
+      {peek !== undefined ? (
+        <CardBacks count={cards} direction={peek} avatarSize={fx.avatarSize + 6} />
+      ) : null}
+      <Bubble
+        seat={s.seat}
+        vm={vm}
+        bubbles={bubbles}
+        speech={speech}
+        marks={fx.sfxMarks}
+        {...(anchor !== undefined ? { anchor } : {})}
+        {...(below !== undefined ? { below } : {})}
+      />
       <AvatarPlaceholder
-        nickname={s.nickname || '—'}
+        nickname={s.nickname || (own === true ? 'Você' : '—')}
         status={status}
-        side={s.side}
+        side={own === true ? 'mine' : s.side}
         active={s.isTurn}
-        caption={seatCaption(s, vm)}
+        caption={own === true ? 'você' : seatCaption(s, vm)}
         layout="column"
+        nameBelow
+        nameWidth={fx.avatarSize + 2 * RING_PX}
+        {...(peek === 'down' ? { nameGap: PEEK_PX + SEAT_NAME_GAP } : {})}
+        ringRadius={seatRingRadius(fx.avatarSize)}
         avatar={
           <SeatAvatar
             seat={s.seat}
+            size={fx.avatarSize}
             parts={s.avatar}
             signal={fx.signals[s.seat] ?? null}
             reduceMotion={fx.reduceMotion}
@@ -249,15 +409,6 @@ export function turnText(vm: TableViewModel): string | null {
   return `Vez de ${n !== undefined && n !== '' ? n : 'outro jogador'}`;
 }
 
-function selectedLabel(selected: string | null): string | null {
-  const a = parseLegalAction(selected);
-  if (a === null) return null;
-  if (a.kind === 'play') return `Jogar ${cardName(a.card.rank, a.card.suit)}`;
-  if (a.kind === 'playCovered') return `Jogar coberta: ${cardName(a.card.rank, a.card.suit)}`;
-  if (a.kind === 'playBlind') return `Jogar a carta ${a.index + 1}`;
-  return null;
-}
-
 function Banner({ banner, onLeave }: { banner: ConnectionBanner; onLeave(): void }) {
   if (banner === null) return null;
   if (banner === 'closed') {
@@ -291,16 +442,78 @@ function Banner({ banner, onLeave }: { banner: ConnectionBanner; onLeave(): void
   );
 }
 
+/** Ícone de 44 pt da barra do topo, com selo opcional (mensagens não lidas). */
+function BarIcon({
+  icon,
+  label,
+  badge,
+  onPress,
+  testID,
+  on,
+}: {
+  icon: string;
+  label: string;
+  badge?: number;
+  onPress(): void;
+  testID: string;
+  on?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      {...(on !== undefined ? { accessibilityState: { expanded: on }, 'aria-expanded': on } : {})}
+      onPress={onPress}
+      style={styles.barIcon}
+      testID={testID}
+    >
+      <Text style={styles.barIconText}>{icon}</Text>
+      {badge !== undefined && badge > 0 ? (
+        <View style={styles.badge} importantForAccessibility="no-hide-descendants">
+          <Text style={styles.badgeText}>{badge > 9 ? '9+' : String(badge)}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
 export function TableView(p: TableViewProps) {
   const { vm } = p;
-  const wide = p.layout === 'wide';
-  const playedSize = wide ? 'md' : 'sm';
-  const handSize = 'lg';
-  const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
+  const horizontal = isHorizontalTable(p.layout);
+  const rawWin = useWindowDimensions();
+  // Sem medida (renderização estática, testes): janela de 1024 px, como um tablet.
+  const win = rawWin.width > 0 ? rawWin : { ...rawWin, width: 1024 };
+  const m = metricsFor(p.layout, win.height);
+  const [menuOpen, setMenuOpen] = useState(p.defaultMenuOpen === true);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [barH, setBarH] = useState(0);
+  const [dockH, setDockH] = useState(0);
+  const [arena, setArena] = useState<{ w: number; h: number } | null>(null);
+  const landscape = p.layout === 'landscape';
   const modalOpen = p.leaveConfirm;
   const actionsOn = p.connected && !p.busy && !modalOpen;
+  const signalPanel = useSignalPanel({
+    connected: p.connected && !modalOpen,
+    onSend: p.on.sendSignal,
+  });
+  // Uma camada por vez: abrir os sinais fecha menu e histórico; o diálogo de sair fecha todas.
+  const signalsOpen = signalPanel.open;
+  const closeSignals = signalPanel.setOpen;
+  useEffect(() => {
+    if (signalsOpen) {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+    }
+  }, [signalsOpen]);
+  useEffect(() => {
+    if (modalOpen) {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+      closeSignals(false);
+    }
+  }, [modalOpen, closeSignals]);
+  const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
   const legal = p.connected && !modalOpen ? vm.legalActions : [];
-  const label = selectedLabel(p.selected);
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
@@ -308,33 +521,110 @@ export function TableView(p: TableViewProps) {
     sfxMarks: p.sfxMarks,
     signals: p.signals,
     reduceMotion: p.reduceMotion,
+    avatarSize: m.avatar,
     onSignalEnd: p.on.signalEnd,
   };
+  const deal = useDealSequence({
+    key: `${vm.matchNumber}:${vm.handNumber}`,
+    enabled: p.animateDeal === true && !p.reduceMotion && vm.handNumber > 0,
+    pe: vm.pe,
+    mySeat: vm.mySeat,
+    fresh: vm.current.length === 0 && vm.tricks.length === 0,
+  });
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
-  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}`;
+  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}|bots=${vm.seats.filter((x) => x.isBot).length}`;
 
-  const score = (
-    <ScoreLayers
-      myTeam={vm.myTeam}
-      series={vm.series}
-      scores={vm.scores}
-      handNumber={vm.handNumber}
-      handValue={vm.handValue}
-      special={vm.special}
-      tricks={vm.tricks}
-      history={p.history}
-      currentLog={p.handLog}
-      variant={vm.variant}
-      defaultHistoryOpen={wide}
-    />
+  const votes = vm.cancelVotes.length;
+  const cancelText = vm.iVotedCancel
+    ? `Cancelar: você votou (${votes})`
+    : votes > 0
+      ? `Cancelar mesa (${votes})`
+      : 'Cancelar mesa';
+  const cancelLabel = vm.iVotedCancel
+    ? `Você já votou para cancelar a mesa. ${votes} votos.`
+    : `Votar para cancelar a mesa. ${votes} votos até agora. Todos os jogadores humanos precisam concordar.`;
+  const usable = p.connected && !modalOpen;
+
+  /** Barra de placar no topo, em largura total: duplas, vazas, valor, publicidade e ícones. */
+  const scoreBar = (
+    <View
+      style={styles.scoreFixed}
+      testID="score-fixed"
+      onLayout={(e) => setBarH(Math.round(e.nativeEvent.layout.height))}
+    >
+      <ScoreLayers
+        bar
+        myTeam={vm.myTeam}
+        series={vm.series}
+        scores={vm.scores}
+        handNumber={vm.handNumber}
+        handValue={vm.handValue}
+        special={vm.special}
+        tricks={vm.tricks}
+        history={p.history}
+        currentLog={p.handLog}
+        variant={vm.variant}
+        historyOpen={historyOpen}
+        onHistoryOpenChange={(open) => {
+          if (open) {
+            setMenuOpen(false);
+            closeSignals(false);
+          }
+          setHistoryOpen(open);
+        }}
+        {...(landscape
+          ? {}
+          : {
+              adSlot: (
+                <View style={styles.adRow}>
+                  <ScoreAd ad={p.scoreAd} />
+                </View>
+              ),
+            })}
+        actions={
+          <>
+            {landscape ? <ScoreAd ad={p.scoreAd} /> : null}
+            <BarIcon
+              icon={'\u{1F4AC}'}
+              label={p.chatUnreadTotal > 0 ? `Chat, ${p.chatUnreadTotal} mensagens novas` : 'Chat'}
+              badge={p.chatUnreadTotal}
+              onPress={p.on.openChat}
+              testID="open-chat"
+            />
+            <BarIcon
+              icon={'⋯'}
+              label={menuOpen ? 'Fechar menu da mesa' : 'Abrir menu da mesa'}
+              onPress={() => {
+                if (!menuOpen) {
+                  setHistoryOpen(false);
+                  closeSignals(false);
+                }
+                setMenuOpen((o) => !o);
+              }}
+              testID="open-menu"
+              on={menuOpen}
+            />
+            <BarIcon
+              icon={'\u{1F6AA}'}
+              label="Sair da mesa"
+              onPress={p.on.askLeave}
+              testID="leave-table"
+            />
+          </>
+        }
+      />
+    </View>
   );
-  const vira = (
-    <Vira
+
+  const deckGroup = (
+    <DeckGroup
       viraRank={vm.vira.rank}
       viraSuit={vm.vira.suit}
-      {...(vm.manilhaLabel !== undefined ? { manilhaLabel: vm.manilhaLabel } : {})}
+      manilhaLabel={vm.manilhaLabel}
+      viraHidden={deal.viraHidden}
     />
   );
+
   const showLinger = vm.current.length === 0 && p.lingering !== null;
   const trickPlays = showLinger ? (p.lingering?.plays ?? []) : vm.current;
   const trickOwn = showLinger ? (p.lingering?.ownCovered ?? null) : vm.ownCoveredCurrent;
@@ -344,65 +634,74 @@ export function TableView(p: TableViewProps) {
       ? `Vaza de ${lingerSeat === vm.mySeat ? 'você' : nicknameOf(lingerSeat) || 'outro jogador'}`
       : null;
   const showPartner = vm.handPhase === 'specialDecision' && vm.partnerCards.length > 0;
-  const mineiroManilhas =
-    vm.variant === 'mineiro' && vm.manilhas.length > 0 ? (
-      <Text style={styles.muted} testID="manilhas">
-        Manilhas: {vm.manilhas.map((m) => `${m.rank}${SUIT_SYMBOL[m.suit]}`).join(' ')}
-      </Text>
-    ) : null;
 
-  const board = (
-    <View style={styles.board}>
-      <View style={styles.partner}>
-        <Seat s={vm.byPosition.partner} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
-      </View>
-      <View style={styles.middle}>
-        <View style={styles.side}>
-          <Seat s={vm.byPosition.left} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
-        </View>
-        <View style={styles.center} testID="trick">
-          <PlayedCards
-            plays={trickPlays}
-            mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
-            ownCovered={trickOwn}
-            manilhas={vm.manilhas}
-            nicknameOf={nicknameOf}
-            size={playedSize}
-          />
-          {lingerWinner !== null ? (
-            <Text style={styles.muted} testID="trick-winner">
-              {lingerWinner}
-            </Text>
-          ) : null}
-        </View>
-        <View style={styles.side}>
-          <Seat s={vm.byPosition.right} vm={vm} bubbles={p.bubbles} speech={p.speech} fx={fx} />
-        </View>
-      </View>
-    </View>
+  // Faixa do topo do pano ocupada pelo parceiro (avatar + borda + costas das cartas que saem abaixo).
+  // Faixa de baixo: meu avatar, no centro (de frente para o parceiro).
+  const zones = flexZones(m.avatar, m.peek.partner === 'down');
+  const { partnerZone } = zones;
+  const sideSeatStyle = (side: 'left' | 'right'): StyleProp<ViewStyle> => [
+    styles.sideSeat,
+    p.layout === 'phone' ? { top: PHONE_SIDE_SHIFT * 2 } : null,
+    side === 'left' ? styles.sideLeft : styles.sideRight,
+  ];
+
+  const seatNode = (
+    s: SeatView,
+    peek: PeekDirection | undefined,
+    extra: { anchor?: BubbleAnchor; below?: boolean; testID: string; own?: boolean },
+  ) => (
+    <Seat
+      s={s}
+      vm={vm}
+      bubbles={p.bubbles}
+      speech={p.speech}
+      fx={fx}
+      {...(peek !== undefined ? { peek } : {})}
+      {...extra}
+    />
   );
 
-  const controls = (
-    <View style={styles.controls}>
-      <View style={styles.statusRow}>
+  const trickCards = (
+    <PlayedCards
+      plays={trickPlays}
+      mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
+      ownCovered={trickOwn}
+      manilhas={vm.manilhas}
+      nicknameOf={nicknameOf}
+      size={m.played}
+      arrangement={m.trick}
+    />
+  );
+  const winnerText =
+    lingerWinner !== null ? (
+      <Text style={styles.muted} testID="trick-winner">
+        {lingerWinner}
+      </Text>
+    ) : null;
+  /** Painel de status: de quem é a vez e a aposta pendente. Fica no pano, num canto. */
+  const statusNode =
+    turn !== null || pending !== null ? (
+      <>
         {turn !== null ? (
           <Text
             style={[styles.turn, vm.canAct && styles.turnMine]}
             testID="turn-text"
+            numberOfLines={2}
             accessibilityLiveRegion="polite"
           >
             {turn}
           </Text>
         ) : null}
-        <View style={styles.timer} testID="turn-timer">
-          <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
-        </View>
-      </View>
-      {pending !== null ? (
-        <Text style={styles.pending} testID="pending-bet" accessibilityLiveRegion="polite">
-          {pending}
-        </Text>
-      ) : null}
+        {pending !== null ? (
+          <Text style={styles.pending} testID="pending-bet" accessibilityLiveRegion="polite">
+            {pending}
+          </Text>
+        ) : null}
+      </>
+    ) : null;
+
+  const dockExtras = (
+    <>
       {p.errorText !== null ? (
         <Pressable
           accessibilityRole="alert"
@@ -414,14 +713,6 @@ export function TableView(p: TableViewProps) {
           <Text style={styles.errorText}>{p.errorText}</Text>
         </Pressable>
       ) : null}
-      <BetButtons
-        legalActions={legal}
-        busy={!actionsOn}
-        raising={vm.pending !== null}
-        nextValue={vm.nextBetValue}
-        pendingValue={vm.pendingValue}
-        onPress={p.on.act}
-      />
       {showPartner ? (
         <View testID="partner-cards" accessibilityLabel="Cartas do seu parceiro">
           <Text style={styles.muted}>Cartas do seu parceiro</Text>
@@ -439,148 +730,451 @@ export function TableView(p: TableViewProps) {
           </View>
         </View>
       ) : null}
-      {canCover(legal) ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={p.coverMode ? 'Cobrir carta, ligado' : 'Cobrir carta, desligado'}
-          accessibilityHint="Quando ligado, a carta escolhida é jogada coberta"
-          accessibilityState={{ selected: p.coverMode }}
-          aria-pressed={p.coverMode}
-          onPress={p.on.toggleCover}
-          style={[styles.cover, p.coverMode && styles.coverOn]}
-          testID="cover-toggle"
-        >
-          <Text style={styles.menuText}>{p.coverMode ? 'Cobrir: ligado' : 'Cobrir'}</Text>
-        </Pressable>
-      ) : null}
-      {label !== null && actionsOn ? (
-        <Button label={label} onPress={p.on.confirmSelected} testID="confirm-play" />
-      ) : null}
-      <View testID="my-hand">
-        <HandFan
-          hand={vm.myHand}
-          legalActions={actionsOn ? vm.legalActions : []}
-          blindCount={vm.blindCount}
-          coverMode={p.coverMode}
-          manilhas={vm.manilhas}
-          selectedAction={p.selected}
-          size={handSize}
-          onPress={p.on.pressCard}
-        />
-      </View>
-    </View>
+    </>
   );
 
-  const votes = vm.cancelVotes.length;
-  const cancelText = vm.iVotedCancel
-    ? `Cancelar: você votou (${votes})`
-    : votes > 0
-      ? `Cancelar mesa (${votes})`
-      : 'Cancelar mesa';
-  const cancelLabel = vm.iVotedCancel
-    ? `Você já votou para cancelar a mesa. ${votes} votos.`
-    : `Votar para cancelar a mesa. ${votes} votos até agora. Todos os jogadores humanos precisam concordar.`;
+  const abs = (r: { x: number; y: number }): ViewStyle => ({
+    position: 'absolute',
+    left: r.x,
+    top: r.y,
+  });
+  const est = estimateArena(p.layout, win.width, win.height);
+  const geo = landscape ? landscapeGeometry(arena?.w ?? est.w, arena?.h ?? est.h, m.avatar) : null;
 
-  const footer = (
-    <View style={styles.footer}>
-      <View testID="my-seat" style={styles.seatBox}>
-        <Bubble seat={vm.mySeat} vm={vm} bubbles={p.bubbles} speech={p.speech} marks={p.sfxMarks} />
-        <AvatarPlaceholder
-          nickname={mineSeat.nickname || 'Você'}
-          status={mineSeat.status}
-          side="mine"
-          active={mineSeat.isTurn}
-          caption="você"
-          avatar={
-            <SeatAvatar
-              seat={mineSeat.seat}
-              parts={mineSeat.avatar}
-              signal={fx.signals[mineSeat.seat] ?? null}
-              reduceMotion={fx.reduceMotion}
-              onSignalEnd={fx.onSignalEnd}
-            />
-          }
-        />
-      </View>
-      <View style={styles.menuRow}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={
-            p.chatUnreadTotal > 0 ? `Chat, ${p.chatUnreadTotal} mensagens novas` : 'Chat'
-          }
-          onPress={p.on.openChat}
-          style={styles.menu}
-          testID="open-chat"
+  /** Celular deitado: posições calculadas (sem colisão); meu avatar fica na dock, ao lado da mão. */
+  const landscapeArena =
+    geo !== null ? (
+      <View
+        style={styles.arena}
+        pointerEvents="box-none"
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setArena((a) =>
+            a !== null && a.w === width && a.h === height ? a : { w: width, h: height },
+          );
+        }}
+      >
+        <View style={abs(geo.partner.avatar)} pointerEvents="box-none">
+          {seatNode(vm.byPosition.partner, m.peek.partner, {
+            below: true,
+            testID: `table-seat-${vm.byPosition.partner.seat}`,
+          })}
+        </View>
+        <View style={abs(geo.left.avatar)} pointerEvents="box-none">
+          {seatNode(vm.byPosition.left, m.peek.left, {
+            anchor: 'start',
+            testID: `table-seat-${vm.byPosition.left.seat}`,
+          })}
+        </View>
+        <View style={abs(geo.right.avatar)} pointerEvents="box-none">
+          {seatNode(vm.byPosition.right, m.peek.right, {
+            anchor: 'end',
+            testID: `table-seat-${vm.byPosition.right.seat}`,
+          })}
+        </View>
+        <View
+          style={[
+            abs(geo.trickBox),
+            {
+              width: geo.trickBox.w,
+              alignItems: 'center',
+              transform: [{ scale: geo.trickScale }],
+            },
+          ]}
+          testID="trick"
+          pointerEvents="box-none"
         >
-          <Text style={styles.menuText}>
-            {p.chatUnreadTotal > 0 ? `Chat (${p.chatUnreadTotal})` : 'Chat'}
-          </Text>
-        </Pressable>
-        {p.on.openCodes !== undefined && vm.mySeat >= 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Combinar sinais com o parceiro"
-            onPress={p.on.openCodes}
-            style={styles.menu}
-            testID="open-codes"
+          {trickCards}
+          {winnerText}
+        </View>
+        <View style={abs(geo.deckGroup)} pointerEvents="none">
+          {deckGroup}
+        </View>
+        {statusNode !== null ? (
+          <View
+            style={[
+              abs(geo.status),
+              { width: geo.status.w, maxHeight: geo.status.h, overflow: 'hidden' },
+              styles.statusLand,
+            ]}
+            pointerEvents="none"
           >
-            <Text style={styles.menuText}>Combinar sinais</Text>
-          </Pressable>
+            {statusNode}
+          </View>
         ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={cancelLabel}
-          aria-disabled={vm.iVotedCancel || !p.connected}
-          disabled={vm.iVotedCancel || !p.connected}
-          onPress={p.on.voteCancel}
-          style={[styles.menu, vm.iVotedCancel && styles.menuOff]}
-          testID="vote-cancel"
-        >
-          <Text style={styles.menuText}>{cancelText}</Text>
-        </Pressable>
-        {p.sound !== undefined ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              p.sound.muted ? 'Som desligado. Ligar o som' : 'Som ligado. Desligar o som'
-            }
-            accessibilityState={{ checked: !p.sound.muted }}
-            aria-pressed={!p.sound.muted}
-            onPress={p.sound.onToggle}
-            style={[styles.menu, p.sound.muted && styles.menuOff]}
-            testID="sound-toggle"
-          >
-            <Text style={styles.menuText}>{p.sound.muted ? '\u{1F507}' : '\u{1F50A}'}</Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Sair da mesa"
-          onPress={p.on.askLeave}
-          style={styles.menu}
-          testID="leave-table"
-        >
-          <Text style={styles.menuText}>Sair da mesa</Text>
-        </Pressable>
+        {/* Avisos de erro e cartas do parceiro: sobre o pano (no deitado, a dock nao cresce e a geometria vale). */}
+        <View style={styles.extrasLand} pointerEvents="box-none">
+          {dockExtras}
+        </View>
       </View>
-      {vm.mySeat >= 0 ? (
-        <View style={styles.signalRow}>
-          <SignalPanel
-            connected={p.connected && !modalOpen}
-            onSend={p.on.sendSignal}
-            {...(p.codes !== undefined ? { codes: p.codes } : {})}
-          />
-          {p.soundboard !== undefined ? (
-            <SoundboardPanel
-              connected={p.connected && !modalOpen}
-              onSend={p.soundboard.onSend}
-              silenced={p.soundboard.silenced}
-            />
-          ) : null}
+    ) : null;
+
+  // Retrato: o aviso da vez fica no canto esquerdo, entre o monte e o avatar do parceiro (pequeno, em
+  // até duas linhas).
+  const phoneStatusW = Math.max(
+    48,
+    ((arena?.w ?? est.w) - (m.avatar + 2 * RING_PX)) / 2 - DECK_GROUP_W - spacing.xs - 4,
+  );
+  // Telas baixas: a cruz da vaza encolhe para caber entre o parceiro (em cima) e o meu avatar (embaixo).
+  const trickFit = trickFitScale(
+    arena?.h ?? est.h,
+    zones,
+    cardSizes[m.played].height,
+    m.trickScale,
+  );
+
+  const flexArena = (
+    <View
+      style={styles.arena}
+      pointerEvents="box-none"
+      onLayout={(e) => {
+        const { width, height } = e.nativeEvent.layout;
+        setArena((a) =>
+          a !== null && a.w === width && a.h === height ? a : { w: width, h: height },
+        );
+      }}
+    >
+      <View style={styles.partnerSeat} pointerEvents="box-none">
+        {seatNode(vm.byPosition.partner, m.peek.partner, {
+          below: true,
+          testID: `table-seat-${vm.byPosition.partner.seat}`,
+        })}
+      </View>
+      <View style={sideSeatStyle('left')} pointerEvents="box-none">
+        {seatNode(vm.byPosition.left, m.peek.left, {
+          anchor: 'start',
+          testID: `table-seat-${vm.byPosition.left.seat}`,
+        })}
+      </View>
+      <View style={sideSeatStyle('right')} pointerEvents="box-none">
+        {seatNode(vm.byPosition.right, m.peek.right, {
+          anchor: 'end',
+          testID: `table-seat-${vm.byPosition.right.seat}`,
+        })}
+      </View>
+      <View style={styles.mySeat} pointerEvents="box-none">
+        {seatNode(mineSeat, undefined, { anchor: 'start', testID: 'my-seat', own: true })}
+      </View>
+      <View
+        style={[styles.trickZone, { paddingTop: partnerZone, paddingBottom: zones.mineZone }]}
+        pointerEvents="box-none"
+      >
+        <View style={styles.center} testID="trick" pointerEvents="box-none">
+          <View
+            style={trickFit !== 1 ? { transform: [{ scale: trickFit }] } : undefined}
+            pointerEvents="box-none"
+          >
+            {trickCards}
+          </View>
+          {winnerText}
+        </View>
+      </View>
+      <View style={styles.deckCorner} pointerEvents="none">
+        {deckGroup}
+      </View>
+      {statusNode !== null ? (
+        <View
+          style={[
+            styles.status,
+            horizontal ? styles.statusCorner : [styles.statusPhone, { width: phoneStatusW }],
+          ]}
+          pointerEvents="none"
+        >
+          {statusNode}
         </View>
       ) : null}
     </View>
   );
+
+  const board = (
+    <TableFelt
+      style={styles.board}
+      contentStyle={styles.boardContent}
+      ad={p.tableAd}
+      testID="table-felt"
+    >
+      {landscapeArena ?? flexArena}
+      {deal.run !== null ? (
+        <DealOverlay
+          runId={deal.run.id}
+          plan={deal.run.plan}
+          mySeat={vm.mySeat}
+          avatarSize={m.avatar}
+          deckAt={
+            geo !== null
+              ? {
+                  x: FELT_PAD + geo.deck.x + geo.deck.w / 2,
+                  y: FELT_PAD + geo.deck.y + geo.deck.h / 2,
+                }
+              : { x: FELT_PAD + DECK_IN_X + DECK_W / 2, y: FELT_PAD + DECK_H / 2 }
+          }
+        />
+      ) : null}
+    </TableFelt>
+  );
+
+  const coverButton = canCover(legal) ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={p.coverMode ? 'Cobrir carta, ligado' : 'Cobrir carta, desligado'}
+      accessibilityHint="Quando ligado, a carta escolhida é jogada coberta"
+      accessibilityState={{ selected: p.coverMode }}
+      aria-pressed={p.coverMode}
+      onPress={p.on.toggleCover}
+      style={[styles.dockBtn, landscape && styles.dockBtnLand, p.coverMode && styles.dockBtnOn]}
+      testID="cover-toggle"
+    >
+      <Text style={styles.dockBtnText}>{p.coverMode ? 'Cobrir: ligado' : 'Cobrir'}</Text>
+    </Pressable>
+  ) : null;
+
+  const signalButtons =
+    vm.mySeat >= 0 ? (
+      <View style={[styles.dockGroup, landscape && styles.dockGroupCol]}>
+        <SignalToggle
+          panel={signalPanel}
+          style={[styles.dockBtn, landscape && styles.dockBtnLand]}
+        />
+        {coverButton}
+      </View>
+    ) : (
+      coverButton
+    );
+
+  const betCorner = (
+    <BetButtons
+      variant="corner"
+      legalActions={legal}
+      busy={!actionsOn}
+      raising={vm.pending !== null}
+      nextValue={vm.nextBetValue}
+      pendingValue={vm.pendingValue}
+      onPress={p.on.act}
+    />
+  );
+
+  // Botões de aposta (só para medir largura: o desenho vem de `betCorner` abaixo).
+  const betSpecs = betCornerSpecs(
+    betButtons(legal, {
+      raising: vm.pending !== null,
+      nextValue: vm.nextBetValue,
+      pendingValue: vm.pendingValue,
+    }),
+  );
+  const betNeed = cornerMinWidth(betSpecs.side.length, betSpecs.main !== null);
+  const landDock = landscapeDockPlan(win.width, m.avatar + 2 * RING_PX, betNeed);
+  const phonePlan = phoneDockPlan(win.width - DOCK_PAD_X, m.hand, betNeed);
+  const handSize = landscape ? landDock.hand : m.hand;
+  const hand = (
+    <View
+      testID="my-hand"
+      style={deal.handHidden ? styles.hidden : undefined}
+      pointerEvents={deal.handHidden ? 'none' : 'auto'}
+    >
+      <HandFan
+        hand={vm.myHand}
+        legalActions={actionsOn ? vm.legalActions : []}
+        blindCount={vm.blindCount}
+        coverMode={p.coverMode}
+        manilhas={vm.manilhas}
+        selectedAction={p.selected}
+        size={handSize}
+        onPress={p.on.pressCard}
+      />
+    </View>
+  );
+
+  /**
+   * Dock inferior, ao alcance do polegar. Retrato: mão, e logo abaixo sinais (e cobrir) à esquerda e o
+   * botão de aposta no canto direito. Horizontal: sinais, mão e aposta numa linha só, com a mão ao centro.
+   */
+  const chatInDock = p.chatDock !== undefined && p.chatPanel === null;
+  const dockChat = (variant: ChatDockProps['variant'], maxLines?: number) =>
+    chatInDock && p.chatDock !== undefined ? (
+      <ChatDock
+        variant={variant}
+        {...(maxLines !== undefined ? { maxLines } : {})}
+        {...p.chatDock}
+      />
+    ) : null;
+  // Web largo e estreito (< `CHAT_CORNER_MIN_WIDTH`): o chat compacto entra na fileira da dock.
+  const wideChatInRow = p.layout === 'wide' && chatInDock && win.width < CHAT_CORNER_MIN_WIDTH;
+  const dock = horizontal ? (
+    <View
+      style={styles.dock}
+      testID="dock"
+      onLayout={(e) => setDockH(Math.round(e.nativeEvent.layout.height))}
+    >
+      {landscape ? null : dockExtras}
+      {landscape ? (
+        // Meu avatar no centro da mesa (mesma coluna do parceiro); sinais e chat à esquerda; a mão
+        // fica logo à direita dele, com o botão de aposta colado nela.
+        <View style={[styles.dockRow, styles.dockRowLand]}>
+          <View style={styles.dockHalfStart}>
+            {signalButtons}
+            {landDock.showChat ? (
+              <View style={styles.dockChat}>{dockChat('compact', 1)}</View>
+            ) : null}
+          </View>
+          <View style={styles.dockMine}>
+            {seatNode(mineSeat, undefined, { anchor: 'start', testID: 'my-seat', own: true })}
+          </View>
+          <View style={[styles.dockHalfEnd, { minWidth: landDock.rightMin }]}>
+            {hand}
+            <View style={styles.dockBet}>{betCorner}</View>
+          </View>
+        </View>
+      ) : (
+        // Web largo: sinais, mão e botão de aposta num grupo só, centralizado (o avatar fica no pano).
+        <View style={[styles.dockRow, styles.dockRowWide]}>
+          {wideChatInRow ? <View style={styles.dockChatWide}>{dockChat('compact', 1)}</View> : null}
+          {signalButtons}
+          {hand}
+          <View style={styles.dockBet}>{betCorner}</View>
+        </View>
+      )}
+    </View>
+  ) : (
+    <View
+      style={styles.dock}
+      testID="dock"
+      onLayout={(e) => setDockH(Math.round(e.nativeEvent.layout.height))}
+    >
+      {dockExtras}
+      <View style={styles.dockHandRow}>
+        {hand}
+        {phonePlan === 'inline' ? <View style={styles.dockBet}>{betCorner}</View> : null}
+      </View>
+      <View style={styles.dockActions}>
+        <View style={styles.dockStart}>{signalButtons}</View>
+        {phonePlan === 'inline' ? (
+          <View style={styles.dockChat}>{dockChat('compact', 1)}</View>
+        ) : (
+          <View style={styles.dockBet}>{betCorner}</View>
+        )}
+      </View>
+    </View>
+  );
+
+  const cornerChat =
+    p.layout === 'wide' && chatInDock && win.width >= CHAT_CORNER_MIN_WIDTH ? (
+      <View style={styles.chatCorner} pointerEvents="box-none">
+        {dockChat('corner')}
+      </View>
+    ) : null;
+
+  const menuWidth = Math.min(320, Math.max(220, win.width - spacing.md));
+  const menu = menuOpen ? (
+    <View
+      style={[styles.menuSheet, { top: barH, width: menuWidth }]}
+      testID="table-menu"
+      accessibilityRole="menu"
+      accessibilityLabel="Menu da mesa"
+    >
+      <ScrollView style={{ maxHeight: Math.max(160, win.height * 0.6) }} nestedScrollEnabled>
+        <View style={styles.menuList}>
+          {p.on.openCodes !== undefined && vm.mySeat >= 0 ? (
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityLabel="Combinar sinais com o parceiro"
+              onPress={() => {
+                setMenuOpen(false);
+                p.on.openCodes?.();
+              }}
+              style={styles.menuItem}
+              testID="open-codes"
+            >
+              <Text style={styles.menuText}>Combinar sinais</Text>
+            </Pressable>
+          ) : null}
+          {vm.mySeat >= 0 && p.soundboard !== undefined ? (
+            <SoundboardPanel
+              connected={usable}
+              onSend={p.soundboard.onSend}
+              silenced={p.soundboard.silenced}
+            />
+          ) : null}
+          {p.sound !== undefined ? (
+            <Pressable
+              accessibilityRole="menuitem"
+              accessibilityLabel={
+                p.sound.muted ? 'Som desligado. Ligar o som' : 'Som ligado. Desligar o som'
+              }
+              accessibilityState={{ checked: !p.sound.muted }}
+              aria-pressed={!p.sound.muted}
+              onPress={p.sound.onToggle}
+              style={[styles.menuItem, p.sound.muted && styles.menuOff]}
+              testID="sound-toggle"
+            >
+              <Text style={styles.menuText}>
+                {p.sound.muted ? '\u{1F507} Som desligado' : '\u{1F50A} Som ligado'}
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="menuitem"
+            accessibilityLabel={cancelLabel}
+            aria-disabled={vm.iVotedCancel || !p.connected}
+            disabled={vm.iVotedCancel || !p.connected}
+            onPress={p.on.voteCancel}
+            style={[styles.menuItem, vm.iVotedCancel && styles.menuOff]}
+            testID="vote-cancel"
+          >
+            <Text style={styles.menuText}>{cancelText}</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </View>
+  ) : null;
+
+  const signalSheet =
+    signalPanel.open && vm.mySeat >= 0 ? (
+      <View style={[styles.signalSheet, { bottom: dockH }]} pointerEvents="box-none">
+        <View style={styles.signalSheetInner} testID="signal-panel">
+          <SignalGrid
+            panel={signalPanel}
+            maxHeight={Math.max(160, win.height * 0.5)}
+            {...(p.codes !== undefined ? { codes: p.codes } : {})}
+          />
+        </View>
+      </View>
+    ) : null;
+
+  const closeLayers = (): void => {
+    setMenuOpen(false);
+    setHistoryOpen(false);
+  };
+  const historySheet = historyOpen ? (
+    <View style={[styles.historySheet, { top: barH }]} testID="score-history">
+      <ScoreHistoryList
+        myTeam={vm.myTeam}
+        series={vm.series}
+        scores={vm.scores}
+        handNumber={vm.handNumber}
+        handValue={vm.handValue}
+        special={vm.special}
+        tricks={vm.tricks}
+        history={p.history}
+        currentLog={p.handLog}
+        variant={vm.variant}
+      />
+    </View>
+  ) : null;
+  // Logo depois da barra na ordem de leitura. O fundo transparente fecha ao tocar fora.
+  const layers =
+    menuOpen || historyOpen ? (
+      <>
+        <Pressable
+          style={[styles.backdrop, { top: barH }]}
+          onPress={closeLayers}
+          accessible={false}
+          importantForAccessibility="no"
+          testID="layer-backdrop"
+        />
+        {menu}
+        {historySheet}
+      </>
+    ) : null;
 
   const confirm = p.leaveConfirm ? (
     <View style={styles.overlay} testID="leave-confirm" accessibilityViewIsModal>
@@ -616,32 +1210,21 @@ export function TableView(p: TableViewProps) {
         aria-hidden={modalOpen}
         importantForAccessibility={modalOpen ? 'no-hide-descendants' : 'auto'}
       >
+        {scoreBar}
+        {layers}
+        <View style={styles.timerStrip} testID="turn-timer">
+          <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
+        </View>
         <Banner banner={p.banner} onLeave={p.on.leave} />
-        {wide ? (
-          <View style={styles.wideRow}>
-            <ScrollView style={styles.wideMain} contentContainerStyle={styles.wideMainContent}>
-              {board}
-              {controls}
-              {footer}
-            </ScrollView>
-            <ScrollView style={styles.sidebar} contentContainerStyle={styles.sidebarContent}>
-              {score}
-              <View style={styles.viraBox}>{vira}</View>
-              {mineiroManilhas}
-            </ScrollView>
-          </View>
-        ) : (
-          <ScrollView style={styles.phone} contentContainerStyle={styles.phoneContent}>
-            <View style={styles.topRow}>
-              <View style={styles.topScore}>{score}</View>
-              <View>{vira}</View>
-            </View>
-            {mineiroManilhas}
-            {board}
-            {controls}
-            {footer}
-          </ScrollView>
-        )}
+        <KeyboardAvoidingView
+          behavior={Platform.select({ ios: 'padding', default: undefined })}
+          style={[styles.main, p.layout === 'wide' && styles.mainWide]}
+        >
+          <View style={styles.boardBox}>{board}</View>
+          {dock}
+          {cornerChat}
+        </KeyboardAvoidingView>
+        {signalSheet}
       </View>
       {p.presenceNote !== null ? (
         <Text style={styles.presence} testID="presence-note" pointerEvents="none">
@@ -667,55 +1250,110 @@ export function TableView(p: TableViewProps) {
   );
 }
 
-/** Largura da lateral do web largo (placar completo, vira). */
-const SIDEBAR_WIDTH = 340;
+/** Largura máxima da mesa no web largo (acima disso o pano não estica mais). */
+const MAX_TABLE_WIDTH = 1280;
 
 const styles = StyleSheet.create({
   seatBox: { position: 'relative' },
   bubbleSlot: {
     position: 'absolute',
-    bottom: '100%',
     left: -spacing.lg,
     right: -spacing.lg,
     alignItems: 'center',
-    zIndex: 1,
+    zIndex: 2,
   },
+  bubbleAbove: { bottom: '100%' },
+  bubbleBelow: { top: '100%' },
+  bubbleStart: { left: 0, right: -spacing.xl * 3, alignItems: 'flex-start' },
+  bubbleEnd: { right: 0, left: -spacing.xl * 3, alignItems: 'flex-end' },
   root: { flex: 1, backgroundColor: colors.background },
   flex: { flex: 1 },
   partnerRow: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm },
-  cover: {
-    minHeight: MIN_TOUCH,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: radius.md,
-    borderWidth: 2,
-    borderColor: colors.border,
-  },
-  coverOn: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
-  menuRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'flex-end' },
-  menuOff: { opacity: 0.55 },
-  signalRow: { width: '100%', gap: spacing.sm },
   sfxMark: { alignSelf: 'center', fontSize: fontSize.large },
   probe: { position: 'absolute', width: 1, height: 1, opacity: 0, overflow: 'hidden' },
-  phone: { flex: 1 },
-  phoneContent: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },
-  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  topScore: { flex: 1 },
-  board: { flex: 1, justifyContent: 'center', gap: spacing.md },
-  partner: { alignItems: 'center' },
-  middle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  side: { width: 88, alignItems: 'center' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  controls: { gap: spacing.sm, alignItems: 'stretch' },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  turn: { color: colors.textMuted, fontSize: fontSize.small, fontWeight: fontWeight.bold },
+  timerStrip: { paddingHorizontal: spacing.xs },
+  scoreFixed: { alignSelf: 'stretch', zIndex: 5 },
+  adRow: { alignItems: 'center', paddingBottom: 2 },
+  barIcon: {
+    minWidth: MIN_TOUCH,
+    minHeight: MIN_TOUCH,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barIconText: { color: colors.text, fontSize: fontSize.large, fontWeight: fontWeight.bold },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: radius.round,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: { color: colors.onPrimary, fontSize: 11, fontWeight: fontWeight.heavy },
+  hidden: { opacity: 0 },
+  main: { flex: 1, width: '100%', alignSelf: 'center' },
+  mainWide: { maxWidth: MAX_TABLE_WIDTH },
+  boardBox: { flex: 1, padding: spacing.xs },
+  board: { flex: 1 },
+  boardContent: { flex: 1 },
+  arena: { flex: 1 },
+  partnerSeat: { position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center' },
+  sideSeat: { position: 'absolute', top: 0, bottom: 0, justifyContent: 'center' },
+  sideLeft: { left: 0, alignItems: 'flex-start' },
+  sideRight: { right: 0, alignItems: 'flex-end' },
+  mySeat: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
+  trickZone: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  center: { alignItems: 'center', justifyContent: 'center' },
+  deckCorner: { position: 'absolute', top: 0, left: 0 },
+  status: { position: 'absolute', alignItems: 'center', paddingVertical: 2 },
+  statusPhone: {
+    top: 4,
+    overflow: 'hidden',
+    left: DECK_GROUP_W + spacing.xs,
+    alignItems: 'flex-start',
+  },
+  statusLand: { alignItems: 'flex-start' },
+  extrasLand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    zIndex: 3,
+  },
+  statusCorner: {
+    top: 4,
+    left: DECK_GROUP_W + spacing.xs,
+    maxWidth: 170,
+    alignItems: 'flex-start',
+  },
+  turn: {
+    color: colors.text,
+    fontSize: fontSize.small,
+    fontWeight: fontWeight.bold,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
+    textAlign: 'center',
+  },
   turnMine: { color: colors.primary },
-  timer: { flex: 1 },
   pending: {
     color: colors.primary,
-    fontSize: fontSize.body,
+    fontSize: fontSize.small,
     fontWeight: fontWeight.bold,
     textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
+    marginTop: 2,
   },
   error: {
     backgroundColor: colors.surfaceAlt,
@@ -725,23 +1363,115 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   errorText: { color: colors.danger, fontSize: fontSize.small, textAlign: 'center' },
-  footer: {
+  dock: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, gap: spacing.xs },
+  dockActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  menu: {
+  dockStart: { flexShrink: 0 },
+  dockGroup: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  dockRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: spacing.md,
+  },
+  dockRowLand: { justifyContent: 'space-between', gap: spacing.sm },
+  dockRowWide: { justifyContent: 'center', gap: spacing.md },
+  dockHandRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  dockChat: { flex: 1, minWidth: 0 },
+  dockChatWide: { width: 240 },
+  chatCorner: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
+  dockMine: { alignItems: 'center', flexShrink: 0 },
+  dockHalfStart: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    gap: spacing.xs,
+  },
+  dockHalfEnd: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    gap: spacing.sm,
+  },
+  dockBet: { flexShrink: 1, alignItems: 'flex-start' },
+  dockSide: { flex: 1, justifyContent: 'flex-end' },
+  dockSideStart: { alignItems: 'flex-end' },
+  dockSideEnd: { alignItems: 'flex-end' },
+  dockBtn: {
+    minHeight: 64,
+    minWidth: 72,
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  dockGroupCol: { flexDirection: 'column', gap: spacing.xs },
+  dockBtnLand: { minHeight: MIN_TOUCH, minWidth: 72 },
+  dockBtnOn: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
+  dockBtnText: {
+    color: colors.text,
+    fontSize: fontSize.small,
+    fontWeight: fontWeight.bold,
+    textAlign: 'center',
+  },
+  backdrop: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 10 },
+  historySheet: {
+    position: 'absolute',
+    left: spacing.xs,
+    right: spacing.xs,
+    zIndex: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
+  },
+  menuSheet: {
+    position: 'absolute',
+    right: spacing.xs,
+    zIndex: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.sm,
+  },
+  menuList: { gap: spacing.sm },
+  menuItem: {
     minHeight: MIN_TOUCH,
-    minWidth: MIN_TOUCH,
     paddingHorizontal: spacing.md,
     justifyContent: 'center',
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
   },
+  menuOff: { opacity: 0.55 },
   menuText: { color: colors.text, fontSize: fontSize.small, fontWeight: fontWeight.bold },
+  signalSheet: {
+    position: 'absolute',
+    left: spacing.xs,
+    right: spacing.xs,
+    alignItems: 'center',
+    zIndex: 15,
+  },
+  signalSheetInner: { width: '100%', maxWidth: 560 },
   muted: { color: colors.textMuted, fontSize: fontSize.small, textAlign: 'center' },
   banner: {
     backgroundColor: colors.surfaceAlt,
@@ -775,27 +1505,6 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     borderRadius: radius.md,
   },
-  wideRow: { flex: 1, flexDirection: 'row' },
-  wideMain: { flex: 1 },
-  wideMainContent: {
-    flexGrow: 1,
-    padding: spacing.md,
-    gap: spacing.md,
-    width: '100%',
-    maxWidth: 720,
-    alignSelf: 'center',
-    justifyContent: 'center',
-  },
-  sidebar: {
-    flexGrow: 0,
-    flexShrink: 0,
-    flexBasis: SIDEBAR_WIDTH,
-    width: SIDEBAR_WIDTH,
-    borderLeftWidth: 1,
-    borderLeftColor: colors.border,
-  },
-  sidebarContent: { padding: spacing.md, gap: spacing.md },
-  viraBox: { alignItems: 'center' },
   overlay: {
     position: 'absolute',
     top: 0,

@@ -177,11 +177,20 @@ export interface TableController {
   voteCancel(): boolean;
   /** Voto "Jogar de novo": só com a janela de revanche aberta e uma vez por partida. */
   voteRematch(): boolean;
+  /**
+   * Bots de vaga (só UX; o servidor valida): põe (`true`) ou tira (`false`) um bot no assento livre.
+   * `false` = fora da espera, não sou o host ou sem sala (nada sai). Erros do servidor vão para `errorCode`.
+   */
+  setBotSeat(seat: number, enabled: boolean): boolean;
+  /** Host: preenche as vagas com bots e a partida começa. `false` = nada enviado. */
+  fillBots(): boolean;
   /** Valida com o protocol e envia. `false` = recusado (erro em `chatError`) ou sem sala. */
   sendChat(scope: ChatScope, text: string): boolean;
   sendPhrase(scope: ChatScope, phraseId: string): boolean;
   setChatOpen(open: boolean): void;
   setChatTab(scope: ChatScope): void;
+  /** Chat fixo da mesa visível: zera as não lidas da mesa sem abrir o painel completo. */
+  markTableChatSeen(): void;
   setChatDraft(scope: ChatScope, text: string): void;
   clearError(): void;
   setLeaveConfirm(open: boolean): void;
@@ -460,11 +469,20 @@ export function createTableController(opts: TableControllerOptions): TableContro
       };
     }
     director.onState(vm);
+    // Começou a partida: em jogo só existe o chat da mesa. Aba e contador da dupla (da espera) saem.
+    const enteredPlaying =
+      vm.phase === 'playing' && (cur.vm === null || cur.vm.phase !== 'playing');
     // Um único `set` por patch do servidor.
     cur.patch({
       vm,
       selected,
       ...cleaned,
+      ...(enteredPlaying
+        ? {
+            chatTab: 'table' as const,
+            chatUnread: { ...(cleaned.chatUnread ?? cur.chatUnread), partner: 0 },
+          }
+        : {}),
       ...(enteredFinished ? { errorCode: null } : {}),
       ...(newMatch
         ? {
@@ -512,6 +530,23 @@ export function createTableController(opts: TableControllerOptions): TableContro
     clear(busyTimer);
     busyTimer = timers.setTimeout(unlock, BUSY_TIMEOUT_MS);
     return true;
+  }
+
+  /** Durante a partida só existe o chat da mesa; o da dupla é da sala de espera (o servidor também recusa). */
+  function partnerChatClosed(scope: string): boolean {
+    return scope === 'partner' && store.getState().vm?.phase === 'playing';
+  }
+
+  /**
+   * Só na espera e sem contradizer o que já se sabe (mesa pública, outro host). Estado ainda desconhecido
+   * deixa passar: o servidor decide (NOT_HOST etc. voltam em `errorCode`).
+   */
+  function canManageBots(): boolean {
+    const vm = store.getState().vm;
+    if (vm === null || vm.phase !== 'waiting') return false;
+    if (vm.visibility === 'public') return false;
+    // Meu assento ainda desconhecido (primeiro estado sem `privates`): não barra, o servidor valida.
+    return vm.hostSeat < 0 || vm.mySeat < 0 || vm.isHost;
   }
 
   function sendParsed(message: unknown): boolean {
@@ -653,7 +688,12 @@ export function createTableController(opts: TableControllerOptions): TableContro
         text,
         at: typeof m['at'] === 'number' ? m['at'] : 0,
       };
-      const seen = cur.chatOpen && cur.chatTab === scope;
+      // Em jogo o chat da dupla não existe: não conta como não lida (o servidor também recusa).
+      const seen =
+        (cur.chatOpen && cur.chatTab === scope) ||
+        (scope === 'partner' && cur.vm?.phase === 'playing') ||
+        // A própria mensagem nunca é "não lida".
+        (cur.vm !== null && cur.vm !== undefined && seat === cur.vm.mySeat);
       // Balão: um por assento; o novo substitui o anterior e reinicia os 4 s.
       const prevTimer = bubbleTimers.get(seat);
       if (prevTimer !== undefined) timers.clearTimeout(prevTimer);
@@ -903,11 +943,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
       const s = store.getState();
       if (s.busy || s.vm === null) return;
       if (!(s.vm.legalActions as readonly string[]).includes(actionId)) return;
-      if (s.selected === actionId) {
-        act(actionId);
-        return;
-      }
-      s.patch({ selected: actionId, errorCode: null });
+      // Um toque joga: `act` já trava o segundo toque enquanto a ação está em voo (`busy`).
+      act(actionId);
     },
 
     setCoverMode(on) {
@@ -937,7 +974,25 @@ export function createTableController(opts: TableControllerOptions): TableContro
       return true;
     },
 
+    setBotSeat(seat, enabled) {
+      if (!canManageBots()) return false;
+      const parsed = parseClientMessage({ type: 'botSeat', target: seat, enabled });
+      if (!parsed.ok || !opts.send(parsed.message)) return false;
+      lastSend = 'other';
+      store.getState().patch({ errorCode: null });
+      return true;
+    },
+
+    fillBots() {
+      if (!canManageBots()) return false;
+      if (!opts.send({ type: 'fillBots' })) return false;
+      lastSend = 'other';
+      store.getState().patch({ errorCode: null });
+      return true;
+    },
+
     sendChat(scope, text) {
+      if (partnerChatClosed(scope)) return false;
       if (!sendParsed({ type: 'chat', scope, text })) return false;
       const s = store.getState();
       s.patch({ chatError: null, chatDraft: { ...s.chatDraft, [scope]: '' } });
@@ -945,6 +1000,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
     },
 
     sendPhrase(scope, phraseId) {
+      if (partnerChatClosed(scope)) return false;
       if (!sendParsed({ type: 'chat', scope, phraseId })) return false;
       store.getState().patch({ chatError: null });
       return true;
@@ -957,6 +1013,11 @@ export function createTableController(opts: TableControllerOptions): TableContro
         chatError: null,
         ...(open ? { chatUnread: { ...s.chatUnread, [s.chatTab]: 0 } } : {}),
       });
+    },
+
+    markTableChatSeen() {
+      const s = store.getState();
+      if (s.chatUnread.table !== 0) s.patch({ chatUnread: { ...s.chatUnread, table: 0 } });
     },
 
     setChatTab(scope) {

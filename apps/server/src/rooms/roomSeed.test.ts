@@ -8,7 +8,13 @@ import type { RoomOptions } from '@trucaco/protocol';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { setLogSink } from '../logger';
 import { buildColyseusServer } from '../server';
-import { resetSeedWarningForTests, resolveTrucoSeed, roomConfigFromEnv } from './roomSeed';
+import { NO_EFFORT_POLICY } from '../progression/achievements';
+import {
+  resetSeedWarningForTests,
+  resolveRelaxedProgression,
+  resolveTrucoSeed,
+  roomConfigFromEnv,
+} from './roomSeed';
 import type { TrucoRoom } from './TrucoRoom';
 
 const OPTS: RoomOptions = {
@@ -59,6 +65,30 @@ describe('resolveTrucoSeed', () => {
       restore();
     }
     expect(lines).toEqual([]);
+  });
+
+  it('TRUCO_PROGRESSION_RELAXED: liga a política sem anti-farm só em dev/test e recusa fora delas', () => {
+    expect(resolveRelaxedProgression({ NODE_ENV: 'test' })).toBe(false);
+    expect(
+      resolveRelaxedProgression({ NODE_ENV: 'production', TRUCO_PROGRESSION_RELAXED: '' }),
+    ).toBe(false);
+    expect(
+      resolveRelaxedProgression({ NODE_ENV: 'production', TRUCO_PROGRESSION_RELAXED: '0' }),
+    ).toBe(false);
+    for (const nodeEnv of ['test', 'development']) {
+      expect(
+        roomConfigFromEnv({ NODE_ENV: nodeEnv, TRUCO_PROGRESSION_RELAXED: '1' }).progressionPolicy,
+      ).toBe(NO_EFFORT_POLICY);
+    }
+    expect(roomConfigFromEnv({ NODE_ENV: 'test' }).progressionPolicy).toBeUndefined();
+    for (const nodeEnv of ['production', undefined, 'staging']) {
+      expect(() =>
+        roomConfigFromEnv({ NODE_ENV: nodeEnv, TRUCO_PROGRESSION_RELAXED: '1' }),
+      ).toThrow(/só é permitido em development\/test/);
+    }
+    expect(() =>
+      resolveRelaxedProgression({ NODE_ENV: 'test', TRUCO_PROGRESSION_RELAXED: 'sim' }),
+    ).toThrow(/deve ser 1/);
   });
 
   it('valor inválido em dev/test falha cedo (e sem eco do valor)', () => {

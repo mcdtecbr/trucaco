@@ -201,9 +201,11 @@ Detalhes em `docs/audio.md`. Protótipo com voz sintetizada de licença comercia
 - A legenda sempre aparece, mesmo com "sem som" ou com o jogador silenciado.
 - O soundboard carrega no primeiro uso: o primeiro som de cada efeito engraçado pode sair mudo.
 
-## Fase 6: contas, perfil, conquistas e missões (3 semanas)
+## Fase 6: contas, perfil, conquistas e missões (3 semanas): concluída com ressalvas em 2026-11-05
 
-Detalhes em `docs/gamificacao.md`. Recompensas de conquistas e missões dependem de decisão do usuário (proposta: itens cosméticos).
+Blocos 6A a 6J. Plano em `docs/specs/2026-11-04-fase-6-plano.md`; relatório em `docs/specs/2026-11-05-fase-6-relatorio.md`. Decisões do usuário (padrões, 2026-11-04): login social atrás de `IdentityVerifier` e desligado sem client ID; recompensa cosmética fica para a Fase 10 (`entitlements`); catálogo de conquistas em código (ADR 0009); sem XP; denúncia e bloqueio persistentes; `DELETE /me` imediato; cookie httpOnly na Fase 7; fusão de contas fora. A elegibilidade anti-farm (auditoria 6I) é padrão assumido, ainda sem confirmação do usuário (ADR 0010).
+
+Etapas previstas (o plano original, mantido como referência):
 
 | Etapa                                                                                              | Agente                             | Pronto quando                                               |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
@@ -215,6 +217,39 @@ Detalhes em `docs/gamificacao.md`. Recompensas de conquistas e missões dependem
 | Telas: Resultado mostra conquistas desbloqueadas; Perfil lista medalhas e missões do dia           | `fabio-frontend`                   | —                                                           |
 | Denúncia, bloqueio, filtro na fila pública                                                         | `caio-colyseus`                    | Bloqueado não cai na mesma mesa pública                     |
 | Auditoria completa de auth, autorização e anti-abuso de conquistas/missões                         | `vitor-seguranca`                  | Sem achado crítico ou alto                                  |
+
+Status por bloco (2026-11-05):
+
+| Bloco | Commit (PR)                      | Status                                                                                                                                                                                                                                                                                                                |
+| ----- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 6A    | d1dcbc7 (#21)                    | Contrato em `packages/protocol` (`gamification.ts`, `http.ts`, códigos); `PROTOCOL_VERSION` 6.                                                                                                                                                                                                                        |
+| 6B    | c401a03 (#22)                    | `GET /matches`, bloqueios, `POST /reports`, `DELETE /me`, filtro na fila e na mesa privada; histórico, bloquear e denunciar pelo histórico, apagar conta no cliente.                                                                                                                                                  |
+| 6C    | c692afc (#23)                    | Migração `20261105140000_fase6_progressao` (`user_achievements`, `user_missions`, `user_stats`, `progression_applied`, `users.linked_at`); `ProgressionRepository` nos dois backends; ADR 0009.                                                                                                                       |
+| 6D    | 6f6297e (#24)                    | Avaliação pura (`achievements.ts`, `missions.ts`, `period.ts`) e `applyMatchProgression` em `persistMatch`, idempotente por partida.                                                                                                                                                                                  |
+| 6E    | 6f6297e (#24)                    | `GET /me/achievements`, `GET /me/missions`, `GET /users/:id`, `stats` em `GET /me`.                                                                                                                                                                                                                                   |
+| 6F    | d2738ab (#25)                    | Servidor: `POST /auth/google`, `/auth/apple`, `/auth/link`; `JwksIdentityVerifier` e `TestIdentityVerifier`; `SOCIAL_LOGIN_DISABLED` sem client ID. **Sem nonce emitido pelo servidor** (pendência obrigatória antes de SDK real).                                                                                    |
+| 6G    | d2738ab (#25)                    | Telas `login`, "Vincular conta" em Configurações, `achievements`, `missions`, `profile/[id]`, conquistas em `FinishedView`, missões em `HomeView`. **Nenhum provedor social registrado no app** (ver ressalvas).                                                                                                      |
+| 6H    | a37c759 (#26)                    | 11 cenários E2E novos (`account.spec.ts`, `progress.spec.ts`); `test:int` de vínculo com Redis real (`userLink.int.test.ts`, `redisTokenStore.int.test.ts`, `socialAuth.int.test.ts`); `PENDING_PHASE6` vazio.                                                                                                        |
+| 6I    | sem commit (correções na árvore) | Auditoria do `vitor-seguranca`: `UNIQUE (reporter_id, reported_id, match_id)` em `reports` (migração `20261106100000_reports_unique`), anti-farm por conluio (mínimo de mãos e duração, mesa privada só de convidados, teto por par em 24 h), denúncia com janela de partida em comum (7 dias) e teto por denunciado. |
+| 6J    | sem commit                       | Este fechamento: relatório, CHANGELOG, plano, ADR 0010, `apps/mobile/README.md` (seção 6G), handoff e memória.                                                                                                                                                                                                        |
+
+**Pendências e ressalvas**:
+
+- **Login social não é de ponta a ponta.** Nenhum SDK do Google ou da Apple está ligado: `registerIdentityProvider` não é chamado no app e `expo-auth-session` não é dependência. Os botões ficam indisponíveis mesmo com o servidor ligado. O E2E de vínculo chama `POST /auth/link` pela API com o idToken de teste (`test:<sub>`) e confere a UI depois. Login real com Google ou Apple nunca foi testado.
+- **Nonce do servidor (obrigatório antes de habilitar `GOOGLE_CLIENT_IDS` / `APPLE_CLIENT_IDS` em produção).** O `nonce` ainda é gerado pelo cliente. Desenho: `GET /auth/nonce`, uso único, TTL curto, exigido nas três rotas.
+- **Credenciais do Google e da Apple**: só o usuário cria (Google Cloud e Apple Developer). Sem elas, o login social fica desligado (`SOCIAL_LOGIN_DISABLED`).
+- **Bloquear e denunciar pelo menu do assento na mesa**: não existe, porque `PublicPlayer` não tem `userId`. Decisão do usuário, com `artur-arquiteto` e `vitor-seguranca`. Hoje a ação só existe a partir do histórico.
+- **Griefing por conta apagada ou bot no meio da partida** (auditoria 6I): a elegibilidade é da partida inteira, não por assento. Hoje partida com bot não pontua para ninguém.
+- **Custo de CPU da fila com listas de bloqueio** (`QueueEntry.avoid`): não medido.
+- **Limites anti-farm** (`MIN_HANDS_FOR_PROGRESSION`, `MIN_MATCH_DURATION_MS`, `PAIR_DAILY_PROGRESSION_LIMIT`): padrões a recalibrar no beta (ADR 0010).
+- **Retenção de denúncias**: sem política de prazo. As denúncias contra conta apagada ficam anonimizadas.
+- **Backfill de estatísticas** das partidas anteriores à migração: opcional, não feito (ADR 0009, ponto 6).
+- **Hash do `sub` de conta banida** (para o ban sobreviver a apagar e recriar a conta): Fase 8, com o painel de moderação.
+- **Fora da fase**: conquista `corredor_esperto` (o motor não expõe o que a dupla teria feito); missões de parceiro da véspera; `entitlements` e posse de cosmético (Fase 10); cookie httpOnly (Fase 7); fusão de contas.
+- **Multi-instância**: `blockBus`, lista evitada da fila, derrubada de sockets e limitadores são em memória de processo (pede Redis pub/sub e limitadores compartilhados).
+- **Revisão**: Rita-C (Claude opus) é a revisora registrada. Codex nunca revisou (erro 1332 no Windows). Auditorias: `vitor-seguranca` em 6B, 6F e 6I (ver relatório).
+- **E2E `progress.spec.ts:38`**: falhava por causa da política anti-farm da 6I (a partida rápida de 4 convidados não cumpria mínimo de mãos, duração nem a regra de mesa privada só de convidados). Corrigido com `TRUCO_PROGRESSION_RELAXED=1`, só em dev/test (o servidor recusa subir fora disso); E2E 24 de 24. A causa foi deduzida pelo código e pela correção, sem reprodução prévia.
+- **Não validado em aparelho**: iOS, Android, leitor de tela e Safari. O E2E roda só em Chromium.
 
 ## Fase 7: publicação beta (2 semanas)
 

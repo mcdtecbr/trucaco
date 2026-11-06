@@ -39,7 +39,7 @@ Autor: `dalva-dba` (bloco 2C da Fase 2). Fonte do schema: `apps/server/prisma/sc
 - **Normalização**: NFC obrigatória. O servidor chama `validateNickname` (`src/db/validation.ts`), que normaliza (NFC) ANTES de validar e devolve o texto a gravar; `João` digitado com `a` + til combinante vira `João` e colide com o apelido NFC. Direto no SQL, o banco recusa o que não está em NFC (`users_nickname_nfc_check`, `normalize(nickname, NFC) = nickname`, Postgres 13+).
 - **Caracteres permitidos** (`users_nickname_charset_check`, mesma expressão de `NICKNAME_PATTERN`): `0-9`, `A-Z`, `a-z`, `_`, `.`, `-` e as letras latinas de Latin-1 e Latin Extended-A/B (U+00C0 a U+024F, exceto `×` U+00D7 e `÷` U+00F7). Ficam de fora espaço (qualquer), tab, controles, zero-width, marcas bidi, combinantes soltos, emoji e outros alfabetos (cirílico, grego etc.). Comprimento 3 a 16 code points (`users_nickname_length_check`).
 - **Unicidade**: `UNIQUE (lower(nickname))`. Exige banco com encoding UTF8 e locale UTF-8 (no locale `C`, `lower('Á')` não vira `á`); o `test:int` verifica.
-- **Risco residual**: dentro do alfabeto latino ainda há letras de aparência parecida (`ı` sem ponto, `ɡ` etc.). O combate a imitação deliberada continua sendo a denúncia `offensive_nickname`; um "esqueleto" de confusáveis (UTS #39) seria passo futuro, sem nova migração de schema.
+- **Esqueleto contra imitação (7A, migração `20261106120000_nickname_skeleton`)**: `nicknameSkeleton` (`src/db/validation.ts`) dobra Latin Extended-A/B e letras com barra (`ı`, `ł`, `đ`, `ø`, `ǀ`, `ŀ`, `ƚ`, `ȷ`, `ɉ`, `ſ`, `ĸ`, `Ɩ`...) para a letra ASCII parecida, `I` para `l`, `0` para `o`, e põe em minúsculas (falso positivo aceito: `Ivo` x `lvo`). Acentos do português (Latin-1) continuam distintos (`João` x `Joao`). A unicidade é do **índice único de expressão `users_nickname_skeleton_key`** `lower(translate(nickname, de, para))` (atômico; a violação vira `NICKNAME_TAKEN` como a do `users_nickname_lower_key`); um teste confere que a migração traz as mesmas tabelas do TypeScript. A migração não apaga ninguém: nas colisões que já existiam, o mais antigo mantém o apelido e os demais viram `Jogador` + 8 hex do id (o jogador troca em `PUT /me`). **Política de apelido NOVO** (`NICKNAME_PATTERN`): ASCII, Latin-1 e, de Latin Extended, só letras que decompõem por NFD em ASCII + marca (`ā`, `ğ`...) e `ı ł đ ħ ŧ`; o resto de U+0100 a U+024F é recusado. O CHECK do banco continua mais largo, então apelidos antigos seguem carregando. Risco residual: confusáveis fora do latino ou entre ASCII além de `I`/`l`/`0`/`o` (ex.: `1`) seguem só por denúncia `offensive_nickname`.
 - A migração falha, e reverte inteira, se já houver apelido fora da política; nenhum dado é apagado. Rollback: `DROP CONSTRAINT` das duas constraints novas.
 
 ### Tetos de tamanho dos jsonb
@@ -77,29 +77,30 @@ Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas
 
 ### Índices e a consulta que cada um atende
 
-| Índice                                                   | Consulta                                                                                         |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `users_provider_provider_subject_key` (UNIQUE)           | `findByProvider` no login (guest, Google, Apple) e `POST /auth/link`                             |
-| `users_nickname_lower_key` (UNIQUE em `lower(nickname)`) | Apelido único sem diferenciar caixa; busca por apelido sem diferença de caixa (`lower(...) = ?`) |
-| `match_players_user_id_match_id_idx`                     | `GET /matches`: partidas de um usuário (junta com `matches` por `match_id`)                      |
-| `matches_ended_at_id_idx` (`ended_at DESC, id DESC`)     | Ordenação e cursor `(ended_at, id)` de `GET /matches`; expurgo por `ended_at`                    |
-| `blocks_blocker_id_blocked_id_key` (UNIQUE)              | "Quem eu bloqueei" (prefixo `blocker_id`) e `addBlock` idempotente                               |
-| `blocks_blocked_id_idx`                                  | "Quem me bloqueou": o sorteio de mesa pública checa os dois sentidos                             |
-| `partner_codes_user_a_id_user_b_id_key` (UNIQUE)         | `GET/PUT /me/partners/:id/codes` e duplas frequentes do lado A                                   |
-| `partner_codes_user_b_id_idx`                            | Duplas frequentes do lado B                                                                      |
-| `reports_status_created_at_idx`                          | Fila de moderação: reports abertos, mais antigos primeiro                                        |
-| `reports_reported_id_created_at_idx`                     | Histórico de denúncias contra um jogador (decidir banimento)                                     |
-| `reports_reporter_id_created_at_idx`                     | Limitar denúncias por autor (abuso do recurso)                                                   |
-| `reports_match_id_idx`                                   | Denúncias de uma partida e o `SetNull` do expurgo sem varredura                                  |
-| `user_achievements_pkey` `(user_id, achievement_id)`     | `GET /me/achievements`, perfil público (prefixo `user_id`) e a soma atômica `ON CONFLICT`        |
-| `user_missions_pkey` `(user_id, mission_id, period_key)` | Soma atômica de progresso e `ensureMissions` idempotente (`ON CONFLICT DO NOTHING`)              |
-| `user_missions_user_id_period_key_idx`                   | `GET /me/missions`: missões do usuário no dia e na semana (`period_key IN (...)`)                |
-| `user_stats_pkey` `(user_id, variant)`                   | `GET /me` e perfil público: estatísticas por variante; soma atômica                              |
-| `progression_applied_pkey` `(match_id)`                  | Decide, por partida, quem aplica a progressão (inserção única; transação concorrente espera)     |
+| Índice                                                   | Consulta                                                                                                                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users_provider_provider_subject_key` (UNIQUE)           | `findByProvider` no login (guest, Google, Apple) e `POST /auth/link`                                                                                                      |
+| `users_nickname_lower_key` (UNIQUE em `lower(nickname)`) | Apelido único sem diferenciar caixa; busca por apelido sem diferença de caixa (`lower(...) = ?`)                                                                          |
+| `match_players_user_id_match_id_idx`                     | `GET /matches`: partidas de um usuário (junta com `matches` por `match_id`)                                                                                               |
+| `matches_ended_at_id_idx` (`ended_at DESC, id DESC`)     | Ordenação e cursor `(ended_at, id)` de `GET /matches`; expurgo por `ended_at`                                                                                             |
+| `blocks_blocker_id_blocked_id_key` (UNIQUE)              | "Quem eu bloqueei" (prefixo `blocker_id`) e `addBlock` idempotente                                                                                                        |
+| `blocks_blocked_id_idx`                                  | "Quem me bloqueou": o sorteio de mesa pública checa os dois sentidos                                                                                                      |
+| `partner_codes_user_a_id_user_b_id_key` (UNIQUE)         | `GET/PUT /me/partners/:id/codes` e duplas frequentes do lado A                                                                                                            |
+| `partner_codes_user_b_id_idx`                            | Duplas frequentes do lado B                                                                                                                                               |
+| `reports_status_created_at_idx`                          | Fila de moderação: reports abertos, mais antigos primeiro                                                                                                                 |
+| `reports_reported_id_created_at_idx`                     | Histórico de denúncias contra um jogador (decidir banimento)                                                                                                              |
+| `reports_reporter_id_created_at_idx`                     | Limitar denúncias por autor (abuso do recurso)                                                                                                                            |
+| `reports_match_id_idx`                                   | Denúncias de uma partida e o `SetNull` do expurgo sem varredura                                                                                                           |
+| `reports_reporter_id_reported_id_match_id_key` (UNIQUE)  | Uma denúncia por (denunciante, denunciado, partida): `POST /reports` repetido não grava de novo (migração `20261106100000_reports_unique`, auditoria 6I). NULL não colide |
+| `user_achievements_pkey` `(user_id, achievement_id)`     | `GET /me/achievements`, perfil público (prefixo `user_id`) e a soma atômica `ON CONFLICT`                                                                                 |
+| `user_missions_pkey` `(user_id, mission_id, period_key)` | Soma atômica de progresso e `ensureMissions` idempotente (`ON CONFLICT DO NOTHING`)                                                                                       |
+| `user_missions_user_id_period_key_idx`                   | `GET /me/missions`: missões do usuário no dia e na semana (`period_key IN (...)`)                                                                                         |
+| `user_stats_pkey` `(user_id, variant)`                   | `GET /me` e perfil público: estatísticas por variante; soma atômica                                                                                                       |
+| `progression_applied_pkey` `(match_id)`                  | Decide, por partida, quem aplica a progressão (inserção única; transação concorrente espera)                                                                              |
 
 `GET /matches` pagina por cursor (`endedAt`, `id`) em vez de `OFFSET`: o custo não cresce com a página e o empate de `ended_at` é resolvido pelo id. O cursor é opaco (base64url) e o servidor devolve `InvalidInputError` se vier adulterado. Tamanho de página padrão 20, máximo 50. O resumo devolvido não contém `events`, `deals` nem `seed`.
 
-### Retenção (política proposta; o expurgo é um job do bloco 2H/`diego-devops`, ainda NÃO implementado)
+### Retenção (política proposta; job diário implementado no 7A, atrás de `RETENTION_ENABLED`)
 
 | Dado                                  | Retenção                                                                                                                                                                                                                                                                                     |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,7 +114,67 @@ Apagar conta (`DELETE /me`, Fase 6B) é um único `DELETE FROM users`: as linhas
 
 Prazos são propostas para o usuário confirmar (privacidade/jurídico); mudar um prazo não exige migração.
 
-**Hoje nenhum job de expurgo roda.** Convidados nunca expiram: a tabela `users` cresce a cada `POST /auth/guest` (limitado por `AUTH_GUEST_PER_IP_PER_HOUR` e `AUTH_GUEST_GLOBAL_PER_HOUR`). Se o Redis falha depois de `createGuest` gravar o usuário, sobra um convidado sem sessão, porque o repositório não tem `delete`. Expiração de convidados é decisão pendente (produto e `dalva-dba`).
+**Job de retenção (7A, `apps/server/src/db/retention.ts`).** Com `RETENTION_ENABLED=true` roda em processo (1ª vez 5 min depois do boot, depois a cada 24 h), em lotes de 500 linhas por instrução SQL (teto de 200 lotes por passo; o resto fica para o dia seguinte), idempotente e sem sobreposição, logando só contagens. Passos: `deals` -> NULL após 30 dias; partidas `cancelled` apagadas após 30 dias; partidas apagadas após 12 meses (cascata em `match_players`; `reports.match_id` vira NULL); partidas citadas por denúncia **aberta** (`reports.status = 'open'`) não são tocadas (nem `deals`) até a moderação tratar; convidados com `last_seen_at` de mais de 90 dias, nunca vinculados, **sem** assento em partida, estatística, conquista com progresso nem denúncia aberta contra eles (as cascatas limpam avatar, bloqueios e combinados; a denúncia fechada fica anonimizada); `user_missions` de períodos com mais de 90 dias (pela chave do período). `last_seen_at` passou a ser atualizado a cada `/auth/refresh` (melhor esforço). **Ainda sem job**: `reports` fechadas (12 meses após `reviewed_at`) e `partner_codes` sem uso (12 meses). Uma instância só (estado em memória do processo).
+
+Antes do 7A nenhum job rodava. Convidados nunca expiravam: a tabela `users` cresce a cada `POST /auth/guest` (limitado por `AUTH_GUEST_PER_IP_PER_HOUR` e `AUTH_GUEST_GLOBAL_PER_HOUR`). Se o Redis falha depois de `createGuest` gravar o usuário, sobra um convidado sem sessão, porque o repositório não tem `delete`. Expiração de convidados é decisão pendente (produto e `dalva-dba`).
+
+### Telemetria de produto por SQL (7F)
+
+Sem rastreamento novo no cliente: tudo sai de `users.last_seen_at` (atualizado a cada `/auth/refresh`, melhor esforço, então é "última renovação de sessão", não "último toque") e de `matches`/`match_players`. Rodar em réplica ou fora do horário de pico, só leitura, e nunca exportar `user_id` ou `nickname` para ferramenta externa: agregar sempre. Partidas apagadas pela retenção (12 meses, canceladas 30 dias) saem das contagens.
+
+```sql
+-- DAU: usuários ativos por dia (último refresh; subestima quem não renovou no dia, pois só guarda o ÚLTIMO)
+SELECT date_trunc('day', last_seen_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia, count(*) AS usuarios
+FROM users
+WHERE last_seen_at >= now() - interval '30 days'
+GROUP BY 1 ORDER BY 1;
+
+-- DAU pelo que de fato aconteceu (mais fiel): usuários distintos que terminaram partida no dia
+SELECT date_trunc('day', m.ended_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia,
+       count(DISTINCT mp.user_id) AS jogadores
+FROM matches m JOIN match_players mp ON mp.match_id = m.id
+WHERE m.status = 'finished' AND mp.user_id IS NOT NULL AND m.ended_at >= now() - interval '30 days'
+GROUP BY 1 ORDER BY 1;
+
+-- Partidas por jogador (histograma: quantos jogadores jogaram 1, 2, 3... partidas terminadas nos últimos 30 dias)
+SELECT partidas, count(*) AS jogadores FROM (
+  SELECT mp.user_id, count(*) AS partidas
+  FROM matches m JOIN match_players mp ON mp.match_id = m.id
+  WHERE m.status = 'finished' AND mp.user_id IS NOT NULL AND m.ended_at >= now() - interval '30 days'
+  GROUP BY mp.user_id
+) t GROUP BY partidas ORDER BY partidas;
+
+-- Duplas repetidas: pares de parceiros (assentos 0/2 e 1/3) com 2+ partidas juntos (conta pares, não identifica ninguém no resultado)
+SELECT partidas_juntos, count(*) AS duplas FROM (
+  SELECT least(a.user_id, b.user_id) AS u1, greatest(a.user_id, b.user_id) AS u2, count(*) AS partidas_juntos
+  FROM match_players a
+  JOIN match_players b ON b.match_id = a.match_id AND b.seat = (a.seat + 2) % 4 AND a.seat < b.seat
+  JOIN matches m ON m.id = a.match_id AND m.status = 'finished'
+  WHERE a.user_id IS NOT NULL AND b.user_id IS NOT NULL
+  GROUP BY 1, 2
+) t GROUP BY partidas_juntos ORDER BY partidas_juntos;
+
+-- Retenção D1 e D7 por coorte de cadastro (dia 0 = created_at). Atividade = ter terminado partida no dia
+-- D+N (fuso de São Paulo). Só coortes com idade suficiente entram no denominador.
+WITH coorte AS (
+  SELECT id, (created_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia0
+  FROM users  -- para só contas vinculadas: WHERE provider <> 'guest'
+),
+atividade AS (
+  SELECT DISTINCT mp.user_id AS id, (m.ended_at AT TIME ZONE 'America/Sao_Paulo')::date AS dia
+  FROM matches m JOIN match_players mp ON mp.match_id = m.id
+  WHERE m.status = 'finished' AND mp.user_id IS NOT NULL
+)
+SELECT c.dia0,
+       count(*) AS cadastros,
+       round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM atividade a WHERE a.id = c.id AND a.dia = c.dia0 + 1)) / count(*), 1) AS d1_pct,
+       round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM atividade a WHERE a.id = c.id AND a.dia = c.dia0 + 7)) / count(*), 1) AS d7_pct
+FROM coorte c
+WHERE c.dia0 <= (now() AT TIME ZONE 'America/Sao_Paulo')::date - 7
+GROUP BY c.dia0 ORDER BY c.dia0 DESC LIMIT 30;
+```
+
+Observações: convidados nunca expiram e cada logout cria um novo (ver acima), então a retenção de convidados é pessimista; filtre `provider <> 'guest'` para ver só contas vinculadas. A retenção D1/D7 por partida terminada ignora quem só abriu o app. As cinco consultas foram executadas sem erro num Postgres 16 de teste (banco quase vazio): a sintaxe está validada, os números não; conferir no staging com dados reais antes de confiar neles. O `/metrics` (README do servidor) cobre o operacional (salas, fila, erros) em tempo real; estas consultas cobrem o produto, em retrospecto.
 
 ### Observações e limites conhecidos
 
@@ -142,20 +203,20 @@ Uso: sessão, presença e coordenação entre instâncias. **Nada que só o Redi
 
 ### Chaves
 
-| Chave                                  | Tipo / valor                                                                                                                       | TTL                                                                                                         | Escreve                                                     | Lê                                             |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------- |
-| `trucaco:v1:rt:{sha256(refreshToken)}` | HASH: `userId`, `familyId`, `issuedAt`, `usedAt` (ausente até a rotação), `graceUsed` (`1` depois que a janela de graça foi usada) | 30 dias (vida do refresh)                                                                                   | `/auth/guest`, `/auth/refresh`                              | `/auth/refresh`                                |
-| `trucaco:v1:rtfam:{familyId}`          | HASH: `userId`, `createdAt`, `lastJti`, `revokedAt` (ausente enquanto válida)                                                      | 30 dias, renovado a cada rotação, sem passar de `createdAt` + `REFRESH_FAMILY_MAX_SECONDS`                  | `/auth/refresh`, logout, detecção de reuso                  | `/auth/refresh`, `onAuth` opcional             |
-| `trucaco:v1:userfam:{userId}`          | SET de `familyId` do usuário                                                                                                       | 30 dias, renovado a cada rotação (poda das famílias expiradas)                                              | `/auth/guest`, `/auth/refresh`                              | "sair de todos", banimento, remoção de conta   |
-| `trucaco:v1:jti:revoked:{jti}`         | STRING `1`                                                                                                                         | Tempo que falta para o access JWT expirar (máx. 15 min)                                                     | logout, banimento                                           | `onAuth` e middleware REST                     |
-| `trucaco:v1:jti:used:{jti}`            | STRING `1` criada com `SET NX EX` (desenhado; não implementado: `/auth/link` é stub)                                               | Tempo que falta para o token expirar                                                                        | Quem consome token de uso único (ex.: vínculo `/auth/link`) | o mesmo `SET NX` (falha = reuso)               |
-| `trucaco:v1:presence:{userId}`         | STRING `{instanceId}:{roomId}` (ou `lobby`) (desenhado; não implementado)                                                          | 90 s, renovado a cada 30 s                                                                                  | `LobbyRoom`/`TrucoRoom` (heartbeat)                         | Lobby (sessão dupla, "dupla online")           |
-| `trucaco:v1:mm:q:{variant}`            | ZSET, membro `userId`, score = `enqueuedAt` (ms). FIFO por score. `variant` = `paulista`\|`mineiro`                                | 15 min renovado a cada entrada; membros com mais de 120 s são removidos pelo sorteador (`ZREMRANGEBYSCORE`) | `LobbyRoom` (entrar/sair da fila)                           | Sorteador (monta mesas de 4)                   |
-| `trucaco:v1:mm:ticket:{userId}`        | STRING `{variant}`: garante uma fila por jogador                                                                                   | 120 s                                                                                                       | `LobbyRoom`                                                 | `LobbyRoom`                                    |
-| `trucaco:v1:mm:lock:{variant}`         | STRING `{instanceId}` com `SET NX PX`                                                                                              | 2 s                                                                                                         | Sorteador                                                   | Sorteador (um por variante)                    |
-| `trucaco:v1:rl:{scope}:{subjectHash}`  | ZSET de timestamps (janela deslizante) ou STRING contador (`INCR` + `EXPIRE` na primeira)                                          | Tamanho da janela + 1 s                                                                                     | Middleware de limite                                        | O mesmo (Lua: checar e registrar numa chamada) |
+| Chave                                                | Tipo / valor                                                                                                                       | TTL                                                                                                         | Escreve                                                     | Lê                                             |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------- |
+| `trucaco:v1:rt:{sha256(refreshToken)}`               | HASH: `userId`, `familyId`, `issuedAt`, `usedAt` (ausente até a rotação), `graceUsed` (`1` depois que a janela de graça foi usada) | 30 dias (vida do refresh)                                                                                   | `/auth/guest`, `/auth/refresh`                              | `/auth/refresh`                                |
+| `trucaco:v1:rtfam:{familyId}`                        | HASH: `userId`, `createdAt`, `lastJti`, `revokedAt` (ausente enquanto válida)                                                      | 30 dias, renovado a cada rotação, sem passar de `createdAt` + `REFRESH_FAMILY_MAX_SECONDS`                  | `/auth/refresh`, logout, detecção de reuso                  | `/auth/refresh`, `onAuth` opcional             |
+| `trucaco:v1:userfam:{userId}`                        | SET de `familyId` do usuário                                                                                                       | 30 dias, renovado a cada rotação (poda das famílias expiradas)                                              | `/auth/guest`, `/auth/refresh`                              | "sair de todos", banimento, remoção de conta   |
+| `trucaco:v1:jti:revoked:{jti}`                       | STRING `1`                                                                                                                         | Tempo que falta para o access JWT expirar (máx. 15 min)                                                     | logout, banimento                                           | `onAuth` e middleware REST                     |
+| `trucaco:v1:idtoken:used:{sha256(provedor:idToken)}` | STRING `1` criada com `SET NX EX` (6F, implementado)                                                                               | Tempo que falta para o token expirar                                                                        | Quem consome token de uso único (ex.: vínculo `/auth/link`) | o mesmo `SET NX` (falha = reuso)               |
+| `trucaco:v1:presence:{userId}`                       | STRING `{instanceId}:{roomId}` (ou `lobby`) (desenhado; não implementado)                                                          | 90 s, renovado a cada 30 s                                                                                  | `LobbyRoom`/`TrucoRoom` (heartbeat)                         | Lobby (sessão dupla, "dupla online")           |
+| `trucaco:v1:mm:q:{variant}`                          | ZSET, membro `userId`, score = `enqueuedAt` (ms). FIFO por score. `variant` = `paulista`\|`mineiro`                                | 15 min renovado a cada entrada; membros com mais de 120 s são removidos pelo sorteador (`ZREMRANGEBYSCORE`) | `LobbyRoom` (entrar/sair da fila)                           | Sorteador (monta mesas de 4)                   |
+| `trucaco:v1:mm:ticket:{userId}`                      | STRING `{variant}`: garante uma fila por jogador                                                                                   | 120 s                                                                                                       | `LobbyRoom`                                                 | `LobbyRoom`                                    |
+| `trucaco:v1:mm:lock:{variant}`                       | STRING `{instanceId}` com `SET NX PX`                                                                                              | 2 s                                                                                                         | Sorteador                                                   | Sorteador (um por variante)                    |
+| `trucaco:v1:rl:{scope}:{subjectHash}`                | ZSET de timestamps (janela deslizante) ou STRING contador (`INCR` + `EXPIRE` na primeira)                                          | Tamanho da janela + 1 s                                                                                     | Middleware de limite                                        | O mesmo (Lua: checar e registrar numa chamada) |
 
-**Implementadas no 2G/2H:** `rt:`, `rtfam:`, `userfam:` e `jti:revoked:`. As demais chaves (`jti:used`, `presence`, `mm:*`, `rl:*`) são o desenho para multi-instância: hoje presença, fila, rate limit e o estado do lobby ficam em memória do processo.
+**Implementadas no 2G/2H e 6F:** `rt:`, `rtfam:`, `userfam:`, `jti:revoked:` e `idtoken:used:` (uso único do idToken social, `TokenStore.claimIdToken`). As demais chaves (`presence`, `mm:*`, `rl:*`) são o desenho para multi-instância: hoje presença, fila, rate limit e o estado do lobby ficam em memória do processo.
 
 Detalhes:
 
@@ -165,7 +226,7 @@ Detalhes:
 - **Janela de graça** (`REFRESH_REUSE_GRACE_SECONDS`, padrão 20 s, 0 desliga). Quem reapresenta o token que acabou de rotacionar (resposta perdida, duas abas) dentro da janela ganha um sucessor irmão, UMA vez por token (`graceUsed`); o primeiro ramo segue válido. Não dá para reemitir o mesmo sucessor, porque só o hash fica no Redis. Fora da janela, ou na segunda reapresentação, é reuso: a família cai e o `lastJti` é revogado. Trade-off aceito: quem roubou o token antigo nos primeiros segundos ganha um ramo.
 - **Teto absoluto da família** (`REFRESH_FAMILY_MAX_SECONDS`, padrão 90 dias, 1 h a 365 dias). A rotação nunca estende a família além de `createdAt` + o teto: o TTL de `rt:`/`rtfam:` é cortado no que resta. Depois disso o refresh responde `INVALID_REFRESH_TOKEN`.
 - **Poda**: a cada criação e revogação, `userfam:<id>` perde as famílias cujo `rtfam` já expirou.
-- **`jti`**: o access JWT (15 min) não consulta o Redis por padrão; só `jti:revoked` é checado quando há revogação explícita (logout, banimento). `jti:used` serve a tokens de uso único curtos (vínculo de conta, ticket de entrada), por `SET NX EX`.
+- **`jti`**: o access JWT (15 min) não consulta o Redis por padrão; só `jti:revoked` é checado quando há revogação explícita (logout, banimento). `idtoken:used` serve ao uso único do idToken social (vínculo e login), por `SET NX EX`.
 - **Presença**: uma chave por usuário, não um SET global, para o TTL expirar sozinho quando a instância cai. `status` na mesa (`online`/`away`/`bot`) continua no estado da sala; esta chave é só para o lobby.
 - **Matchmaking**: só mesas públicas `single`. ZSET dá FIFO, deduplicação e remoção O(log n) ao cancelar; LIST não remove do meio. Bloqueios (`blocks`) são consultados no Postgres ao montar a mesa, não no Redis. O sorteador faz `ZRANGE` dos mais antigos sob `mm:lock`, valida bloqueios entre os candidatos e remove os escolhidos com `ZREM` na mesma seção crítica.
 - **Rate limit** (desenho; nesta fase os limites são em memória por processo, ver `apps/server/README.md`; valores iniciais a confirmar): `mm-ip` 20/min por IP (`MATCHMAKE_RATE_LIMIT_PER_MIN`, hoje em memória e passa a Redis com mais de uma instância), `auth-guest-ip` 10 por hora por IP, `auth-refresh-user` 30/min por usuário. Limites de chat, sinal e sfx continuam em memória da sala: a sala vive em um processo só e o limite é por `userId` (decisão do plano da Fase 2), sem custo de rede por mensagem.

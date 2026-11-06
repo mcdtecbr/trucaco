@@ -3,7 +3,7 @@ import { errorMessage } from '../i18n/errors';
 import { formatCodeDisplay } from '../lobby/codeInput';
 import type { LobbySeat, RoomConnection } from '../store/roomStore';
 import { AvatarPlaceholder, colors, fontSize, spacing } from '@trucaco/ui';
-import { SeatAvatar } from './SeatAvatar';
+import { SEAT_AVATAR_SIZE, SeatAvatar } from './SeatAvatar';
 import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import type { ChatPanelProps } from './ChatPanel';
@@ -16,6 +16,15 @@ export const TABLE_SEATS = 4;
 
 /** Na espera não há sinais (o servidor só os aceita com a partida em andamento). */
 const NO_SIGNAL_END = (): void => undefined;
+
+/** Controles de bots de vaga: só existem para o host de mesa privada (o servidor valida de novo). */
+export interface BotControls {
+  /** Mensagem pt-BR do último erro de bot (NOT_HOST etc.) ou null. */
+  errorText: string | null;
+  on: { setBot(seat: number, enabled: boolean): void; fill(): void };
+}
+
+export const BOTS_NOT_COUNTED_TEXT = 'Partidas com bots não contam para conquistas nem ranking.';
 
 export interface WaitingRoomViewProps {
   roomCode: string;
@@ -34,6 +43,8 @@ export interface WaitingRoomViewProps {
   codesPanel?: CodesPanelProps | null;
   /** Preferência do sistema de menos movimento (animações ociosas do avatar). */
   reduceMotion?: boolean;
+  /** Host de mesa privada: adicionar/remover bots e iniciar com bots. Omitido/null = sem controles. */
+  bots?: BotControls | null;
   on: { share(): void; leave(): void; openChat?(): void; openCodes?(): void };
 }
 
@@ -49,6 +60,10 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
   const seated = p.seats.filter((s) => s.status !== 'empty').length;
   const bySeat = new Map(p.seats.map((s) => [s.seat, s]));
   const unread = p.chatUnreadTotal ?? 0;
+  const botSeats = p.seats.filter((s) => s.status === 'bot' || s.isBot).length;
+  const humans = seated - botSeats;
+  const vacancies = TABLE_SEATS - seated;
+  const bots = p.bots ?? null;
   return (
     <View style={styles.root}>
       <Screen testID="waiting-room">
@@ -92,29 +107,65 @@ export function WaitingRoomView(p: WaitingRoomViewProps) {
           {Array.from({ length: TABLE_SEATS }, (_, i) => {
             const seat = bySeat.get(i);
             const empty = seat === undefined || seat.status === 'empty';
+            const isBotSeat = !empty && (seat.status === 'bot' || seat.isBot);
             return (
               <View key={i} testID={`seat-${i}`} style={styles.seat}>
-                <AvatarPlaceholder
-                  nickname={empty ? '—' : seat.nickname}
-                  caption={seatCaption(seat, i === p.mySeat)}
-                  {...(seat !== undefined && !empty
-                    ? {
-                        avatar: (
-                          <SeatAvatar
-                            seat={i}
-                            parts={seat.avatar}
-                            signal={null}
-                            reduceMotion={p.reduceMotion === true}
-                            onSignalEnd={NO_SIGNAL_END}
-                          />
-                        ),
-                      }
-                    : {})}
-                />
+                <View style={styles.seatInfo}>
+                  <AvatarPlaceholder
+                    nickname={empty ? '—' : seat.nickname}
+                    caption={seatCaption(seat, i === p.mySeat)}
+                    {...(seat !== undefined && !empty
+                      ? {
+                          avatar: (
+                            <SeatAvatar
+                              seat={i}
+                              size={SEAT_AVATAR_SIZE.phone}
+                              shape="circle"
+                              parts={seat.avatar}
+                              signal={null}
+                              reduceMotion={p.reduceMotion === true}
+                              onSignalEnd={NO_SIGNAL_END}
+                            />
+                          ),
+                        }
+                      : {})}
+                  />
+                </View>
+                {bots !== null && empty ? (
+                  <Button
+                    label="Adicionar bot"
+                    variant="secondary"
+                    hint={`Coloca um bot no lugar ${i + 1}`}
+                    onPress={() => bots.on.setBot(i, true)}
+                    testID={`bot-add-${i}`}
+                  />
+                ) : null}
+                {bots !== null && isBotSeat ? (
+                  <Button
+                    label="Remover bot"
+                    variant="secondary"
+                    hint={`Libera o lugar ${i + 1}`}
+                    onPress={() => bots.on.setBot(i, false)}
+                    testID={`bot-remove-${i}`}
+                  />
+                ) : null}
               </View>
             );
           })}
           <Body muted>A partida começa quando os 4 lugares estiverem ocupados.</Body>
+          {botSeats > 0 ? <Notice testID="bots-notice">{BOTS_NOT_COUNTED_TEXT}</Notice> : null}
+          {bots !== null && bots.errorText !== null ? (
+            <ErrorText testID="bots-error">{bots.errorText}</ErrorText>
+          ) : null}
+          {bots !== null ? (
+            <Button
+              label="Iniciar com bots nas vagas"
+              hint="Preenche os lugares livres com bots e começa a partida"
+              onPress={bots.on.fill}
+              disabled={vacancies < 1 || humans < 1 || p.connection !== 'connected'}
+              testID="fill-bots"
+            />
+          ) : null}
         </Card>
 
         {p.on.openChat !== undefined ? (
@@ -159,5 +210,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   count: { position: 'absolute', width: 1, height: 1, opacity: 0 },
-  seat: { paddingVertical: spacing.xs },
+  seat: {
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  seatInfo: { flexShrink: 1 },
 });

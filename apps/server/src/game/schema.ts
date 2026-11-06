@@ -161,6 +161,8 @@ export const TableStateSchema = schema(
     rematchDeadlineAt: t.float64().default(0),
     /** 1 na primeira partida da sala, +1 por revanche. */
     matchNumber: t.uint16().default(1),
+    /** Assento do host (muda bots de vaga na espera); -1 = sem host. */
+    hostSeat: t.int8().default(-1),
     /** Privado por assento (chave = número do assento como string). `.view()`: nunca vai a todos. */
     privates: t.map(SeatPrivateSchema).view(),
   },

@@ -66,8 +66,7 @@ describe('applyState', () => {
   it('a carta selecionada some se deixou de ser legal', () => {
     const { store, ctl } = setup();
     ctl.applyState(snapshot());
-    ctl.pressCard('play:3paus');
-    expect(store.getState().selected).toBe('play:3paus');
+    store.getState().patch({ selected: 'play:3paus' });
     ctl.applyState(snapshot({ hand: { turn: 1 }, privates: priv(0) }));
     expect(store.getState().selected).toBeNull();
   });
@@ -144,18 +143,16 @@ describe('act: só ações presentes em legalActions', () => {
   });
 });
 
-describe('pressCard: selecionar e confirmar', () => {
-  it('primeiro toque seleciona, segundo toque na mesma carta joga', () => {
+describe('pressCard: um toque joga', () => {
+  it('o primeiro toque já envia a jogada; o toque duplo não envia de novo', () => {
     const { ctl, sent, store } = setup();
     ctl.applyState(snapshot());
-    ctl.pressCard('play:3paus');
-    expect(sent).toEqual([]);
-    expect(store.getState().selected).toBe('play:3paus');
-    ctl.pressCard('play:7ouros'); // troca a seleção
-    expect(store.getState().selected).toBe('play:7ouros');
     ctl.pressCard('play:7ouros');
+    ctl.pressCard('play:7ouros');
+    ctl.pressCard('play:3paus'); // outra carta, ainda em voo: barrada
     expect(sent).toEqual([{ type: 'play', card: { rank: '7', suit: 'ouros' } }]);
     expect(store.getState().selected).toBeNull();
+    expect(store.getState().busy).toBe(true);
   });
 
   it('carta ilegal não é nem selecionada', () => {
@@ -473,7 +470,6 @@ describe('3H2: cobrir, votar e chat', () => {
     ctl.setCoverMode(true);
     expect(store.getState().coverMode).toBe(true);
     ctl.pressCard('playCovered:3paus');
-    ctl.pressCard('playCovered:3paus');
     expect(sent).toEqual([{ type: 'play', card: { rank: '3', suit: 'paus' }, covered: true }]);
     expect(store.getState().coverMode).toBe(false);
   });
@@ -508,9 +504,13 @@ describe('3H2: cobrir, votar e chat', () => {
     expect(sent).toEqual([{ type: 'chat', scope: 'table', text: 'oi gente' }]);
     expect(store.getState().chatDraft.table).toBe('');
     expect(store.getState().chatError).toBeNull();
-    expect(ctl.sendPhrase('partner', 'good_luck')).toBe(true);
-    expect(ctl.sendPhrase('partner', 'inventada')).toBe(false);
-    expect(sent[1]).toEqual({ type: 'chat', scope: 'partner', phraseId: 'good_luck' });
+    expect(ctl.sendPhrase('table', 'good_luck')).toBe(true);
+    expect(ctl.sendPhrase('table', 'inventada')).toBe(false);
+    expect(sent[1]).toEqual({ type: 'chat', scope: 'table', phraseId: 'good_luck' });
+    // Em jogo não existe chat da dupla: nada sai com scope partner.
+    expect(ctl.sendChat('partner', 'oi')).toBe(false);
+    expect(ctl.sendPhrase('partner', 'good_luck')).toBe(false);
+    expect(sent).toHaveLength(2);
   });
 
   it('onChat guarda texto e frase rápida; ignora lixo; conta não lidas por aba', () => {
@@ -523,9 +523,10 @@ describe('3H2: cobrir, votar e chat', () => {
     ctl.onChat({ scope: 'table', seat: 1, phraseId: 'nao_existe' });
     ctl.onChat(null);
     expect(store.getState().chat.map((c) => c.text)).toEqual(['oi', 'Valeu!']);
-    expect(store.getState().chatUnread).toEqual({ table: 1, partner: 1 });
+    // Em jogo a mensagem da dupla (servidor antigo) é guardada, mas não conta como não lida.
+    expect(store.getState().chatUnread).toEqual({ table: 1, partner: 0 });
     ctl.setChatOpen(true);
-    expect(store.getState().chatUnread).toEqual({ table: 0, partner: 1 });
+    expect(store.getState().chatUnread).toEqual({ table: 0, partner: 0 });
     ctl.onChat({ scope: 'table', seat: 1, text: 'de novo' });
     expect(store.getState().chatUnread.table).toBe(0);
     ctl.setChatTab('partner');
@@ -926,5 +927,77 @@ describe('4E: sinais', () => {
     expect(sent).toHaveLength(1);
     disconnect();
     expect(ctl.sendSignal('nod')).toBe(false);
+  });
+});
+
+describe('bots de vaga', () => {
+  const waitingHost = (over: Record<string, unknown> = {}) =>
+    snapshot({
+      phase: 'waiting',
+      hostSeat: 0,
+      options: { visibility: 'private' },
+      ...over,
+    } as never);
+
+  it('o host envia botSeat e fillBots na espera', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(waitingHost());
+    expect(ctl.setBotSeat(2, true)).toBe(true);
+    expect(ctl.setBotSeat(2, false)).toBe(true);
+    expect(ctl.fillBots()).toBe(true);
+    expect(sent).toEqual([
+      { type: 'botSeat', target: 2, enabled: true },
+      { type: 'botSeat', target: 2, enabled: false },
+      { type: 'fillBots' },
+    ]);
+  });
+
+  it('não envia fora da espera, sem ser host, em mesa pública, sem estado, assento inválido ou sem sala', () => {
+    const none = setup();
+    expect(none.ctl.fillBots()).toBe(false);
+    const playing = setup();
+    playing.ctl.applyState(snapshot({ hostSeat: 0 }));
+    expect(playing.ctl.fillBots()).toBe(false);
+    const guest = setup();
+    guest.ctl.applyState(waitingHost({ hostSeat: 1 }));
+    expect(guest.ctl.setBotSeat(2, true)).toBe(false);
+    const pub = setup();
+    pub.ctl.applyState(waitingHost({ options: { visibility: 'public' } }));
+    expect(pub.ctl.fillBots()).toBe(false);
+    const bad = setup();
+    bad.ctl.applyState(waitingHost());
+    expect(bad.ctl.setBotSeat(7, true)).toBe(false);
+    const off = setup();
+    off.ctl.applyState(waitingHost());
+    off.disconnect();
+    expect(off.ctl.fillBots()).toBe(false);
+    for (const t of [none, playing, guest, pub, bad, off]) expect(t.sent).toEqual([]);
+  });
+
+  it('erros novos do servidor aparecem em errorCode e o próximo envio os limpa', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waitingHost());
+    for (const code of ['NOT_HOST', 'BOTS_NOT_ALLOWED', 'SEAT_OCCUPIED']) {
+      ctl.onServerError({ code });
+      expect(store.getState().errorCode).toBe(code);
+      expect(hasMessage(code)).toBe(true);
+    }
+    ctl.setBotSeat(1, true);
+    expect(store.getState().errorCode).toBeNull();
+  });
+
+  it('com meu assento ainda desconhecido o pedido sai (o servidor valida), sem laço', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(waitingHost({ privates: {} }));
+    expect(ctl.fillBots()).toBe(true);
+    expect(sent).toEqual([{ type: 'fillBots' }]);
+  });
+
+  it('projeta hostSeat e isHost', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waitingHost());
+    expect(store.getState().vm).toMatchObject({ hostSeat: 0, isHost: true, visibility: 'private' });
+    ctl.applyState(waitingHost({ hostSeat: 3 }));
+    expect(store.getState().vm).toMatchObject({ hostSeat: 3, isHost: false });
   });
 });

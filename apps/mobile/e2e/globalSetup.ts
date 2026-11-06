@@ -10,26 +10,35 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SERVER_PORT, SERVER_URL, WEB_DIST_DIR, WEB_PORT, WEB_URL } from './support/env';
+import {
+  SAME_DIST_DIR,
+  SAME_PORT,
+  SAME_URL,
+  SERVER_PORT,
+  SERVER_URL,
+  WEB_DIST_DIR,
+  WEB_PORT,
+  WEB_URL,
+} from './support/env';
 import { startGameServer } from './support/serverProcess';
 import { startStaticServer } from './support/staticServer';
 
 const MOBILE_ROOT = resolve(__dirname, '..');
 
-function buildWeb(): Promise<void> {
+function buildWeb(outDir: string, serverUrl: string, e2eProbe: boolean): Promise<void> {
   // CLI do Expo resolvido direto (sem shim do pnpm/npx, que variam entre Windows e Linux).
   const expoCli = require.resolve('expo/bin/cli');
   return new Promise<void>((done, fail) => {
     const child = spawn(
       process.execPath,
-      [expoCli, 'export', '--platform', 'web', '--output-dir', WEB_DIST_DIR, '--clear'],
+      [expoCli, 'export', '--platform', 'web', '--output-dir', outDir, '--clear'],
       {
         cwd: MOBILE_ROOT,
         env: {
           ...process.env,
           CI: '1',
-          EXPO_PUBLIC_E2E: '1',
-          EXPO_PUBLIC_SERVER_URL: SERVER_URL,
+          EXPO_PUBLIC_E2E: e2eProbe ? '1' : '0',
+          EXPO_PUBLIC_SERVER_URL: serverUrl,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -50,24 +59,41 @@ function buildWeb(): Promise<void> {
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const distDir = resolve(MOBILE_ROOT, WEB_DIST_DIR);
+  const sameDir = resolve(MOBILE_ROOT, SAME_DIST_DIR);
   if (process.env['E2E_SKIP_BUILD'] === '1') {
-    if (!existsSync(resolve(distDir, 'index.html'))) {
-      throw new Error(`E2E_SKIP_BUILD=1 mas ${WEB_DIST_DIR}/index.html não existe`);
+    for (const [dir, name] of [
+      [distDir, WEB_DIST_DIR],
+      [sameDir, SAME_DIST_DIR],
+    ] as const) {
+      if (!existsSync(resolve(dir, 'index.html'))) {
+        throw new Error(`E2E_SKIP_BUILD=1 mas ${name}/index.html não existe`);
+      }
     }
   } else {
-    await buildWeb();
+    await buildWeb(WEB_DIST_DIR, SERVER_URL, true);
+    // Mesma origem: o bundle fala com o próprio servidor que o serve (sem a sonda de teste da mesa).
+    await buildWeb(SAME_DIST_DIR, SAME_URL, false);
   }
 
   const server = await startGameServer({ port: SERVER_PORT, corsOrigin: WEB_URL });
+  let same: Awaited<ReturnType<typeof startGameServer>>;
+  try {
+    same = await startGameServer({ port: SAME_PORT, corsOrigin: SAME_URL, webDistDir: sameDir });
+  } catch (e) {
+    await server.stop();
+    throw e;
+  }
   let web: Awaited<ReturnType<typeof startStaticServer>>;
   try {
     web = await startStaticServer(distDir, WEB_PORT);
   } catch (e) {
+    await same.stop();
     await server.stop();
     throw e;
   }
   return async () => {
     await web.close();
+    await same.stop();
     await server.stop();
   };
 }

@@ -1,14 +1,20 @@
 import { AuthService } from './auth/authService';
 import { loadServerConfig } from './auth/config';
+import { METRICS_TOKEN_MIN_LENGTH } from './http/observability';
+import { buildIdentityVerifier } from './auth/identity';
 import { RedisTokenStore } from './auth/redisTokenStore';
 import { MemoryTokenStore, type TokenStore } from './auth/tokenStore';
 import {
   createMemoryRepositories,
   createPrisma,
   PrismaMatchRepository,
+  PrismaProgressionRepository,
   PrismaUserRepository,
 } from './db';
-import type { MatchRepository, PrismaHandle, UserRepository } from './db';
+import type { MatchRepository, PrismaHandle, ProgressionRepository, UserRepository } from './db';
+import { startRetentionJob } from './db/retention';
+import type { RetentionJob } from './db/retention';
+import { assertWebDist } from './http/web';
 import { log } from './logger';
 import { roomConfigFromEnv } from './rooms/roomSeed';
 import { createServer } from './server';
@@ -119,20 +125,53 @@ async function main(): Promise<void> {
   let prismaHandle: PrismaHandle | null = null;
   let users: UserRepository;
   let matches: MatchRepository;
+  let progression: ProgressionRepository;
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl !== undefined && databaseUrl !== '') {
     prismaHandle = createPrisma(databaseUrl);
     users = new PrismaUserRepository(prismaHandle.prisma);
     matches = new PrismaMatchRepository(prismaHandle.prisma);
+    progression = new PrismaProgressionRepository(prismaHandle.prisma);
   } else if (config.devLike) {
     log.warn('DATABASE_URL ausente: usuários e partidas em memória (só dev/test)');
     const memory = createMemoryRepositories();
     users = memory.users;
     matches = memory.matches;
+    progression = memory.progression;
   } else {
     throw new Error('DATABASE_URL é obrigatório fora de development/test.');
   }
-  const auth = new AuthService(users, tokens, config.auth);
+  const identity = buildIdentityVerifier(config.social);
+  const auth = new AuthService(users, tokens, config.auth, Date.now, identity);
+  const social = auth.socialProviders();
+  if (config.social.testIdentity) log.warn('AUTH_TEST_IDENTITY ligado: idToken de teste aceito');
+  log.info('login social', { providers: social.length === 0 ? 'desligado' : social.join(',') });
+
+  // Web na mesma origem (opcional): valida a pasta ANTES de subir.
+  const webDir = process.env.WEB_DIST_DIR;
+  const webDistDir = webDir === undefined || webDir === '' ? undefined : assertWebDist(webDir);
+  if (webDistDir !== undefined) log.info('web: estático servido na mesma origem');
+
+  // Retenção diária (só com banco real).
+  let retention: RetentionJob | null = null;
+  if (process.env.RETENTION_ENABLED === 'true') {
+    if (prismaHandle === null) {
+      log.warn('RETENTION_ENABLED ignorado: sem DATABASE_URL não há o que expurgar');
+    } else {
+      retention = startRetentionJob(prismaHandle.prisma);
+      log.info('retention: agendado', { everyHours: 24 });
+    }
+  } else if (process.env.RETENTION_ENABLED !== undefined && process.env.RETENTION_ENABLED !== '') {
+    if (process.env.RETENTION_ENABLED !== 'false') {
+      throw new Error('RETENTION_ENABLED deve ser true ou false.');
+    }
+  }
+
+  // `/metrics` só existe com token forte (falha fechado se estiver curto demais).
+  const metricsToken = process.env.METRICS_TOKEN ?? '';
+  if (metricsToken !== '' && metricsToken.length < METRICS_TOKEN_MIN_LENGTH) {
+    throw new Error(`METRICS_TOKEN precisa ter pelo menos ${METRICS_TOKEN_MIN_LENGTH} caracteres.`);
+  }
 
   const max = positiveInt(process.env.MATCHMAKE_RATE_LIMIT_PER_MIN, 'MATCHMAKE_RATE_LIMIT_PER_MIN');
   const server = await createServer({
@@ -146,10 +185,13 @@ async function main(): Promise<void> {
       auth,
       users,
       matches,
+      progression,
       lobby: lobbyConfig(),
       corsOrigins: config.corsOrigins,
       limits: config.limits,
       trustProxy: config.trustProxy,
+      ...(metricsToken !== '' ? { metricsToken } : {}),
+      ...(webDistDir !== undefined ? { webDistDir } : {}),
       allowDevAuth: devFlag && config.devLike,
     },
   });
@@ -159,6 +201,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    retention?.stop();
     console.log(JSON.stringify({ level: 'info', msg: 'shutting down', signal }));
     server
       .close()

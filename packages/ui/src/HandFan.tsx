@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import type { LegalActionId, Rank, Suit } from '@trucaco/protocol';
-import { Card } from './Card';
+import { Card, cardLabel } from './Card';
 import { blindActions, handCardViews } from './handActions';
 import { spacing } from './tokens';
 import type { CardSize } from './tokens';
@@ -55,6 +55,11 @@ export function HandFan(p: HandFanProps) {
             size={size}
             {...(v.face !== null ? { rank: v.face.rank, suit: v.face.suit } : {})}
             manilha={manilha}
+            {...(p.coverMode === true && v.face !== null
+              ? {
+                  accessibilityLabel: `Jogar coberta: ${cardLabel({ rank: v.face.rank, suit: v.face.suit, manilha })}`,
+                }
+              : {})}
             disabled={id === null}
             selected={id !== null && p.selectedAction === id}
             onPress={id !== null ? () => p.onPress(id) : noop}

@@ -30,6 +30,8 @@ function localOnly(name: string, raw: string): string {
 export async function startGameServer(options: {
   port: number;
   corsOrigin: string;
+  /** Pasta (absoluta) do export web a servir na mesma origem (`WEB_DIST_DIR`). */
+  webDistDir?: string;
 }): Promise<ServerHandle> {
   const main = resolve(__dirname, '../../../server/dist/main.js');
   if (!existsSync(main)) {
@@ -43,10 +45,15 @@ export async function startGameServer(options: {
       // Windows: o Node precisa disto para resolver rede/DNS.
       ...(process.env['SystemRoot'] !== undefined ? { SystemRoot: process.env['SystemRoot'] } : {}),
       NODE_ENV: 'test',
+      // Verificador de identidade de TESTE (`test:<sub>`): só existe em development/test.
+      AUTH_TEST_IDENTITY: '1',
       PORT: String(options.port),
       CORS_ORIGINS: options.corsOrigin,
+      ...(options.webDistDir !== undefined ? { WEB_DIST_DIR: options.webDistDir } : {}),
       // Baralho fixo (só dev/test) e limites frouxos: 4 convidados do mesmo IP jogando em sequência.
       TRUCO_SEED: '12345',
+      // Partidas rápidas de 4 convidados precisam pontuar: sem o anti-farm (só dev/test).
+      TRUCO_PROGRESSION_RELAXED: '1',
       JOIN_MIN_LATENCY_MS: '0',
       ACCESS_TOKEN_TTL_SECONDS: '900',
       AUTH_GUEST_PER_IP_PER_HOUR: '10000',

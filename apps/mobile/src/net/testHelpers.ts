@@ -8,6 +8,7 @@ export interface RecordedRequest {
   search: string;
   headers: Record<string, string>;
   body: unknown;
+  credentials: 'omit' | 'include' | 'same-origin';
 }
 
 export interface FakeReply {
@@ -28,6 +29,7 @@ export function fakeFetch(handler: Handler): { fetch: FetchLike; calls: Recorded
       path: u.pathname,
       search: u.search,
       headers: init.headers,
+      credentials: init.credentials,
       body: init.body === undefined ? undefined : (JSON.parse(init.body) as unknown),
     };
     calls.push(req);

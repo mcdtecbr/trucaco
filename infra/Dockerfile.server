@@ -33,8 +33,51 @@ RUN pnpm turbo run build --filter=@trucaco/server
 # ficam dentro do bundle tsup.
 RUN pnpm --filter @trucaco/server deploy --prod /out
 
-# Migrações NÃO rodam no runtime: o CLI `prisma` é devDependency e não vai para /out. Rode
-# `pnpm --filter @trucaco/server db:deploy` num passo de release (CI/Fly release_command) com DATABASE_URL.
+# ---- web: export estático do Expo, servido pelo servidor na mesma origem (WEB_DIST_DIR) ----
+# Sem EXPO_PUBLIC_SERVER_URL o web de produção usa a origem da própria página (apps/mobile/src/net/config.ts),
+# então a mesma imagem serve em qualquer domínio. Só passe --build-arg EXPO_PUBLIC_SERVER_URL para apontar o
+# web para OUTRA origem (https em produção).
+FROM ${NODE_IMAGE} AS web
+ARG EXPO_PUBLIC_SERVER_URL
+ENV CI=true
+ENV EXPO_PUBLIC_SERVER_URL=${EXPO_PUBLIC_SERVER_URL}
+# Sem NODE_ENV=production aqui: ele faria o pnpm install pular as devDependencies (tsc, expo).
+WORKDIR /repo
+RUN npm install -g pnpm@9.15.9
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY apps/server/package.json apps/server/
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/rules/package.json packages/rules/
+COPY apps/mobile/package.json apps/mobile/
+COPY packages/ui/package.json packages/ui/
+COPY packages/avatar/package.json packages/avatar/
+RUN pnpm install --frozen-lockfile --filter @trucaco/mobile...
+
+COPY apps/mobile apps/mobile
+COPY packages packages
+# O Metro importa os áudios e o .riv da raiz (../../../assets); o .dockerignore só tira o que é fonte.
+COPY assets assets
+# Textos legais: origem de apps/mobile/scripts/gen-legal.mjs (o módulo gerado não vai no contexto).
+COPY docs/legal docs/legal
+# Estrito: sem os .md o build falha em vez de embarcar o placeholder.
+RUN pnpm --filter @trucaco/mobile exec node scripts/gen-legal.mjs --strict
+RUN pnpm --filter "@trucaco/mobile..." run build
+# apps/mobile/dist = saída de `expo export --platform web`
+
+# ---- migrate: CLI do Prisma isolado, só para o release_command (migrate deploy) ----
+# O `prisma` é devDependency do server e não entra no `pnpm deploy --prod`. A versão é LIDA do
+# apps/server/package.json (não diverge) e o build falha se não for exata. Limitação: `npm install` da
+# versão exata do CLI, sem lockfile; as dependências transitivas dele podem variar entre builds.
+FROM ${NODE_IMAGE} AS migrate
+WORKDIR /migrate
+COPY apps/server/package.json ./server-package.json
+RUN V="$(node -p "require('./server-package.json').devDependencies.prisma")"  && case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "versão do prisma não é exata: $V" >&2; exit 1 ;; esac  && npm init -y >/dev/null && npm install --no-audit --no-fund "prisma@$V"
+COPY apps/server/prisma.config.ts ./
+COPY apps/server/prisma ./prisma
+
+# Migrações NÃO rodam ao subir o servidor. O CLI fica em /app/migrate e roda só no release_command do Fly
+# (com DATABASE_URL): cd /app/migrate && node node_modules/prisma/build/index.js migrate deploy
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \
@@ -42,6 +85,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build --chown=node:node /out/node_modules ./node_modules
 COPY --from=build --chown=node:node /repo/apps/server/dist ./dist
+COPY --from=web --chown=node:node /repo/apps/mobile/dist ./web
+COPY --from=migrate --chown=node:node /migrate ./migrate
 USER node
 EXPOSE 2567
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

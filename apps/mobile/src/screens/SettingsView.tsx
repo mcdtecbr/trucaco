@@ -8,10 +8,14 @@ import { StyleSheet, View } from 'react-native';
 import { spacing } from '@trucaco/ui';
 import { Body, Card, ErrorText, Heading, Notice, Title } from '../ui/Typography';
 import { PROVIDER_LABEL } from '../profile/history';
+import { LegalLinks } from './LegalLinks';
+import type { LegalLinksProps } from './LegalLinks';
+import { SocialAuthPanel } from './SocialAuthPanel';
+import type { SocialAuthPanelProps } from './SocialAuthPanel';
 import { SoundSettings } from './SoundSettings';
 
 export const DELETE_WARNING_TEXT =
-  'Apagar a conta é definitivo. Seu avatar, seu histórico de partidas, os combinados de sinais e todas as sessões deste e de outros aparelhos serão apagados. Não dá para desfazer.';
+  'Apagar a conta é definitivo. Seu avatar, suas conquistas, missões e estatísticas, os combinados de sinais e todas as sessões deste e de outros aparelhos serão apagados. As partidas que você jogou continuam para os outros jogadores, mas o seu nome some delas. Não dá para desfazer.';
 export const DELETE_CONFIRM_TEXT =
   'Última confirmação: sua conta será apagada agora e você voltará ao início como um novo convidado.';
 export const BLOCKS_EMPTY_TEXT = 'Você não bloqueou ninguém.';
@@ -27,7 +31,13 @@ export interface AccountSectionProps {
     busyId: string | null;
   };
   deletion: { step: 0 | 1 | 2; busy: boolean; error: string | null };
+  /** Vincular conta (só aparece para convidado). */
+  social?: SocialAuthPanelProps;
   on: {
+    achievements?(): void;
+    missions?(): void;
+    /** Tela de entrada com conta existente (convidado). */
+    login?(): void;
     profile(): void;
     unblock(userId: string): void;
     retryBlocks(): void;
@@ -48,6 +58,8 @@ export interface SettingsViewProps {
   /** Preferências de som deste aparelho. Omitido = sem o cartão de som. */
   sound?: { prefs: AudioPrefs; onChange(patch: Partial<AudioPrefs>): void };
   account?: AccountSectionProps;
+  /** Atalhos para Termos e Privacidade. */
+  legal?: LegalLinksProps;
   on: {
     draft(text: string): void;
     save(): void;
@@ -105,6 +117,39 @@ export function SettingsView(p: SettingsViewProps) {
           testID="settings-profile"
         />
       ) : null}
+      {p.account?.on.achievements !== undefined ? (
+        <Button
+          label="Conquistas"
+          variant="secondary"
+          onPress={p.account.on.achievements}
+          disabled={p.busy}
+          testID="settings-achievements"
+        />
+      ) : null}
+      {p.account?.on.missions !== undefined ? (
+        <Button
+          label="Missões"
+          variant="secondary"
+          onPress={p.account.on.missions}
+          disabled={p.busy}
+          testID="settings-missions"
+        />
+      ) : null}
+      {p.account?.provider === 'guest' && p.account.social !== undefined ? (
+        <Card>
+          <Heading>Vincular conta</Heading>
+          <SocialAuthPanel {...p.account.social} />
+          {p.account.on.login !== undefined ? (
+            <Button
+              label="Já tenho uma conta"
+              variant="secondary"
+              onPress={p.account.on.login}
+              disabled={p.busy}
+              testID="settings-login"
+            />
+          ) : null}
+        </Card>
+      ) : null}
       {p.account !== undefined ? <BlockedSection account={p.account} busy={p.busy} /> : null}
       <Card>
         <Heading>Sessão</Heading>
@@ -120,6 +165,12 @@ export function SettingsView(p: SettingsViewProps) {
         />
       </Card>
       {p.account !== undefined ? <DeleteSection account={p.account} busy={p.busy} /> : null}
+      {p.legal !== undefined ? (
+        <Card>
+          <Heading>Termos e privacidade</Heading>
+          <LegalLinks {...p.legal} />
+        </Card>
+      ) : null}
       <Body muted testID="versions">{`App ${p.appVersion} · protocolo v${PROTOCOL_VERSION}`}</Body>
       <Button label="Voltar" variant="secondary" onPress={p.on.back} testID="settings-back" />
     </Screen>

@@ -1,5 +1,8 @@
 import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
 import type { AvatarParts } from '@trucaco/protocol';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaClient } from '../generated/prisma/client';
@@ -674,6 +677,134 @@ describe.skipIf(url === undefined || url === '')('persistência (Postgres real)'
            VALUES (gen_random_uuid(), '${a.id}', '${a.id}', 'other')`,
         ),
       ).rejects.toThrow(/reports_not_self_check/);
+    });
+
+    it('UNIQUE (denunciante, denunciado, partida): repetida é recusada; sem partida e anonimizadas não colidem', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const matchId = await matches.saveMatch(
+        matchInput([a.id, b.id, null, null], new Date('2026-11-01T12:00:00Z')),
+      );
+      const withMatch = { reporterId: a.id, reportedId: b.id, matchId, reason: 'other' } as const;
+      await users.createReport(withMatch);
+      await expect(users.createReport(withMatch)).rejects.toBeInstanceOf(InvalidInputError);
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO reports (id, reporter_id, reported_id, match_id, reason)
+           VALUES (gen_random_uuid(), '${a.id}', '${b.id}', '${matchId}', 'other')`,
+        ),
+      ).rejects.toThrow(/reports_reporter_id_reported_id_match_id_key/);
+      // Outra denúncia do mesmo par em outra partida, e várias sem partida (NULL não colide).
+      const other = await matches.saveMatch(
+        matchInput([a.id, b.id, null, null], new Date('2026-11-02T12:00:00Z')),
+      );
+      await users.createReport({ ...withMatch, matchId: other });
+      await users.createReport({ reporterId: a.id, reportedId: b.id, reason: 'other' });
+      await users.createReport({ reporterId: a.id, reportedId: b.id, reason: 'other' });
+      expect(await db().report.count()).toBe(4);
+      expect(await users.countReportsAgainst(b.id, new Date(Date.now() - 60_000))).toBe(4);
+      expect(await users.countReportsAgainst(a.id, new Date(Date.now() - 60_000))).toBe(0);
+    });
+
+    it('denúncias throttled não contam no teto por denunciado, mas ficam gravadas', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const c = await guest('Caio');
+      await users.createReport({ reporterId: a.id, reportedId: c.id, reason: 'other' });
+      const t = await users.createReport({
+        reporterId: b.id,
+        reportedId: c.id,
+        reason: 'other',
+        throttled: true,
+      });
+      expect(t.throttled).toBe(true);
+      expect(await db().report.count({ where: { reportedId: c.id } })).toBe(2);
+      expect(await users.countReportsAgainst(c.id, new Date(Date.now() - 60_000))).toBe(1);
+    });
+
+    it('migração: o DELETE de duplicatas mantém a mais antiga e não toca em NULL; o índice volta', async () => {
+      const sql = readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          '../../prisma/migrations/20261106100000_reports_unique/migration.sql',
+        ),
+        'utf8',
+      );
+      const del = /DELETE FROM "reports"[\s\S]*?;/.exec(sql)?.[0];
+      expect(del).toBeDefined();
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const matchId = await matches.saveMatch(
+        matchInput([a.id, b.id, null, null], new Date('2026-11-01T12:00:00Z')),
+      );
+      const idx = 'reports_reporter_id_reported_id_match_id_key';
+      await db().$executeRawUnsafe(`DROP INDEX "${idx}"`);
+      try {
+        for (let i = 0; i < 3; i++) {
+          await db().$executeRawUnsafe(
+            `INSERT INTO reports (id, reporter_id, reported_id, match_id, reason, created_at)
+             VALUES (gen_random_uuid(), '${a.id}', '${b.id}', '${matchId}', 'other',
+                     '2026-11-0${i + 1}T10:00:00Z')`,
+          );
+        }
+        for (let i = 0; i < 2; i++) {
+          await db().$executeRawUnsafe(
+            `INSERT INTO reports (id, reporter_id, reported_id, reason)
+             VALUES (gen_random_uuid(), '${a.id}', '${b.id}', 'other')`,
+          );
+        }
+        await db().$executeRawUnsafe(del as string);
+        const withMatch = await db().report.findMany({ where: { matchId } });
+        expect(withMatch).toHaveLength(1);
+        expect(withMatch[0]?.createdAt.toISOString()).toBe('2026-11-01T10:00:00.000Z');
+        expect(await db().report.count({ where: { matchId: null } })).toBe(2);
+      } finally {
+        await db().$executeRawUnsafe(
+          `CREATE UNIQUE INDEX IF NOT EXISTS "${idx}" ON "reports"("reporter_id","reported_id","match_id")`,
+        );
+      }
+    });
+
+    it('sharedMatchSince: qualquer assento, só na janela; apagado deixa de contar', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      const c = await guest('Caio');
+      await matches.saveMatch(
+        matchInput([a.id, b.id, null, null], new Date('2026-11-01T12:00:00Z')),
+      );
+      const before = new Date('2026-11-01T00:00:00Z');
+      const after = new Date('2026-11-02T00:00:00Z');
+      expect(await users.sharedMatchSince(a.id, b.id, before)).toBe(true);
+      expect(await users.sharedMatchSince(b.id, a.id, before)).toBe(true);
+      expect(await users.sharedMatchSince(a.id, b.id, after)).toBe(false);
+      expect(await users.sharedMatchSince(a.id, c.id, before)).toBe(false);
+      await users.deleteUser(b.id);
+      expect(await users.sharedMatchSince(a.id, b.id, before)).toBe(false);
+    });
+
+    it('apagar conta anula o texto das denúncias escritas pelo titular; as contra ele ficam', async () => {
+      const a = await guest('Ana');
+      const b = await guest('Beto');
+      await users.createReport({
+        reporterId: a.id,
+        reportedId: b.id,
+        reason: 'other',
+        text: 'da Ana',
+      });
+      await users.createReport({
+        reporterId: b.id,
+        reportedId: a.id,
+        reason: 'other',
+        text: 'do Beto',
+      });
+      expect(await users.deleteUser(a.id)).toBe(true);
+      const rows = await db().report.findMany({ orderBy: { text: 'asc' } });
+      expect(rows).toHaveLength(2);
+      const filed = rows.find((r) => r.reportedId === b.id);
+      const against = rows.find((r) => r.reporterId === b.id);
+      expect(filed).toMatchObject({ reporterId: null, text: null });
+      expect(against).toMatchObject({ reportedId: null, text: 'do Beto' });
+      expect(await users.deleteUser(a.id)).toBe(false);
     });
   });
 
