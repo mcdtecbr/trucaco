@@ -150,6 +150,8 @@ export interface TableStateSnapshot {
   readonly rematchDeadlineAt: number;
   /** Número da partida na sala: 1 na primeira, +1 a cada revanche. */
   readonly matchNumber: number;
+  /** Assento do host (único que muda bots de vaga na espera); -1 se não há host. */
+  readonly hostSeat: number;
   /** Chave = assento como string. O cliente recebe só a própria entrada. */
   readonly privates: { readonly [seat: string]: SeatPrivateSnapshot };
 }

@@ -38,6 +38,12 @@ export const ERROR_CODES = [
   'CODE_NOT_SAVED',
   // Reservado ao cliente: o servidor nunca o emite; o cliente o sintetiza (401 na reconexão).
   'TOKEN_EXPIRED',
+  // Bots de vaga: só o host muda bots.
+  'NOT_HOST',
+  // Bots de vaga: mesa da fila pública nunca tem bot; fora da espera (partida em curso) também recusa.
+  'BOTS_NOT_ALLOWED',
+  // Bots de vaga: o assento alvo tem um humano (não dá para pôr nem tirar bot dele).
+  'SEAT_OCCUPIED',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

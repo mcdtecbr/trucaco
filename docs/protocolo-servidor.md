@@ -153,6 +153,8 @@ Enviadas com `room.send(tipo, payload)`. O payload NUNCA leva `seat`: o servidor
 | `voteRematch` | `{}`                                                             | Voto por "Jogar de novo" na janela de revanche (ver abaixo). Chave extra: `INVALID_PAYLOAD`                                     |
 | `setCode`     | `{ signalId, meaning }`                                          | Combinado da dupla: significado de um sinal (vazio apaga). Ver "Combinado da dupla"                                             |
 | `ready`       | `{}`                                                             | Não inicia a partida. O cliente o envia ao ligar os handlers; o servidor reenvia `codes`                                        |
+| `botSeat`     | `{ target, enabled }`                                            | Host, mesa privada, na espera: põe (`true`) ou tira (`false`) um bot de vaga no assento `target` (0 a 3). Ver "Bots de vaga"    |
+| `fillBots`    | `{}`                                                             | Host: preenche todas as vagas livres com bots e a partida começa. Ver "Bots de vaga"                                            |
 
 Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (seção 8). Id fora do catálogo: `INVALID_SIGNAL` ou `INVALID_SFX`.
 
@@ -173,7 +175,7 @@ Mensagem fora do formato é `error INVALID_PAYLOAD` e conta para a expulsão (se
 
 ### Estado (schema da mesa)
 
-`TableState` vai por patch. Cada cliente recebe o estado compartilhado (`roomCode`, `options`, `phase`, `players[4]`, `series`, `game`, `hand`, `turnDeadlineAt`, `cancelVotes`, `rematchVotes`, `rematchDeadlineAt`, `matchNumber`) e, no bloco `privates`, só o do próprio assento (`StateView`): `hand` (cartas), `legalActions` (ids como `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`), `partnerCards` (decisão de onze/dez) e `ownCovered` (identidade das próprias cartas cobertas). Na mão de ferro, `hand` fica vazio e vale só `handSize`. `userId` não está no estado.
+`TableState` vai por patch. Cada cliente recebe o estado compartilhado (`roomCode`, `options`, `phase`, `players[4]`, `series`, `game`, `hand`, `turnDeadlineAt`, `cancelVotes`, `rematchVotes`, `rematchDeadlineAt`, `matchNumber`, `hostSeat`) e, no bloco `privates`, só o do próprio assento (`StateView`): `hand` (cartas), `legalActions` (ids como `play:<rank><suit>`, `playCovered:…`, `playBlind:<i>`, `bet`, `accept`, `run`, `specialPlay`, `specialRun`), `partnerCards` (decisão de onze/dez) e `ownCovered` (identidade das próprias cartas cobertas). Na mão de ferro, `hand` fica vazio e vale só `handSize`. `userId` não está no estado.
 
 #### Campos públicos de `hand` (aditivos, visíveis a todos)
 
@@ -202,6 +204,17 @@ Semântica de `actingSeat`:
 `partnerCards` (privado): só na decisão de onze/dez sem ferro, e os DOIS da dupla que decide veem as cartas um do outro (inclusive depois de o primeiro aceitar, até o segundo aceitar). Fora da decisão fica vazio; na mão de ferro nunca há cartas visíveis. Adversários nunca recebem cartas alheias.
 
 Compatibilidade: `pending.responderSeat` e `hand.specialAccepted` são aditivos; `PROTOCOL_VERSION` segue 2. O que mudou é só a semântica de `actingSeat` na decisão de onze/dez (agora `-1`) e de quem tem ação legal (um respondedor em vez de dois).
+
+### Bots de vaga (mesa privada)
+
+Contrato aditivo (`PROTOCOL_VERSION` segue 6). `TableState.hostSeat` (int, -1 = sem host) é o assento do host: o criador da mesa privada, ou o primeiro a sentar numa sala fora do lobby. Se o host sai na espera, passa ao menor assento humano.
+
+- `botSeat { target, enabled }` e `fillBots {}` só valem **na espera** (`phase: 'waiting'`), por **host**, em mesa **privada**. O cliente nunca manda `seat` (campo extra, `target` fora de 0 a 3 ou `enabled` não booleano: `INVALID_PAYLOAD`). Passam pelo limite de ação de 150 ms.
+- Ordem das recusas (estado intocado em todas): mesa da fila pública -> `BOTS_NOT_ALLOWED`; quem não é o host -> `NOT_HOST`; partida já iniciada -> `BOTS_NOT_ALLOWED`; `botSeat` num assento com humano (pôr ou tirar) -> `SEAT_OCCUPIED`. Pôr bot em assento que já tem bot, ou tirar de assento vazio, não faz nada (sem erro).
+- Efeito: `players[target]` vira `{ status: 'bot', isBot: true, nickname: 'Bot <nome>', avatar }` (nome e avatar sorteados no servidor; o prefixo `Bot ` tem espaço, que apelido de humano não aceita) e sai `presence { seat, status: 'bot' }`. Tirar devolve `status: 'empty'`. A partida começa quando os **4 assentos** estão ocupados (humano ou bot); com 3 ocupados nada começa.
+- O bot de vaga **não tem `userId`** (grava `userId null` e `botFrom` desde o início em `match_players`), joga e sinaliza (`botSignalChance`), **nunca fala no chat**, nunca pede nem aumenta aposta, e aceita ou corre da aposta pela força da própria mão (`botAction(..., 'vacancy')`; só vê o próprio assento). Pensa 900 a 1800 ms (sorteado); o bot de ausência segue em 600 ms e sempre corre.
+- **Partida com bot não conta** para estatísticas, conquistas, missões nem ranking (`isValidMatch` exige 4 humanos distintos e nenhum bot), mas é gravada em `matches`.
+- Revanche: com bot de vaga na mesa basta **1 humano** conectado (`REMATCH_MIN_HUMANS` = 2 só vale sem bot de vaga); a sala não é destrancada para bots de vaga (não há dono para voltar).
 
 ### Revanche ("Jogar de novo")
 
@@ -269,7 +282,7 @@ A sala de espera é a "preparação": a dupla combina o significado dos sinais p
 **`ErrorCode` do protocol** (`packages/protocol/src/errors.ts`):
 
 - Espelho do motor (`RuleErrorCode`): `INVALID_SEAT`, `HAND_FINISHED`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `COVERED_NOT_ALLOWED`, `BLIND_ONLY`, `NOT_BLIND_HAND`, `BET_NOT_ALLOWED`, `BET_PENDING`, `NO_PENDING_BET`, `SPECIAL_DECISION_PENDING`, `NO_SPECIAL_DECISION`, `GAME_FINISHED`, `SERIES_FINISHED`.
-- Do servidor: `NOT_SEATED`, `ROOM_FULL`, `INVALID_PAYLOAD`, `RATE_LIMITED`, `INVALID_SIGNAL`, `INVALID_SFX`, `CHAT_BLOCKED`, `REMATCH_NOT_AVAILABLE` (voto de revanche com a série sem vencedor, janela fechada ou menos de 2 humanos conectados; não conta strike).
+- Do servidor: `NOT_SEATED`, `ROOM_FULL`, `INVALID_PAYLOAD`, `RATE_LIMITED`, `INVALID_SIGNAL`, `INVALID_SFX`, `CHAT_BLOCKED`, `REMATCH_NOT_AVAILABLE` (voto de revanche com a série sem vencedor, janela fechada ou menos de 2 humanos conectados, ou 1 se há bot de vaga; não conta strike), `NOT_HOST`, `BOTS_NOT_ALLOWED` e `SEAT_OCCUPIED` (bots de vaga; ver "Bots de vaga").
 - Reservados ao cliente (o servidor nunca os emite pelo WebSocket): `ROOM_NOT_FOUND` (sala descartada ou token de reconexão inválido) e `TOKEN_EXPIRED` (401 na reconexão ou refresh recusado). O cliente os sintetiza. Decisão assumida por padrão, a confirmar com o usuário. `UNAUTHORIZED` e `INVALID_CODE` também estão nesse tipo, mas só saem em respostas REST.
 
 **Só do servidor, em respostas HTTP** (não estão no `ErrorCode` do WebSocket): `USE_LOBBY`, `ALREADY_IN_TABLE`, `TABLE_UNAVAILABLE`, `QUEUE_COOLDOWN`, `QUEUE_FULL`, `UNAVAILABLE`, `INVALID_OPTIONS`, `BO3_REQUIRES_PRIVATE`, `INVALID_REFRESH_TOKEN`, `NICKNAME_TAKEN`, `INVALID_NICKNAME`, `INVALID_AVATAR`, `INVALID_PARTNER`, `INVALID_CODES`, `NOT_PARTNERS`, `INVALID_BODY`, `INVALID_JSON`, `INVALID_INPUT`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE` (415), `PAYLOAD_TOO_LARGE` (413), `CORS_FORBIDDEN` (403), `FORBIDDEN`, `BANNED`, `ALREADY_SEATED`, `INTERNAL` (500, genérico).

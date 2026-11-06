@@ -32,7 +32,10 @@ export type ClientMessage =
   | { readonly type: 'setCode'; readonly signalId: SignalId; readonly meaning: string }
   | { readonly type: 'voteCancel' }
   | { readonly type: 'voteRematch' }
-  | { readonly type: 'ready' };
+  | { readonly type: 'ready' }
+  // Bots de vaga (só o host, mesa privada, na espera). `target` = assento do bot (nunca `seat`).
+  | { readonly type: 'botSeat'; readonly target: Seat; readonly enabled: boolean }
+  | { readonly type: 'fillBots' };
 
 export type PresenceStatus = 'online' | 'away' | 'bot';
 
@@ -232,7 +235,17 @@ function parseUnsafe(input: unknown): ParseResult {
     case 'voteCancel':
     case 'voteRematch':
     case 'ready':
+    case 'fillBots':
       return onlyKeys(raw, ['type']) ? good({ type }) : BAD;
+    case 'botSeat': {
+      if (!onlyKeys(raw, ['type', 'target', 'enabled'])) return BAD;
+      const { target, enabled } = raw;
+      if (typeof target !== 'number' || !Number.isInteger(target) || target < 0 || target > 3) {
+        return BAD;
+      }
+      if (typeof enabled !== 'boolean') return BAD;
+      return good({ type, target, enabled });
+    }
     case 'special': {
       if (!onlyKeys(raw, ['type', 'decision'])) return BAD;
       const { decision } = raw;

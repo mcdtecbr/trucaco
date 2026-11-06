@@ -106,6 +106,7 @@ function expectNoUndefinedRequired(snap: TableStateSnapshot): void {
     'rematchVotes',
     'rematchDeadlineAt',
     'matchNumber',
+    'hostSeat',
     'privates',
   ] as const) {
     walk(snap[key], key);
