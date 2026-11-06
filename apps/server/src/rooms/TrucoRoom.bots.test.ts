@@ -17,6 +17,7 @@ import { buildColyseusServer } from '../server';
 import { BOT_NAME_PREFIX, pickBotIdentity, randomBotAvatar } from './botRoster';
 import {
   DEFAULT_BOT_THINK_MS,
+  MAX_BOT_TABLE_MATCHES,
   VACANCY_BOT_THINK_MAX_MS,
   VACANCY_BOT_THINK_MIN_MS,
   defineTrucoRoom,
@@ -128,8 +129,24 @@ const playersOf = (h: Human): PlayerView[] =>
 const json = (h: Human): { privates: Record<string, { legalActions: string[] }> } =>
   (h.room.state as unknown as { toJSON(): never }).toJSON();
 
+/** Simula a concessão do lobby de uma mesa privada (sem lobby no teste, `grant` é nulo). */
+function asPrivateTable(server: TrucoRoom): void {
+  (server as unknown as { grant: unknown }).grant = {
+    kind: 'private',
+    code: 'ABCDEFGH',
+    creator: null,
+    allowed: null,
+    seats: null,
+    creatorMs: 60_000,
+    fillMs: 60_000,
+    waitMs: 60_000,
+  };
+}
+
 async function open(name = 'truco-bots'): Promise<TrucoRoom> {
-  return t.createRoom<TrucoRoom>(name, OPTS);
+  const server = await t.createRoom<TrucoRoom>(name, OPTS);
+  asPrivateTable(server);
+  return server;
 }
 
 async function join(server: TrucoRoom, n: number): Promise<Human> {
@@ -202,10 +219,9 @@ describe('bots de vaga: o host põe e tira bots na espera', () => {
     expect(stateOf(host).phase).toBe('waiting');
     expect(server.series).toBeNull();
     expect(host.errors).toEqual([]);
-    await until(
-      () => host.presences.some((p) => p.seat === 2 && p.status === 'bot'),
-      'presença do bot',
-    );
+    // Bot de vaga não manda `presence` (o estado já traz o status); só o de ausência manda.
+    await sleep(40);
+    expect(host.presences.some((p) => p.seat === 2)).toBe(false);
     // Idempotente: pôr de novo não troca o bot.
     host.room.send('botSeat', { target: 2, enabled: true });
     await sleep(60);
@@ -244,6 +260,16 @@ describe('bots de vaga: o host põe e tira bots na espera', () => {
       fillMs: 60_000,
       waitMs: 60_000,
     };
+    const host = await join(server, 0);
+    host.room.send('botSeat', { target: 1, enabled: true });
+    host.room.send('fillBots');
+    await until(() => host.errors.length === 2, 'dois erros');
+    expect(host.errors).toEqual(['BOTS_NOT_ALLOWED', 'BOTS_NOT_ALLOWED']);
+    expect(playersOf(host)[1]?.status).toBe('empty');
+  });
+
+  it('mesa sem concessão privada (grant nulo) recebe BOTS_NOT_ALLOWED', async () => {
+    const server = await t.createRoom<TrucoRoom>('truco-bots', OPTS);
     const host = await join(server, 0);
     host.room.send('botSeat', { target: 1, enabled: true });
     host.room.send('fillBots');
@@ -326,6 +352,55 @@ describe('bots de vaga: início da partida', () => {
     expect(guest.seat).toBe(3);
     await until(() => server.series !== null, 'série iniciada com 2 humanos e 2 bots');
     expect(playersOf(host).filter((p) => p.isBot)).toHaveLength(2);
+  });
+
+  it('reserva recusada quando assentos (humanos e bots) + reservas pendentes chegam a 4', async () => {
+    const server = await open();
+    const host = await join(server, 0);
+    host.room.send('botSeat', { target: 1, enabled: true });
+    host.room.send('botSeat', { target: 2, enabled: true });
+    await until(() => playersOf(host)[2]?.status === 'bot', 'dois bots');
+    type Reserve = {
+      mayReserve(auth: unknown, opts: unknown): boolean;
+      pendingReservations: Map<string, number>;
+    };
+    const room = server as unknown as Reserve;
+    expect(room.mayReserve({ userId: 'user-5' }, {})).toBe(true);
+    room.pendingReservations.set('user-5', Date.now() + 10_000);
+    // 3 ocupados + 1 reserva pendente: o próximo convidado é recusado na reserva.
+    expect(room.mayReserve({ userId: 'user-6' }, {})).toBe(false);
+    // Reserva vencida não conta.
+    room.pendingReservations.set('user-5', Date.now() - 1);
+    expect(room.mayReserve({ userId: 'user-6' }, {})).toBe(true);
+    room.pendingReservations.clear();
+  });
+
+  it('início agendado é cancelado se bot é removido ou host sai antes do tick', async () => {
+    const server = await open();
+    const delay = server.clock as unknown as {
+      setTimeout: (fn: () => void, ms: number, ...a: unknown[]) => unknown;
+    };
+    const orig = delay.setTimeout.bind(server.clock);
+    delay.setTimeout = (fn, _ms, ...a) => orig(fn, 300, ...a);
+    const host = await join(server, 0);
+    const guest = await join(server, 1);
+    host.room.send('botSeat', { target: 2, enabled: true });
+    host.room.send('botSeat', { target: 3, enabled: true });
+    await until(() => server.locked, 'sala trancada com 4 ocupados');
+    // 1) Bot removido antes do tick.
+    host.room.send('botSeat', { target: 3, enabled: false });
+    await until(() => !server.locked, 'sala destrancada');
+    await sleep(400);
+    expect(server.series).toBeNull();
+    // 2) Host sai antes do tick: o início é cancelado e o novo host assume.
+    host.room.send('botSeat', { target: 3, enabled: true });
+    await until(() => server.locked, 'trancada de novo');
+    await host.room.leave();
+    await until(() => !server.locked, 'destrancada com a saída do host');
+    await sleep(400);
+    expect(server.series).toBeNull();
+    expect(stateOf(guest).hostSeat).toBe(guest.seat);
+    expect(stateOf(guest).phase).toBe('waiting');
   });
 
   it('fillBots preenche todas as vagas e inicia', async () => {
@@ -418,6 +493,42 @@ describe('bots de vaga: jogo, registro e revanche', () => {
         .every((p) => p.isBot),
     ).toBe(true);
     expect(host.errors).toEqual([]);
+  });
+
+  it('mesa com bot: humano que saiu (bot de ausência) bloqueia a revanche', async () => {
+    const server = await open('truco-bots-ferro');
+    const host = await join(server, 0);
+    const guest = await join(server, 1);
+    host.room.send('botSeat', { target: 2, enabled: true });
+    host.room.send('botSeat', { target: 3, enabled: true });
+    await until(() => server.series !== null, 'série iniciada');
+    await guest.room.leave();
+    await until(
+      () => (server as unknown as { absenceBotSeats: Set<number> }).absenceBotSeats.has(guest.seat),
+      'humano virou bot de ausência',
+    );
+    await playUntil(server, host, () => finished(server));
+    await until(() => stateOf(host).phase === 'finished', 'fim');
+    host.room.send('voteRematch');
+    await until(() => host.errors.length === 1, 'erro');
+    expect(host.errors).toEqual(['REMATCH_NOT_AVAILABLE']);
+    await sleep(60);
+    expect(stateOf(host).matchNumber).toBe(1);
+  });
+
+  it('mesa com bot: teto de séries por sala recusa a revanche (a primeira nunca é bloqueada)', async () => {
+    const server = await open('truco-bots-ferro');
+    const host = await join(server, 0);
+    host.room.send('fillBots');
+    await until(() => server.series !== null, 'série iniciada');
+    (server as unknown as { matchNumber: number }).matchNumber = MAX_BOT_TABLE_MATCHES;
+    await playUntil(server, host, () => finished(server));
+    await until(() => stateOf(host).phase === 'finished', 'fim');
+    host.room.send('voteRematch');
+    await until(() => host.errors.length === 1, 'erro');
+    expect(host.errors).toEqual(['REMATCH_NOT_AVAILABLE']);
+    await sleep(60);
+    expect(server.series !== null && finished(server)).toBe(true);
   });
 
   it('bot de vaga sinaliza no início da mão, com o seat do bot', async () => {

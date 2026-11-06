@@ -56,6 +56,8 @@ export interface HomeViewProps {
     dismissResumeNotice(): void;
     table(next: TableForm): void;
     create(): void;
+    /** Cria mesa privada com as opções acima e já preenche as vagas com bots. */
+    playVsBots?(): void;
     code(text: string): void;
     join(): void;
     queueForm(next: QueueForm): void;
@@ -143,6 +145,16 @@ export function HomeView(p: HomeViewProps) {
           disabled={locked || waiting('create')}
           testID="create-submit"
         />
+        {p.on.playVsBots !== undefined ? (
+          <Button
+            label="Jogar contra bots"
+            variant="secondary"
+            hint="Cria uma mesa privada com as opções acima e preenche as vagas com bots. Não conta para conquistas nem ranking."
+            onPress={p.on.playVsBots}
+            disabled={locked || waiting('create')}
+            testID="play-vs-bots"
+          />
+        ) : null}
       </Card>
 
       <Card>

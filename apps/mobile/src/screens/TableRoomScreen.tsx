@@ -34,7 +34,8 @@ import type { CodesPanelProps } from './CodesPanel';
 import { FinishedView } from './FinishedView';
 import { TableView } from './TableView';
 import { WaitingRoomView } from './WaitingRoomView';
-import { decideWaitingRoute, exitTable } from './waitingRoute';
+import type { BotControls } from './WaitingRoomView';
+import { BOT_ERRORS, canManageBots, decideWaitingRoute, exitTable } from './waitingRoute';
 
 /**
  * Rota `/table/[code]`: a UMA tela dona da sala. Alterna a visão por fase (`waiting` -> espera,
@@ -135,6 +136,9 @@ function JoinedTable() {
   const mySeat = useRoomStore((s) => s.mySeat);
   const tablePhase = useRoomStore((s) => s.tablePhase);
   const errorCode = useRoomStore((s) => s.errorCode);
+  const hostSeat = useRoomStore((s) => s.hostSeat);
+  const visibility = useRoomStore((s) => s.visibility);
+  const tableError = useTableStore((s) => s.errorCode);
   const chatPanel = useChatPanel(
     (seat) => seats.find((x) => x.seat === seat)?.nickname ?? '',
     mySeat,
@@ -177,6 +181,18 @@ function JoinedTable() {
     return () => table.setAnnouncer(null);
   }, [announce]);
 
+  // Só o host de mesa privada vê os controles de bots (o servidor valida de novo).
+  const bots: BotControls | null = canManageBots({ mySeat, hostSeat, visibility })
+    ? {
+        errorText:
+          tableError !== null && BOT_ERRORS.includes(tableError) ? errorMessage(tableError) : null,
+        on: {
+          setBot: (seat, enabled) => void getApp().table.setBotSeat(seat, enabled),
+          fill: () => void getApp().table.fillBots(),
+        },
+      }
+    : null;
+
   const view = roomViewFor(tablePhase);
   let body;
   if (view === 'playing') body = <PlayingTable onLeave={leave} />;
@@ -197,6 +213,7 @@ function JoinedTable() {
         chatUnreadTotal={chatUnreadTotal}
         codesPanel={codesPanel}
         reduceMotion={reduceMotion}
+        bots={bots}
         on={{
           share,
           leave,

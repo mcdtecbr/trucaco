@@ -37,3 +37,23 @@ export function exitTable(rooms: { leave(): Promise<void> }, router: ExitRouter)
   if (router.canGoBack()) router.back();
   else router.replace('/home');
 }
+
+/** Erros que `botSeat` e `fillBots` podem causar (mostrados junto dos controles de bot). */
+export const BOT_ERRORS: readonly string[] = [
+  'NOT_HOST',
+  'BOTS_NOT_ALLOWED',
+  'SEAT_OCCUPIED',
+  'RATE_LIMITED',
+];
+
+/**
+ * Mostra os controles de bot: só o host (`hostSeat === mySeat`) de mesa privada. Só UX: o servidor
+ * recusa o resto (`NOT_HOST`, `BOTS_NOT_ALLOWED`).
+ */
+export function canManageBots(input: {
+  mySeat: number;
+  hostSeat: number;
+  visibility: string;
+}): boolean {
+  return input.mySeat >= 0 && input.hostSeat === input.mySeat && input.visibility === 'private';
+}

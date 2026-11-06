@@ -26,6 +26,10 @@ export interface RoomStoreState {
   readonly seats: readonly LobbySeat[];
   /** -1 enquanto o bloco privado não chegou. */
   readonly mySeat: number;
+  /** Assento do host (único que mexe nos bots da espera); -1 = sem host ou servidor antigo. */
+  readonly hostSeat: number;
+  /** `private` | `public` ou `''` antes do primeiro estado. */
+  readonly visibility: string;
   /** Código de erro de `i18n/errors` quando a conexão terminou mal. */
   readonly errorCode: string | null;
   patch(p: Partial<Omit<RoomStoreState, 'patch' | 'reset'>>): void;
@@ -38,6 +42,8 @@ const INITIAL = {
   tablePhase: '',
   seats: [] as readonly LobbySeat[],
   mySeat: -1,
+  hostSeat: -1,
+  visibility: '',
   errorCode: null as string | null,
 };
 
@@ -65,6 +71,8 @@ export interface WaitingProjection {
   readonly tablePhase: string;
   readonly seats: readonly LobbySeat[];
   readonly mySeat: number;
+  readonly hostSeat: number;
+  readonly visibility: string;
 }
 
 /**
@@ -72,7 +80,9 @@ export interface WaitingProjection {
  * parcial no começo): nunca lança.
  */
 export function projectWaiting(json: unknown): WaitingProjection {
-  if (!isRecord(json)) return { roomCode: '', tablePhase: '', seats: [], mySeat: -1 };
+  if (!isRecord(json)) {
+    return { roomCode: '', tablePhase: '', seats: [], mySeat: -1, hostSeat: -1, visibility: '' };
+  }
   const players = Array.isArray(json['players']) ? json['players'] : [];
   const seats: LobbySeat[] = [];
   for (const p of players) {
@@ -105,5 +115,13 @@ export function projectWaiting(json: unknown): WaitingProjection {
     tablePhase: typeof json['phase'] === 'string' ? json['phase'] : '',
     seats,
     mySeat,
+    hostSeat:
+      typeof json['hostSeat'] === 'number' && Number.isInteger(json['hostSeat'])
+        ? json['hostSeat']
+        : -1,
+    visibility:
+      isRecord(json['options']) && typeof json['options']['visibility'] === 'string'
+        ? json['options']['visibility']
+        : '',
   };
 }

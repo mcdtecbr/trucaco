@@ -126,6 +126,8 @@ export const DEFAULT_BOT_THINK_MS = 600;
 /** Atraso de "pensar" do bot de VAGA: sorteado nesta faixa (ms), para a jogada parecer humana. */
 export const VACANCY_BOT_THINK_MIN_MS = 900;
 export const VACANCY_BOT_THINK_MAX_MS = 1800;
+/** Séries por sala com bot de vaga (a 1ª mais as revanches); depois, `REMATCH_NOT_AVAILABLE`. */
+export const MAX_BOT_TABLE_MATCHES = 5;
 /** Reconexões (e retomadas por novo join) por assento na partida; acima disso o bot fica com a cadeira. */
 export const DEFAULT_MAX_RECONNECTS = 20;
 /**
@@ -480,7 +482,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         (this.reconnectCount.get(seat) ?? 0) < this.maxReconnects()
       );
     }
-    return this.series === null;
+    if (this.series !== null) return false;
+    // Bots de vaga ocupam assento sem contar no `maxClients`: assentos ocupados + reservas pendentes
+    // nunca passam de 4, para o convidado extra ser recusado já na reserva.
+    const now = Date.now();
+    let pendingCount = 0;
+    for (const until of this.pendingReservations.values()) if (until > now) pendingCount++;
+    return this.occupiedSeats() + pendingCount < TABLE_SEATS;
   }
 
   override onCreate(rawOptions: unknown): void {
@@ -1277,7 +1285,10 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     seat: Seat,
     msg: Extract<ClientMessage, { type: 'botSeat' | 'fillBots' }>,
   ): ErrorCode | null {
-    if (this.grant?.kind === 'queue') return 'BOTS_NOT_ALLOWED';
+    // Permissão explícita: só mesa privada concedida pelo lobby (nunca por exclusão).
+    if (this.grant?.kind !== 'private' || this.options?.visibility !== 'private') {
+      return 'BOTS_NOT_ALLOWED';
+    }
     if (seat !== this.hostSeat) return 'NOT_HOST';
     if (this.series !== null || this.state.phase !== 'waiting' || this.closing) {
       return 'BOTS_NOT_ALLOWED';
@@ -1304,18 +1315,14 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const identity = pickBotIdentity(taken);
     this.vacancyBotSeats.add(seat);
     this.botSeats.add(seat);
-    this.seatPresence.set(seat, 'bot');
+    // Sem mensagem `presence` nem entrada em `seatPresence`: o estado já traz `status: 'bot'` e `isBot`.
+    // (`presence 'bot'` é só para bot de AUSÊNCIA, que tinha um humano.)
     setPlayer(this.state, seat, {
       nickname: identity.nickname,
       avatar: identity.avatar,
       status: 'bot',
       isBot: true,
     });
-    const msg: Omit<Extract<ServerMessage, { type: 'presence' }>, 'type'> = {
-      seat,
-      status: 'bot',
-    };
-    this.broadcast('presence', msg);
   }
 
   private removeVacancyBot(seat: Seat): void {
@@ -1676,7 +1683,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * humanos conectados. Idempotente, sem "desvoto". Unanimidade dos humanos conectados inicia a revanche.
    */
   private voteRematch(seat: Seat): ErrorCode | null {
-    if (!this.rematchWindowOpen()) return 'REMATCH_NOT_AVAILABLE';
+    if (!this.rematchWindowOpen() || this.rematchBlockedByBots()) return 'REMATCH_NOT_AVAILABLE';
     const voters = this.connectedHumans();
     if (voters.length < this.rematchMinHumans() || !voters.includes(seat)) {
       return 'REMATCH_NOT_AVAILABLE';
@@ -1692,6 +1699,16 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   /** Com bots de vaga na mesa basta 1 humano conectado; sem eles, `REMATCH_MIN_HUMANS`. */
   private rematchMinHumans(): number {
     return this.vacancyBotSeats.size > 0 ? 1 : REMATCH_MIN_HUMANS;
+  }
+
+  /**
+   * Mesa com bot de vaga: sem revanche se algum humano SAIU (assento em bot de ausência, com o `userId` dele)
+   * ou se a sala já jogou `MAX_BOT_TABLE_MATCHES` séries (limita gravação em `matches` por abuso). A
+   * primeira partida nunca é bloqueada. Uso de `REMATCH_NOT_AVAILABLE` (sem código novo).
+   */
+  private rematchBlockedByBots(): boolean {
+    if (this.vacancyBotSeats.size === 0) return false;
+    return this.absenceBotSeats.size > 0 || this.matchNumber >= MAX_BOT_TABLE_MATCHES;
   }
 
   private publishRematchVotes(): void {
@@ -1717,6 +1734,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
 
   private checkRematch(): void {
     if (this.rematchVotes.size === 0 || !this.rematchWindowOpen()) return;
+    if (this.rematchBlockedByBots()) return;
     const voters = this.connectedHumans();
     if (voters.length < this.rematchMinHumans()) return;
     if (!voters.every((s) => this.rematchVotes.has(s))) return;

@@ -77,6 +77,19 @@ describe('toHistoryRow', () => {
     expect(row.players[3]?.name).toBe('Bot');
   });
 
+  it('bot de vaga (sem usuário, botFrom desde o início) é rotulado Bot e sem ação', () => {
+    const row = toHistoryRow(
+      match({
+        players: [
+          { seat: 0, team: 0, userId: ME, nickname: 'Eu', botFrom: null },
+          { seat: 1, team: 1, userId: null, nickname: null, botFrom: 0 },
+        ],
+      }),
+      ME,
+    );
+    expect(row.players[1]).toMatchObject({ name: 'Bot', userId: null, relation: 'opponent' });
+  });
+
   it('conta apagada aparece como removida e sem ação', () => {
     const row = toHistoryRow(
       match({
