@@ -31,6 +31,7 @@ import { messageForAction } from './actionMessage';
 import { createClockOffset } from './clockOffset';
 import type { ClockOffset } from './clockOffset';
 import { isPresenceStatus, presenceText } from './presence';
+import { HAND_HOLD_MS } from './dealPlan';
 import { actionSignature, projectTable } from './projectTable';
 import type { PlayedView, TableViewModel } from './projectTable';
 import type { ChatEntry, LingeringTrick, TableStore, TableStoreState } from './tableStore';
@@ -54,6 +55,8 @@ export const SIGNAL_SAFETY_MS = MAX_SIGNAL_DURATION_MS + 500;
 const MAX_HISTORY = 200;
 /** Quanto tempo a última vaza fica na mesa depois que o servidor a limpa. */
 export const LINGER_MS = 1500;
+/** Mesma retenção quando a vaza fecha a mão ou a partida: um pouco acima da pausa da tela, que manda. */
+export const HAND_LINGER_MS = HAND_HOLD_MS + 300;
 /** Logo depois de reconectar, evento mais velho que isto é replay (não mede relógio nem é falado). */
 export const REPLAY_WINDOW_MS = 2000;
 export const REPLAY_MIN_AGE_MS = 2000;
@@ -126,6 +129,8 @@ export interface TableControllerOptions {
   audio?: AudioService;
   /** Aleatoriedade das falas (injetável nos testes). */
   speechRng?: () => number;
+  /** Retenção da vaza que fecha a mão. Padrão HAND_LINGER_MS; o E2E usa LINGER_MS (sem pausa extra). */
+  handLingerMs?: number;
 }
 
 export interface TableController {
@@ -222,7 +227,9 @@ export function lingeringFor(
 ): LingeringTrick | null {
   if (prev === null || next.current.length > 0) return null;
   const newHand =
-    prev.handNumber !== next.handNumber || prev.series.gameNumber !== next.series.gameNumber;
+    prev.handNumber !== next.handNumber ||
+    prev.series.gameNumber !== next.series.gameNumber ||
+    (prev.phase === 'playing' && next.phase === 'finished');
   if (newHand) {
     // O servidor fecha a mão e abre a seguinte no MESMO patch: a vaza final não está em `tricks` nem
     // completa em `prev.current` (falta a última carta). Os eventos cardPlayed/trickDecided a trazem inteira.
@@ -231,10 +238,11 @@ export function lingeringFor(
         plays: closed.plays,
         winnerSeat: closed.winnerSeat,
         ownCovered: prev.ownCoveredCurrent,
+        handEnd: true,
       };
     }
     return prev.current.length > 0
-      ? { plays: prev.current, winnerSeat: -1, ownCovered: prev.ownCoveredCurrent }
+      ? { plays: prev.current, winnerSeat: -1, ownCovered: prev.ownCoveredCurrent, handEnd: true }
       : null;
   }
   if (next.tricks.length <= prev.tricks.length) return null;
@@ -267,6 +275,7 @@ export function replacedSeats(prev: TableViewModel | null, next: TableViewModel)
 
 export function createTableController(opts: TableControllerOptions): TableController {
   const { store } = opts;
+  const handLingerMs = opts.handLingerMs ?? HAND_LINGER_MS;
   const now = opts.now ?? Date.now;
   const timers: TableTimers = opts.timers ?? {
     setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -441,10 +450,13 @@ export function createTableController(opts: TableControllerOptions): TableContro
     const ling = newMatch ? null : lingeringFor(cur.vm, vm, closedTrick);
     if (ling !== null) {
       clear(lingerTimer);
-      lingerTimer = timers.setTimeout(() => {
-        lingerTimer = null;
-        store.getState().patch({ lingering: null });
-      }, LINGER_MS);
+      lingerTimer = timers.setTimeout(
+        () => {
+          lingerTimer = null;
+          store.getState().patch({ lingering: null });
+        },
+        ling.handEnd === true ? handLingerMs : LINGER_MS,
+      );
     }
     // Na espera, quem sentou ali mudou: o chat e o balão do ocupante anterior não podem ser atribuídos
     // ao novo (`nicknameOf(seat)` reatribuiria), e o chat da dupla do par antigo não vale para o novo.

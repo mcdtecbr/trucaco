@@ -6,6 +6,7 @@ import type { SeatReservation } from '@trucaco/protocol';
 import { createAudioService } from '../audio/audioService';
 import type { AudioService } from '../audio/audioService';
 import { createPlatformAudio } from '../audio/platform';
+import { isE2EMode } from '../net/config';
 import { createGameClient } from '../net/colyseus';
 import type { GameClient } from '../net/colyseus';
 import { isJoinTableResponse } from '../net/guards';
@@ -23,7 +24,7 @@ import { mutedStore } from '../store/mutedStore';
 import { progressStore } from '../store/progressStore';
 import { roomStore } from '../store/roomStore';
 import { bindSession, sessionStore } from '../store/sessionStore';
-import { createTableController } from '../table/tableController';
+import { LINGER_MS, createTableController } from '../table/tableController';
 import type { TableController } from '../table/tableController';
 import { tableStore } from '../table/tableStore';
 
@@ -79,6 +80,8 @@ export function getApp(): App {
     audio,
     send: (msg) => rooms?.send(msg) ?? false,
     isMuted: (nickname) => mutedStore.getState().has(nickname),
+    // E2E espera por estado e roda sem animação: nenhuma pausa extra no fim da mão.
+    ...(isE2EMode() ? { handLingerMs: LINGER_MS } : {}),
   });
   void mutedStore.getState().hydrate();
   rooms = createRoomService({

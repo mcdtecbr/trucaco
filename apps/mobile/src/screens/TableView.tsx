@@ -69,6 +69,7 @@ import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
 import { DealOverlay, useDealSequence } from '../table/DealOverlay';
+import { handHoldMs } from '../table/dealPlan';
 import { DeckGroup } from '../table/DeckGroup';
 import { ScoreAd } from '../table/ScoreAd';
 import {
@@ -512,8 +513,19 @@ export function TableView(p: TableViewProps) {
       closeSignals(false);
     }
   }, [modalOpen, closeSignals]);
+  const deal = useDealSequence({
+    key: `${vm.matchNumber}:${vm.series.gameNumber}:${vm.handNumber}`,
+    enabled: p.animateDeal === true && !p.reduceMotion && vm.handNumber > 0,
+    pe: vm.pe,
+    mySeat: vm.mySeat,
+    // A pausa é só do cliente: o relógio da vez do servidor (20 s) segue correndo. Só há pausa quando a
+    // troca de mão veio com a vaza final retida (`handEnd`); estado que chega de reconexão não pausa.
+    holdMs: p.lingering?.handEnd === true ? handHoldMs(p.animateDeal === true, p.reduceMotion) : 0,
+    fresh: vm.current.length === 0 && vm.tricks.length === 0,
+  });
   const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
-  const legal = p.connected && !modalOpen ? vm.legalActions : [];
+  const holding = deal.phase === 'hold';
+  const legal = p.connected && !modalOpen && !holding ? vm.legalActions : [];
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
@@ -524,13 +536,6 @@ export function TableView(p: TableViewProps) {
     avatarSize: m.avatar,
     onSignalEnd: p.on.signalEnd,
   };
-  const deal = useDealSequence({
-    key: `${vm.matchNumber}:${vm.handNumber}`,
-    enabled: p.animateDeal === true && !p.reduceMotion && vm.handNumber > 0,
-    pe: vm.pe,
-    mySeat: vm.mySeat,
-    fresh: vm.current.length === 0 && vm.tricks.length === 0,
-  });
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
   const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}|bots=${vm.seats.filter((x) => x.isBot).length}`;
 
@@ -625,7 +630,11 @@ export function TableView(p: TableViewProps) {
     />
   );
 
-  const showLinger = vm.current.length === 0 && p.lingering !== null;
+  // A vaza que fecha a mão (com outra mão a seguir) fica pela pausa do fim da mão, não por temporizador;
+  // no fim da partida a mesa fica por `useFinishHold` e o temporizador do controlador segura a vaza.
+  const lingerByHold =
+    p.lingering?.handEnd === true && p.animateDeal === true && vm.phase === 'playing';
+  const showLinger = vm.current.length === 0 && p.lingering !== null && (!lingerByHold || holding);
   const trickPlays = showLinger ? (p.lingering?.plays ?? []) : vm.current;
   const trickOwn = showLinger ? (p.lingering?.ownCovered ?? null) : vm.ownCoveredCurrent;
   const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
@@ -633,7 +642,7 @@ export function TableView(p: TableViewProps) {
     lingerSeat >= 0
       ? `Vaza de ${lingerSeat === vm.mySeat ? 'você' : nicknameOf(lingerSeat) || 'outro jogador'}`
       : null;
-  const showPartner = vm.handPhase === 'specialDecision' && vm.partnerCards.length > 0;
+  const showPartner = !holding && vm.handPhase === 'specialDecision' && vm.partnerCards.length > 0;
 
   // Faixa do topo do pano ocupada pelo parceiro (avatar + borda + costas das cartas que saem abaixo).
   // Faixa de baixo: meu avatar, no centro (de frente para o parceiro).
@@ -973,7 +982,7 @@ export function TableView(p: TableViewProps) {
     >
       <HandFan
         hand={vm.myHand}
-        legalActions={actionsOn ? vm.legalActions : []}
+        legalActions={actionsOn && !holding ? vm.legalActions : []}
         blindCount={vm.blindCount}
         coverMode={p.coverMode}
         manilhas={vm.manilhas}

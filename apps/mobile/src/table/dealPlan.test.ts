@@ -8,6 +8,7 @@ import {
   dealDecision,
   dealPlan,
   dealSeatOrder,
+  handHoldMs,
 } from './dealPlan';
 
 describe('dealSeatOrder', () => {
@@ -55,5 +56,18 @@ describe('dealDecision', () => {
     expect(dealDecision(null, '1:1', true)).toEqual({ animate: true, collect: false });
     expect(dealDecision(null, '1:1', true, false)).toEqual({ animate: false, collect: false });
     expect(dealDecision('1:1', '1:2', true)).toEqual({ animate: true, collect: true });
+  });
+});
+
+describe('handHoldMs', () => {
+  it('sem animação (E2E, testes): nenhuma pausa', () => {
+    expect(handHoldMs(false, false)).toBe(0);
+    expect(handHoldMs(false, true)).toBe(0);
+  });
+  it('pausa legível (2,0 a 2,5 s) e menor com reduzir movimento', () => {
+    expect(handHoldMs(true, false)).toBeGreaterThanOrEqual(2000);
+    expect(handHoldMs(true, false)).toBeLessThanOrEqual(2500);
+    expect(handHoldMs(true, true)).toBeLessThan(handHoldMs(true, false));
+    expect(handHoldMs(true, true)).toBeGreaterThan(0);
   });
 });
