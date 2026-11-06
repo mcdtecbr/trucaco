@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ComponentRef, ReactNode, Ref } from 'react';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
 import type { Rank, Suit } from '@trucaco/protocol';
 import { Card, cardLabel } from './Card';
 import { parseFace } from './cardInfo';
@@ -39,8 +39,17 @@ export function placePlays(
   return { byPosition, order };
 }
 
-export interface PlayedCardsProps {
+/** Uma vaza da mão (cartas e, se for minha, a identidade da minha carta coberta). */
+export interface PlayedTrickView {
   readonly plays: readonly PlayedCardView[];
+  readonly ownCovered?: { readonly rank: string; readonly suit: string } | null;
+}
+
+export interface PlayedCardsProps {
+  /** Vaza mais recente (a em curso, ou a última fechada). */
+  readonly plays: readonly PlayedCardView[];
+  /** Vazas anteriores da MESMA mão, da mais antiga para a mais nova: ficam na mesa até o fim da mão. */
+  readonly earlier?: readonly PlayedTrickView[];
   readonly mySeat: number;
   /** Identidade da PRÓPRIA carta coberta nesta vaza (de `privates[mySeat].ownCovered`). */
   readonly ownCovered?: { readonly rank: string; readonly suit: string } | null;
@@ -55,87 +64,105 @@ export interface PlayedCardsProps {
   readonly containerRef?: Ref<ViewHandle>;
 }
 
-const GRID: readonly (readonly (ScreenPosition | null)[])[] = [
-  [null, 'partner', null],
-  ['left', null, 'right'],
-  [null, 'self', null],
-];
+/** Vazas por mão (melhor de três): o leque de cada jogador comporta até este tanto de cartas. */
+export const MAX_FAN = 3;
+/**
+ * Quanto cada carta mais nova avança sobre a anterior, em fração da largura. Na cruz sobra espaço e o
+ * índice da carta velha segue legível; na fileira (celular deitado) a mesa é apertada: só o suficiente
+ * para ver quantas cartas cada jogador já pôs.
+ */
+const FAN_RATIO = { cross: 0.3, row: 0.12 } as const;
+/** Espaço entre os slots da fileira (já com o leque dentro de cada slot). */
+const ROW_GAP = spacing.xs;
 
-/** Fileira: eu, o da direita, o parceiro e o da esquerda (a ordem em que se joga). */
-const ROW: readonly (readonly (ScreenPosition | null)[])[] = [['self', 'right', 'partner', 'left']];
+/** Avanço horizontal entre as cartas jogadas de um mesmo jogador (a mais nova fica por cima, à direita). */
+export function trickFanStep(size: CardSize, arrangement: 'cross' | 'row' = 'cross'): number {
+  return Math.round(cardSizes[size].width * FAN_RATIO[arrangement]);
+}
 
 const TILT: Readonly<Record<ScreenPosition, number>> = { self: 0, partner: 0, left: -8, right: 8 };
 
-/** Cartas jogadas na vaza em curso, em cruz: eu embaixo, parceiro em cima, adversários nos lados. */
+/**
+ * Cartas jogadas na mesa. Cada jogador acumula as suas em leque (a mais nova por cima): as cartas das
+ * vazas já fechadas ficam na mesa até o fim da mão. Em cruz: eu embaixo, parceiro em cima, adversários nos
+ * lados; em fileira, na ordem de jogo. A caixa tem tamanho fixo (reserva o leque cheio).
+ */
 export function PlayedCards(p: PlayedCardsProps) {
   const size = p.size ?? 'md';
-  const { byPosition, order } = placePlays(p.plays, p.mySeat);
-  const flat = p.arrangement === 'row';
+  const arrangement = p.arrangement === 'row' ? 'row' : 'cross';
+  const layers: readonly PlayedTrickView[] = [
+    ...(p.earlier ?? []),
+    { plays: p.plays, ownCovered: p.ownCovered ?? null },
+  ];
+  const foot = trickFootprint(size, arrangement);
+  const { width: cw, height: ch } = cardSizes[size];
+  const total = layers.reduce((n, l) => n + l.plays.length, 0);
   return (
     <View
       ref={p.containerRef}
       collapsable={false}
       accessibilityRole="summary"
-      accessibilityLabel={order.length === 0 ? 'Nenhuma carta na mesa' : 'Cartas na mesa'}
-      style={styles.grid}
+      accessibilityLabel={total === 0 ? 'Nenhuma carta na mesa' : 'Cartas na mesa'}
+      style={{ width: foot.width, height: foot.height }}
       pointerEvents="box-none"
     >
-      {(flat ? ROW : GRID).map((row, r) => (
-        <View
-          key={r}
-          pointerEvents="box-none"
-          style={[styles.row, r > 0 && { marginTop: -Math.round(cardSizes[size].height * 0.3) }]}
-        >
-          {row.map((pos, c) => {
-            const play = pos === null ? undefined : byPosition[pos];
-            if (pos === null || play === undefined) {
-              return <View key={c} style={slotSize(size, flat)} pointerEvents="none" />;
-            }
-            const own = play.seat === p.mySeat && play.covered ? p.ownCovered : null;
-            const face = parseFace(own ?? play);
-            const who = p.nicknameOf?.(play.seat);
-            const manilha =
-              face !== null &&
-              !play.covered &&
-              (p.manilhas ?? []).some((m) => m.rank === face.rank && m.suit === face.suit);
-            const base = {
-              ...(face !== null ? { rank: face.rank, suit: face.suit } : {}),
-              covered: play.covered,
-              manilha,
-            };
-            const label = cardLabel(base);
-            const cardNode = (
-              <Card
-                size={size}
-                {...base}
-                accessibilityLabel={who !== undefined ? `${who}: ${label}` : label}
-              />
-            );
-            return (
-              <View
-                key={c}
-                style={[
-                  slotSize(size, flat),
-                  { zIndex: order.indexOf(pos) + 1, transform: [{ rotate: `${TILT[pos]}deg` }] },
-                ]}
-              >
-                {p.slideMs !== undefined ? (
-                  <SlideIn
-                    key={`${play.seat}:${play.rank}${play.suit}:${String(play.covered)}`}
-                    pos={pos}
-                    size={size}
-                    ms={p.slideMs}
-                  >
-                    {cardNode}
-                  </SlideIn>
-                ) : (
-                  cardNode
-                )}
-              </View>
-            );
-          })}
-        </View>
-      ))}
+      {layers.map((layer, k) => {
+        const { byPosition, order } = placePlays(layer.plays, p.mySeat);
+        return order.map((pos) => {
+          const play = byPosition[pos];
+          if (play === undefined) return null;
+          const own = play.seat === p.mySeat && play.covered ? (layer.ownCovered ?? null) : null;
+          // Coberta de outro jogador: nunca se lê identidade, mesmo que ela viesse no dado.
+          const face = play.covered ? (own !== null ? parseFace(own) : null) : parseFace(play);
+          const who = p.nicknameOf?.(play.seat);
+          const manilha =
+            face !== null &&
+            !play.covered &&
+            (p.manilhas ?? []).some((m) => m.rank === face.rank && m.suit === face.suit);
+          const base = {
+            ...(face !== null ? { rank: face.rank, suit: face.suit } : {}),
+            covered: play.covered,
+            manilha,
+          };
+          const label = cardLabel(base);
+          const cardNode = (
+            <Card
+              size={size}
+              {...base}
+              accessibilityLabel={who !== undefined ? `${who}: ${label}` : label}
+            />
+          );
+          const off = trickCardOffset(size, arrangement, pos, k);
+          return (
+            <View
+              key={`${k}:${pos}`}
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                left: foot.width / 2 + off.x - cw / 2,
+                top: foot.height / 2 + off.y - ch / 2,
+                width: cw,
+                height: ch,
+                zIndex: k * 8 + order.indexOf(pos) + 1,
+                transform: [{ rotate: `${TILT[pos]}deg` }],
+              }}
+            >
+              {p.slideMs !== undefined ? (
+                <SlideIn
+                  key={`${play.seat}:${play.rank}${play.suit}:${String(play.covered)}`}
+                  pos={pos}
+                  size={size}
+                  ms={p.slideMs}
+                >
+                  {cardNode}
+                </SlideIn>
+              ) : (
+                cardNode
+              )}
+            </View>
+          );
+        });
+      })}
     </View>
   );
 }
@@ -191,9 +218,8 @@ function SlideIn(p: {
 }
 
 /**
- * Centro de cada carta da vaza em relação ao centro da grade de `PlayedCards` (mesma geometria dos
- * slots: margem `spacing.xs`, linhas da cruz sobrepostas em 30% da altura). Serve para o recolher
- * partir exatamente da carta real.
+ * Centro do slot (primeira carta, sem leque) de cada posição, em relação ao centro da caixa de
+ * `PlayedCards`. Na cruz as linhas se sobrepõem em 30% da altura; na fileira cada slot reserva o leque.
  */
 export function trickSlotOffsets(
   size: CardSize,
@@ -201,7 +227,7 @@ export function trickSlotOffsets(
 ): Record<ScreenPosition, { x: number; y: number }> {
   const { width: w, height: h } = cardSizes[size];
   if (arrangement === 'row') {
-    const step = w + 2 * spacing.xs;
+    const step = w + ROW_GAP + (MAX_FAN - 1) * trickFanStep(size, 'row');
     return {
       self: { x: -1.5 * step, y: 0 },
       right: { x: -0.5 * step, y: 0 },
@@ -222,17 +248,37 @@ export function trickSlotOffsets(
   };
 }
 
-/** Inclinação (graus) da carta de cada posição na vaza. */
-export const TRICK_TILT = TILT;
-
-function slotSize(size: CardSize, flat = false) {
-  const d = cardSizes[size];
-  return flat
-    ? { width: d.width, height: d.height, marginHorizontal: spacing.xs }
-    : { width: d.width, height: d.height, margin: spacing.xs };
+/** Largura e altura da caixa de `PlayedCards` (reserva o leque cheio de `MAX_FAN` cartas por jogador). */
+export function trickFootprint(
+  size: CardSize,
+  arrangement: 'cross' | 'row' = 'cross',
+): { width: number; height: number } {
+  const { width: w, height: h } = cardSizes[size];
+  const fan = (MAX_FAN - 1) * trickFanStep(size, arrangement);
+  if (arrangement === 'row') return { width: 4 * (w + ROW_GAP + fan), height: h };
+  const sh = h + 2 * spacing.xs;
+  return {
+    width: 3 * (w + 2 * spacing.xs) + fan,
+    height: 3 * sh - 2 * Math.round(h * 0.3),
+  };
 }
 
-const styles = StyleSheet.create({
-  grid: { alignItems: 'center' },
-  row: { flexDirection: 'row', justifyContent: 'center' },
-});
+/**
+ * Centro da carta da vaza de índice `k` (0 = a primeira da mão) na posição `pos`, em relação ao centro da
+ * caixa. O leque cresce para a direita e fica centrado: a primeira carta fica um passo à esquerda do
+ * slot e a terceira, um passo à direita.
+ */
+export function trickCardOffset(
+  size: CardSize,
+  arrangement: 'cross' | 'row',
+  pos: ScreenPosition,
+  k: number,
+): { x: number; y: number } {
+  const slot = trickSlotOffsets(size, arrangement)[pos];
+  const step = trickFanStep(size, arrangement);
+  const idx = Math.min(Math.max(k, 0), MAX_FAN - 1);
+  return { x: slot.x + (idx - (MAX_FAN - 1) / 2) * step, y: slot.y };
+}
+
+/** Inclinação (graus) da carta de cada posição na vaza. */
+export const TRICK_TILT = TILT;

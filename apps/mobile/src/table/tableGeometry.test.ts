@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardSizes } from '@trucaco/ui';
+import { cardSizes, trickFootprint } from '@trucaco/ui';
 import { SEAT_AVATAR_SIZE, SEAT_AVATAR_TIGHT, TIGHT_LANDSCAPE_HEIGHT } from '../screens/SeatAvatar';
 import { dealTargets, FELT_INSET } from './DealOverlay';
 import {
@@ -9,6 +9,7 @@ import {
   trickFitScale,
   DECK_GROUP_W,
   FELT_PAD,
+  RING_PX,
   NAME_BLOCK,
   STATUS_MIN_W,
   estimateArena,
@@ -124,7 +125,15 @@ describe('retrato baixo (avatar menor, abaixo de SHORT_PHONE_HEIGHT)', () => {
       expect(overlaps(r.deckGroup, r.right, 4)).toBe(false);
       expect(overlaps(r.deckGroup, r.partner, 4)).toBe(false);
       const zones = flexZones(SHORT_AVATAR, true);
-      const fit = trickFitScale(h, zones, cardSizes.sm.height);
+      const foot = trickFootprint('sm', 'cross').width;
+      const box = SHORT_AVATAR + 2 * RING_PX;
+      const fit = trickFitScale(h, zones, cardSizes.sm.height, 1, {
+        arenaW: w,
+        avatarBox: box,
+        footW: foot,
+      });
+      // Largura: a cruz com o leque não encosta nos avatares laterais.
+      expect(foot * fit + 2 * box).toBeLessThanOrEqual(w);
       // A cruz (escalada) cabe na faixa livre entre o parceiro e o meu avatar.
       expect(crossHeight(cardSizes.sm.height) * fit).toBeLessThanOrEqual(
         h - zones.partnerZone - zones.mineZone + 0.5,

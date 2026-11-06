@@ -339,18 +339,46 @@ describe('TableView: 3H2', () => {
   });
 
   it('a última vaza fica na mesa por um instante, com o vencedor', () => {
-    const out = html(snapshot(), {
-      lingering: {
-        plays: [
-          { seat: 0, rank: 'K', suit: 'ouros', covered: false },
-          { seat: 1, rank: '4', suit: 'paus', covered: false },
-        ],
-        winnerSeat: 1,
-        ownCovered: null,
-      },
-    });
+    const plays = [
+      { seat: 0, rank: 'K', suit: 'ouros', covered: false },
+      { seat: 1, rank: '4', suit: 'paus', covered: false },
+    ];
+    // A vaza fechada já está em `hand.tricks` (as cartas ficam na mesa até o fim da mão); o retido só
+    // traz o aviso do vencedor.
+    const out = html(
+      snapshot({
+        hand: { tricks: [{ starter: 0, winnerSeat: 1, winnerTeam: 1, plays }] },
+      }),
+      { lingering: { plays, winnerSeat: 1, ownCovered: null } },
+    );
     expect(out).toContain('rei de ouros');
     expect(out).toContain('Vaza de Bia');
+  });
+
+  it('as cartas de TODAS as vazas da mão ficam na mesa (fechadas e a em curso)', () => {
+    const t1 = [
+      { seat: 0, rank: 'K', suit: 'ouros', covered: false },
+      { seat: 1, rank: '4', suit: 'paus', covered: false },
+    ];
+    const t2 = [
+      { seat: 1, rank: '5', suit: 'espadas', covered: false },
+      { seat: 2, rank: '', suit: '', covered: true },
+    ];
+    const out = html(
+      snapshot({
+        hand: {
+          tricks: [
+            { starter: 0, winnerSeat: 1, winnerTeam: 1, plays: t1 },
+            { starter: 1, winnerSeat: 1, winnerTeam: 1, plays: t2 },
+          ],
+          current: [{ seat: 3, rank: 'A', suit: 'copas', covered: false }],
+        },
+      }),
+    );
+    expect(out).toContain('rei de ouros');
+    expect(out).toContain('quatro de paus');
+    expect(out).toContain('cinco de espadas');
+    expect(out).toContain('ás de copas');
   });
 
   it('votar para cancelar: contagem e estado de "já votou"', () => {

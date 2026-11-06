@@ -130,6 +130,66 @@ describe('TableView: pausa do fim da mão', () => {
     expect(host.querySelector('[aria-label*="cinco de espadas"]')).toBeNull();
   });
 
+  it('na troca de mão as cartas que já estavam na mesa não são remontadas (não deslizam de novo)', () => {
+    const t1 = [
+      { seat: 0, rank: 'K', suit: 'ouros', covered: false },
+      { seat: 1, rank: '4', suit: 'paus', covered: false },
+    ];
+    render(
+      props(
+        snapshot({
+          hand: { tricks: [{ starter: 0, winnerSeat: 1, winnerTeam: 1, plays: t1 }], current: [] },
+        }),
+      ),
+    );
+    const before = host.querySelector('[aria-label*="rei de ouros"]');
+    expect(before).not.toBeNull();
+    render(
+      props(nextHand(), {
+        lingering: {
+          plays: t1,
+          winnerSeat: 1,
+          ownCovered: null,
+          handEnd: true,
+          layers: [{ plays: t1, ownCovered: null }],
+        },
+      }),
+    );
+    expect(host.querySelector('[aria-label*="rei de ouros"]')).toBe(before);
+  });
+
+  it('durante o hold ficam na mesa as cartas de TODAS as vazas da mão que acabou; depois somem', () => {
+    const t1 = [
+      { seat: 0, rank: 'K', suit: 'ouros', covered: false },
+      { seat: 1, rank: '4', suit: 'paus', covered: false },
+    ];
+    const t2 = [
+      { seat: 1, rank: '5', suit: 'espadas', covered: false },
+      { seat: 0, rank: 'A', suit: 'copas', covered: false },
+    ];
+    render(props(hand1));
+    render(
+      props(nextHand(), {
+        lingering: {
+          plays: t2,
+          winnerSeat: 0,
+          ownCovered: null,
+          handEnd: true,
+          layers: [
+            { plays: t1, ownCovered: null },
+            { plays: t2, ownCovered: null },
+          ],
+        },
+      }),
+    );
+    for (const c of ['rei de ouros', 'quatro de paus', 'cinco de espadas', 'ás de copas']) {
+      expect(host.querySelector(`[aria-label*="${c}"]`), c).not.toBeNull();
+    }
+    advance(HAND_HOLD_MS + 5000);
+    expect(host.querySelector('[aria-label*="rei de ouros"]')).toBeNull();
+    expect(host.querySelector('[aria-label*="ás de copas"]')).toBeNull();
+  });
+
   it('cartas do parceiro (onze/dez) não aparecem durante o hold', () => {
     const special = (): unknown =>
       nextHand({

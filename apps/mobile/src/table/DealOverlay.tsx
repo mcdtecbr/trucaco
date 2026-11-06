@@ -8,9 +8,9 @@ import {
   parseFace,
   placePlays,
   screenPosition,
-  trickSlotOffsets,
+  trickCardOffset,
 } from '@trucaco/ui';
-import type { CardSize, PlayedCardView, ScreenPosition } from '@trucaco/ui';
+import type { CardSize, PlayedTrickView, ScreenPosition } from '@trucaco/ui';
 import { COLLECT_FLIP_MS, DEAL_FLIGHT_MS, FLIP_MS, dealDecision, dealPlan } from './dealPlan';
 import type { DealPlan } from './dealPlan';
 
@@ -98,7 +98,10 @@ export function useDealSequence(opts: {
     // `pe` e `mySeat` mudam junto com a mão; a sequência só reinicia quando a mão muda.
   }, [key, enabled]);
 
-  return seq;
+  // No render da troca de mão (antes do layout effect ligar a pausa) a pausa já vale: senão as cartas retidas
+  // da mão que acabou seriam desmontadas por um instante e remontadas deslizando de novo.
+  const changing = prev.current !== null && prev.current !== key && holdMs > 0;
+  return changing ? HOLD : seq;
 }
 
 export interface Point {
@@ -146,7 +149,7 @@ export function DealOverlay({
   mySeat,
   avatarSize = DEFAULT_DEAL_AVATAR,
   deckAt,
-  collectPlays,
+  collectTricks,
   trickSize = 'sm',
   trickRow = false,
   trickCenter,
@@ -167,8 +170,8 @@ export function DealOverlay({
   handCenter?: Point;
   /** Tamanho das cartas da minha mão. */
   handSize?: CardSize;
-  /** Cartas da vaza final (para virar ao recolher); ausentes = só o verso. */
-  collectPlays?: readonly PlayedCardView[];
+  /** Todas as vazas da mão que acabou (para virar ao recolher); ausentes = nada a recolher. */
+  collectTricks?: readonly PlayedTrickView[];
   /** Tamanho das cartas da vaza na mesa (as cartas recolhidas partem dele). */
   trickSize?: CardSize;
   runId: number;
@@ -220,8 +223,16 @@ export function DealOverlay({
   const deck = tg.deck;
   const ready = box.w > 0 && box.h > 0;
   const TRICK = cardSizes[trickSize];
-  const collectByPos = placePlays(collectPlays ?? [], mySeat).byPosition;
-  const trickOffsets = trickSlotOffsets(trickSize, trickRow ? 'row' : 'cross');
+  // Uma entrada por carta jogada na mão (até 12), cada uma na posição real do leque da mesa.
+  const collectCards = (collectTricks ?? []).flatMap((t, k) => {
+    const { byPosition, order } = placePlays(t.plays, mySeat);
+    return order.flatMap((pos) => {
+      const play = byPosition[pos];
+      return play === undefined ? [] : [{ k, pos, play, own: t.ownCovered ?? null }];
+    });
+  });
+  const collectN = collectCards.length;
+  const pileGap = collectN > 4 ? 1.2 : 2;
   const HAND = cardSizes[handSize];
   const shuffleStart = plan.shuffleStartMs;
   const shuffleEnd = plan.shuffleStartMs + plan.shuffleMs;
@@ -272,17 +283,21 @@ export function DealOverlay({
             </Animated.View>
           </Animated.View>
           {plan.collectMs > 0
-            ? (['partner', 'left', 'self', 'right'] as const).map((pos, i) => {
+            ? collectCards.map(({ k, pos, play, own }, i) => {
                 // Parte EXATAMENTE da carta real da vaza (posição, tamanho e inclinação), vira para o
                 // verso ao se juntar numa pilha no centro e já desliza ao monte (movimentos somados: sem
                 // parar na pilha), encolhendo até o tamanho do monte.
-                const play = collectByPos[pos];
-                // Só recolhe cartas que estavam na mesa: nunca inventa uma carta onde não havia.
-                if (play === undefined) return null;
-                const face = play !== undefined && !play.covered ? parseFace(play) : null;
-                const off = trickOffsets[pos];
+                // Só recolhe cartas que estavam na mesa: nunca inventa uma carta onde não havia. A coberta
+                // dos outros sai só com o verso; a minha mostra a face (que só eu conheço) antes de virar.
+                const face = !play.covered
+                  ? parseFace(play)
+                  : play.seat === mySeat && own !== null
+                    ? parseFace(own)
+                    : null;
+                const off = trickCardOffset(trickSize, trickRow ? 'row' : 'cross', pos, k);
                 const center = trickCenter ?? { x: box.w / 2, y: box.h / 2 };
-                const stack = { x: (i - 1.5) * 2, y: (i - 1.5) * -2 };
+                const mid = (collectN - 1) / 2;
+                const stack = { x: (i - mid) * pileGap, y: (i - mid) * -pileGap };
                 const flipEnd = COLLECT_FLIP_MS;
                 const flipMid = COLLECT_FLIP_MS / 2;
                 const pileStart = COLLECT_FLIP_MS - 200;
@@ -325,7 +340,11 @@ export function DealOverlay({
                 );
                 const rot = clock.interpolate({
                   inputRange: [0, flipEnd, pileEnd],
-                  outputRange: [`${TRICK_TILT[pos]}deg`, `${(i - 1.5) * 3}deg`, '0deg'],
+                  outputRange: [
+                    `${TRICK_TILT[pos]}deg`,
+                    `${clamp((i - mid) * 3, -12, 12)}deg`,
+                    '0deg',
+                  ],
                   ...clampOut,
                 });
                 const scale = clock.interpolate({
@@ -355,7 +374,7 @@ export function DealOverlay({
                 });
                 return (
                   <Animated.View
-                    key={`collect-${pos}`}
+                    key={`collect-${k}-${pos}`}
                     style={{
                       position: 'absolute',
                       left: deck.x - TRICK.width / 2,

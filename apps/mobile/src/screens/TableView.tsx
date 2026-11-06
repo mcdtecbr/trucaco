@@ -42,6 +42,7 @@ import {
   ScoreHistoryList,
   ScoreLayers,
   TurnTimer,
+  trickFootprint,
   canCover,
   colors,
   fontSize,
@@ -52,7 +53,8 @@ import {
   spacing,
 } from '@trucaco/ui';
 import type { HandResult, PeekDirection, TableLayout } from '@trucaco/ui';
-import type { SeatView, TableViewModel } from '../table/projectTable';
+import { handLayers } from '../table/projectTable';
+import type { SeatView, TableViewModel, TrickLayer } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
 import type {
   ActiveSignal,
@@ -648,8 +650,17 @@ export function TableView(p: TableViewProps) {
     (lingerByHold && holding ? true : vm.current.length === 0 && !lingerByHold);
   // Durante a distribuição a vaza fica vazia: jogada de bot que chega cedo aparece (deslizando) depois.
   const dealingNow = deal.phase === 'dealing';
-  const trickPlays = dealingNow ? [] : showLinger ? (p.lingering?.plays ?? []) : vm.current;
-  const trickOwn = showLinger ? (p.lingering?.ownCovered ?? null) : vm.ownCoveredCurrent;
+  // Todas as cartas da mão ficam na mesa até o fim dela: vazas fechadas + a em curso. No fim da mão o
+  // servidor já abriu a seguinte, então a pausa e o recolher usam as vazas retidas (`lingering.layers`).
+  const retained: readonly TrickLayer[] | undefined =
+    showLinger && p.lingering?.handEnd === true
+      ? (p.lingering.layers ?? [{ plays: p.lingering.plays, ownCovered: p.lingering.ownCovered }])
+      : undefined;
+  const tableLayers: readonly TrickLayer[] = dealingNow ? [] : (retained ?? handLayers(vm));
+  const latestLayer = tableLayers[tableLayers.length - 1];
+  const earlierLayers = tableLayers.slice(0, -1);
+  const trickPlays = latestLayer?.plays ?? [];
+  const trickOwn = latestLayer?.ownCovered ?? null;
   const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
   const lingerWinner =
     lingerSeat >= 0
@@ -692,13 +703,14 @@ export function TableView(p: TableViewProps) {
   // `undefined` = sem animação (E2E, reduzir movimento). Com `armed` falso o valor é 0: as cartas já
   // presentes na montagem ficam paradas (o `SlideIn` decide só na montagem e a árvore não muda ao armar).
   const slideMs = playSlideMs(p.animateDeal === true, p.reduceMotion, armed);
-  // Vaza final retida na pausa: o recolher a vira para o verso (vem daqui, nunca é recalculada).
-  // Atualizado em efeito (não no render): captura durante a pausa e limpa quando a sequência acaba.
-  const collectPlaysRef = useRef<typeof trickPlays>([]);
+  // Cartas da mão retidas na pausa (todas as vazas): o recolher as vira para o verso (vem daqui, nunca é
+  // recalculado). Atualizado em efeito (não no render): captura durante a pausa e limpa quando a
+  // sequência acaba.
+  const collectRef = useRef<readonly TrickLayer[]>([]);
   useEffect(() => {
-    if (holding && showLinger && trickPlays.length > 0) collectPlaysRef.current = trickPlays;
-    else if (deal.phase === 'idle') collectPlaysRef.current = [];
-  }, [holding, showLinger, trickPlays, deal.phase]);
+    if (holding && showLinger && tableLayers.length > 0) collectRef.current = tableLayers;
+    else if (deal.phase === 'idle') collectRef.current = [];
+  }, [holding, showLinger, tableLayers, deal.phase]);
   // Geometria real para o recolher e a distribuição partirem/chegarem exatamente nas cartas reais:
   // pano (raiz do overlay), vaza e mão medidas na janela, durante a pausa e ao iniciar a sequência.
   const feltRef = useRef<ViewHandle>(null);
@@ -723,6 +735,7 @@ export function TableView(p: TableViewProps) {
     <PlayedCards
       containerRef={trickRef}
       plays={trickPlays}
+      earlier={earlierLayers}
       mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
       ownCovered={trickOwn}
       manilhas={vm.manilhas}
@@ -881,6 +894,11 @@ export function TableView(p: TableViewProps) {
     zones,
     cardSizes[m.played].height,
     m.trickScale,
+    {
+      arenaW: arena?.w ?? est.w,
+      avatarBox: m.avatar + 2 * RING_PX,
+      footW: trickFootprint(m.played, 'cross').width,
+    },
   );
 
   const flexArena = (
@@ -966,7 +984,7 @@ export function TableView(p: TableViewProps) {
           plan={deal.run.plan}
           mySeat={vm.mySeat}
           avatarSize={m.avatar}
-          collectPlays={collectPlaysRef.current}
+          collectTricks={collectRef.current}
           trickSize={m.played}
           trickRow={m.trick === 'row'}
           trickScale={trickFit}

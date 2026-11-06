@@ -33,7 +33,7 @@ import type { ClockOffset } from './clockOffset';
 import { isPresenceStatus, presenceText } from './presence';
 import { HAND_HOLD_MS } from './dealPlan';
 import { actionSignature, projectTable } from './projectTable';
-import type { PlayedView, TableViewModel } from './projectTable';
+import type { PlayedView, TableViewModel, TrickLayer } from './projectTable';
 import type { ChatEntry, LingeringTrick, TableStore, TableStoreState } from './tableStore';
 
 /** Se o estado não reagir à ação em tanto tempo, o botão destrava (mensagem perdida). */
@@ -218,6 +218,35 @@ export function isErrorCode(x: unknown): x is ErrorCode {
 export interface ClosedTrick {
   readonly plays: readonly PlayedView[];
   readonly winnerSeat: number;
+  /** Mão a que a vaza pertence (0/ausente = desconhecida). Uma vaza de mão anterior nunca vale como final. */
+  readonly handNumber?: number;
+  /** Jogo da série (0/ausente = desconhecido): a mão 1 do jogo 2 não é a mão 1 do jogo 1. */
+  readonly gameNumber?: number;
+}
+
+/** Mesmas cartas, nos mesmos assentos e na mesma ordem (a vaza fechada já está em `tricks`). */
+function samePlays(a: readonly PlayedView[], b: readonly PlayedView[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => {
+      const y = b[i];
+      return (
+        y !== undefined &&
+        x.seat === y.seat &&
+        x.covered === y.covered &&
+        // Coberta: o evento da MINHA traz a identidade e `tricks` não; só se compara a face das abertas.
+        (x.covered || (x.rank === y.rank && x.suit === y.suit))
+      );
+    })
+  );
+}
+
+function handChanged(prev: TableViewModel, next: TableViewModel): boolean {
+  return (
+    prev.handNumber !== next.handNumber ||
+    prev.series.gameNumber !== next.series.gameNumber ||
+    (prev.phase === 'playing' && next.phase === 'finished')
+  );
 }
 
 export function lingeringFor(
@@ -225,26 +254,55 @@ export function lingeringFor(
   next: TableViewModel,
   closed: ClosedTrick | null = null,
 ): LingeringTrick | null {
-  if (prev === null || next.current.length > 0) return null;
+  if (prev === null) return null;
   const newHand =
     prev.handNumber !== next.handNumber ||
     prev.series.gameNumber !== next.series.gameNumber ||
     (prev.phase === 'playing' && next.phase === 'finished');
   if (newHand) {
-    // O servidor fecha a mão e abre a seguinte no MESMO patch: a vaza final não está em `tricks` nem
-    // completa em `prev.current` (falta a última carta). Os eventos cardPlayed/trickDecided a trazem inteira.
-    if (closed !== null && closed.plays.length >= prev.current.length && closed.plays.length > 0) {
+    // O servidor fecha a mão e abre a seguinte no MESMO patch (e um bot pode já ter jogado a 1ª carta
+    // dela): a vaza final não está em `tricks` nem completa em `prev.current` (falta a última carta). Os
+    // eventos cardPlayed/trickDecided a trazem inteira. `closed` velho (a mão acabou por correr, sem
+    // carta nova) já está em `prev.tricks` e não vale como vaza final.
+    const lastClosed = prev.tricks[prev.tricks.length - 1];
+    const closedOfThisHand =
+      closed !== null &&
+      (closed.handNumber === undefined ||
+        closed.handNumber === 0 ||
+        closed.handNumber === prev.handNumber) &&
+      (closed.gameNumber === undefined ||
+        closed.gameNumber === 0 ||
+        closed.gameNumber === prev.series.gameNumber);
+    const closedIsNew =
+      closed !== null &&
+      closedOfThisHand &&
+      closed.plays.length > 0 &&
+      closed.plays.length >= prev.current.length &&
+      !(lastClosed !== undefined && samePlays(lastClosed.plays, closed.plays));
+    const finalPlays = closedIsNew ? closed.plays : prev.current;
+    // Mesa inteira da mão que acabou: as vazas fechadas e a final (mesmo parcial, quando a mão acaba por
+    // correr). Tudo isso é público; nada além do que já foi jogado.
+    const layers: TrickLayer[] = prev.tricks.map((t, i) => {
+      const own = prev.ownCoveredByTrick.find((c) => c.trick === i);
       return {
-        plays: closed.plays,
-        winnerSeat: closed.winnerSeat,
-        ownCovered: prev.ownCoveredCurrent,
-        handEnd: true,
+        plays: t.plays,
+        ownCovered: own === undefined ? null : { rank: own.rank, suit: own.suit },
       };
-    }
-    return prev.current.length > 0
-      ? { plays: prev.current, winnerSeat: -1, ownCovered: prev.ownCoveredCurrent, handEnd: true }
-      : null;
+    });
+    if (finalPlays.length > 0)
+      layers.push({ plays: finalPlays, ownCovered: prev.ownCoveredCurrent });
+    const shown = layers.filter((l) => l.plays.length > 0);
+    if (shown.length === 0) return null;
+    return {
+      plays: finalPlays,
+      winnerSeat: closedIsNew ? closed.winnerSeat : -1,
+      ownCovered: prev.ownCoveredCurrent,
+      handEnd: true,
+      handNumber: prev.handNumber,
+      layers: shown,
+    };
   }
+  if (next.current.length > 0) return null;
   if (next.tricks.length <= prev.tricks.length) return null;
   const idx = next.tricks.length - 1;
   const t = next.tricks[idx];
@@ -448,6 +506,8 @@ export function createTableController(opts: TableControllerOptions): TableContro
     }
     const canCover = vm.legalActions.some((id) => parseLegalAction(id)?.kind === 'playCovered');
     const ling = newMatch ? null : lingeringFor(cur.vm, vm, closedTrick);
+    // A vaza final já foi consumida pela troca de mão: não pode reaparecer na mão seguinte.
+    if (cur.vm !== null && handChanged(cur.vm, vm)) closedTrick = null;
     if (ling !== null) {
       clear(lingerTimer);
       lingerTimer = timers.setTimeout(
@@ -605,8 +665,9 @@ export function createTableController(opts: TableControllerOptions): TableContro
           }
         }
         if (e.type === 'handStarted') {
+          // A vaza final da mão que acabou NÃO é esquecida aqui: o servidor manda handStarted ANTES do
+          // patch que troca a mão, e é desse `closedTrick` que sai a 4ª carta da vaza final retida.
           trickPlays = [];
-          closedTrick = null;
         }
         if (e.type === 'cardPlayed') {
           if (trickPlays.length === 0) closedTrick = null;
@@ -621,14 +682,37 @@ export function createTableController(opts: TableControllerOptions): TableContro
           ];
         }
         if (e.type === 'trickDecided') {
-          closedTrick = { plays: trickPlays, winnerSeat: e.winnerSeat ?? -1 };
+          closedTrick = {
+            plays: trickPlays,
+            winnerSeat: e.winnerSeat ?? -1,
+            handNumber,
+            gameNumber: cur.vm?.series.gameNumber ?? 0,
+          };
           trickPlays = [];
           // O patch pode ter chegado antes do evento: completa a vaza já retida.
-          if (cur.lingering !== null && closedTrick.plays.length >= cur.lingering.plays.length) {
+          const sameHand =
+            cur.lingering?.handNumber === undefined ||
+            handNumber === 0 ||
+            cur.lingering.handNumber === handNumber;
+          if (
+            cur.lingering !== null &&
+            sameHand &&
+            closedTrick.plays.length >= cur.lingering.plays.length
+          ) {
+            const lay = cur.lingering.layers;
             patch.lingering = {
               ...cur.lingering,
               plays: closedTrick.plays,
               winnerSeat: closedTrick.winnerSeat,
+              // A vaza final da mão retida também ganha a carta que faltava.
+              ...(lay !== undefined && lay.length > 0 && cur.lingering.plays.length > 0
+                ? {
+                    layers: [
+                      ...lay.slice(0, -1),
+                      { ...lay[lay.length - 1]!, plays: closedTrick.plays },
+                    ],
+                  }
+                : {}),
             };
           }
         }

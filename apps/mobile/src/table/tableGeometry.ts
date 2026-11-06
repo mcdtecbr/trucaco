@@ -3,7 +3,7 @@
  * madeira). So apresentacao: serve para posicionar parceiro, adversarios, vaza, monte (com a vira) e
  * painel de status sem que se sobreponham, e para o teste de nao colisao. Os outros layouts usam flex.
  */
-import { PEEK_PX, SEAT_NAME_GAP, SEAT_NAME_H, cardSizes } from '@trucaco/ui';
+import { PEEK_PX, SEAT_NAME_GAP, SEAT_NAME_H, cardSizes, trickFootprint } from '@trucaco/ui';
 import type { TableLayout } from '@trucaco/ui';
 
 export interface Rect {
@@ -94,8 +94,8 @@ export interface LandscapeGeometry {
   readonly status: Rect;
 }
 
-/** Fileira da vaza: quatro cartas `sm` com margem lateral de 4 px. */
-const TRICK_W = 4 * (cardSizes.sm.width + 8);
+/** Fileira da vaza: quatro slots `sm` (carta, margem de 4 px e o leque das vazas seguintes). */
+const TRICK_W = trickFootprint('sm', 'row').width;
 const TRICK_H = cardSizes.sm.height + WINNER_H;
 /** Largura minima do painel de status (abaixo disso o texto fica ilegivel). */
 export const STATUS_MIN_W = 90;
@@ -307,14 +307,19 @@ export function crossHeight(playedH: number): number {
   return 3 * (playedH + 8) - 2 * Math.round(playedH * 0.3) + WINNER_H;
 }
 
+/**
+ * Escala da cruz da vaza: cabe na altura livre entre o parceiro e meu avatar e, se `width` vier, também
+ * na largura livre entre os avatares laterais (a cruz com o leque é mais larga que a de uma carta só).
+ */
 export function trickFitScale(
   arenaH: number,
   zones: { partnerZone: number; mineZone: number },
   playedH: number,
   base = 1,
+  width?: { arenaW: number; avatarBox: number; footW: number },
 ): number {
-  return Math.min(
-    base,
-    Math.max(0.6, (arenaH - zones.partnerZone - zones.mineZone) / crossHeight(playedH)),
-  );
+  const byH = Math.max(0.6, (arenaH - zones.partnerZone - zones.mineZone) / crossHeight(playedH));
+  const byW =
+    width === undefined ? 1 : Math.max(0.6, (width.arenaW - 2 * width.avatarBox - 8) / width.footW);
+  return Math.min(base, byH, byW);
 }
