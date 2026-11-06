@@ -115,6 +115,21 @@ describe('TableView: pausa do fim da mão', () => {
     expect(cardDisabled()).toBe(false);
   });
 
+  it('bot que já jogou na mão nova durante o hold: a vaza final segue na mesa e a carta nova espera', () => {
+    render(props(hand1));
+    render(
+      props(
+        nextHand({
+          hand: { current: [{ seat: 2, rank: '5', suit: 'espadas', covered: false }] },
+        }),
+        { lingering },
+      ),
+    );
+    expect(host.textContent).toContain('Vaza de Bia');
+    expect(host.querySelector('[aria-label*="rei de ouros"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label*="cinco de espadas"]')).toBeNull();
+  });
+
   it('cartas do parceiro (onze/dez) não aparecem durante o hold', () => {
     const special = (): unknown =>
       nextHand({

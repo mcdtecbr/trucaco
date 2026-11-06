@@ -641,7 +641,11 @@ export function TableView(p: TableViewProps) {
   // no fim da partida a mesa fica por `useFinishHold` e o temporizador do controlador segura a vaza.
   const lingerByHold =
     p.lingering?.handEnd === true && p.animateDeal === true && vm.phase === 'playing';
-  const showLinger = vm.current.length === 0 && p.lingering !== null && (!lingerByHold || holding);
+  // Na pausa a vaza retida fica na mesa mesmo que um bot já tenha jogado a primeira carta da mão nova
+  // (o servidor segue adiante): senão a vaza some antes do recolher e a carta nova aparece cedo.
+  const showLinger =
+    p.lingering !== null &&
+    (lingerByHold && holding ? true : vm.current.length === 0 && !lingerByHold);
   // Durante a distribuição a vaza fica vazia: jogada de bot que chega cedo aparece (deslizando) depois.
   const dealingNow = deal.phase === 'dealing';
   const trickPlays = dealingNow ? [] : showLinger ? (p.lingering?.plays ?? []) : vm.current;
