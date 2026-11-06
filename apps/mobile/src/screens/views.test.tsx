@@ -10,6 +10,22 @@ import type { WaitingRoomViewProps } from './WaitingRoomView';
 import { AvatarPlaceholder, initialOf } from '@trucaco/ui';
 
 const noop = vi.fn();
+function homeOn(): HomeViewProps['on'] {
+  return {
+    dismissLost: noop,
+    dismissResumeNotice: noop,
+    table: noop,
+    create: noop,
+    code: noop,
+    join: noop,
+    queueForm: noop,
+    queueStart: noop,
+    queueCancel: noop,
+    settings: noop,
+    avatar: noop,
+    profile: noop,
+  };
+}
 function home(over: Partial<HomeViewProps> = {}): string {
   const props: HomeViewProps = {
     nickname: 'Zé',
@@ -24,20 +40,7 @@ function home(over: Partial<HomeViewProps> = {}): string {
     busy: 'none',
     error: null,
     retryRemaining: 0,
-    on: {
-      dismissLost: noop,
-      dismissResumeNotice: noop,
-      table: noop,
-      create: noop,
-      code: noop,
-      join: noop,
-      queueForm: noop,
-      queueStart: noop,
-      queueCancel: noop,
-      settings: noop,
-      avatar: noop,
-      profile: noop,
-    },
+    on: homeOn(),
     ...over,
   };
   return renderToStaticMarkup(<HomeView {...props} />);
@@ -192,6 +195,77 @@ describe('WaitingRoomView', () => {
     expect(waiting({ shareFeedback: 'done' })).toContain('Código copiado.');
     expect(waiting({ shareFeedback: 'idle' })).not.toContain('Código copiado.');
     expect(waiting({ shareFeedback: 'failed' })).toContain('Não foi possível copiar');
+  });
+});
+
+describe('WaitingRoomView: bots de vaga', () => {
+  const setBot = vi.fn();
+  const fill = vi.fn();
+  const bots = { errorText: null, on: { setBot, fill } };
+
+  it('host: adicionar em vaga, remover em bot e iniciar com bots (habilitado)', () => {
+    const html = waiting({
+      seats: [seat(0, 'Ana'), seat(1, '', 'empty'), seat(2, 'Bot Zé', 'bot'), seat(3, '', 'empty')],
+      bots,
+    });
+    expect(html).toContain('data-testid="bot-add-1"');
+    expect(html).toContain('data-testid="bot-add-3"');
+    expect(html).toContain('data-testid="bot-remove-2"');
+    expect(html).not.toContain('data-testid="bot-add-0"');
+    expect(html).not.toContain('data-testid="bot-remove-0"');
+    expect(html).toContain('Iniciar com bots nas vagas');
+    expect(html).toMatch(/data-testid="fill-bots"(?![^>]*disabled)/);
+    expect(html).toContain('Partidas com bots não contam para conquistas nem ranking.');
+    expect(html).toContain('Bot');
+  });
+
+  it('iniciar desabilitado sem vaga ou sem humano', () => {
+    const full = waiting({
+      seats: [seat(0, 'Ana'), seat(1, 'B1', 'bot'), seat(2, 'B2', 'bot'), seat(3, 'B3', 'bot')],
+      bots,
+    });
+    expect(full).toMatch(
+      /aria-disabled="true"[^>]*data-testid="fill-bots"|data-testid="fill-bots"[^>]*aria-disabled="true"/,
+    );
+    const noHuman = waiting({
+      seats: [
+        seat(0, '', 'empty'),
+        seat(1, 'B1', 'bot'),
+        seat(2, '', 'empty'),
+        seat(3, '', 'empty'),
+      ],
+      bots,
+    });
+    expect(noHuman).toMatch(
+      /aria-disabled="true"[^>]*data-testid="fill-bots"|data-testid="fill-bots"[^>]*aria-disabled="true"/,
+    );
+  });
+
+  it('não-host não vê controles, mas o aviso aparece se há bot', () => {
+    const html = waiting({
+      seats: [seat(0, 'Ana'), seat(1, 'Bot Zé', 'bot'), seat(2, '', 'empty'), seat(3, '', 'empty')],
+    });
+    expect(html).not.toContain('bot-add-');
+    expect(html).not.toContain('bot-remove-');
+    expect(html).not.toContain('fill-bots');
+    expect(html).toContain('Partidas com bots não contam');
+    expect(waiting()).not.toContain('Partidas com bots não contam');
+  });
+
+  it('mostra o erro de bot do servidor', () => {
+    const html = waiting({
+      bots: { ...bots, errorText: 'Só quem criou a mesa pode mudar os bots.' },
+    });
+    expect(html).toContain('Só quem criou a mesa pode mudar os bots.');
+  });
+});
+
+describe('HomeView: jogar contra bots', () => {
+  it('o atalho só aparece com a ação ligada', () => {
+    expect(home()).not.toContain('play-vs-bots');
+    const html = home({ on: { ...homeOn(), playVsBots: noop } });
+    expect(html).toContain('data-testid="play-vs-bots"');
+    expect(html).toContain('Jogar contra bots');
   });
 });
 

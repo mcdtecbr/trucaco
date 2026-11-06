@@ -532,7 +532,7 @@ export function TableView(p: TableViewProps) {
     fresh: vm.current.length === 0 && vm.tricks.length === 0,
   });
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
-  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}`;
+  const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}|bots=${vm.seats.filter((x) => x.isBot).length}`;
 
   const votes = vm.cancelVotes.length;
   const cancelText = vm.iVotedCancel

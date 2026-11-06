@@ -73,6 +73,12 @@ export interface TableViewModel {
   readonly ironHand: boolean;
   readonly mySeat: number;
   readonly myTeam: 0 | 1;
+  /** Assento do host (`-1` = sem host); só ele mexe nos bots de vaga na espera. */
+  readonly hostSeat: number;
+  /** Eu sou o host (só UX: o servidor valida). */
+  readonly isHost: boolean;
+  /** `private` | `public` | `''`. Bots de vaga só existem em mesa privada. */
+  readonly visibility: string;
   /** Sempre 4 entradas, por assento. */
   readonly seats: readonly SeatView[];
   readonly byPosition: Readonly<Record<ScreenPosition, SeatView>>;
@@ -287,6 +293,7 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
   const series = rec(s['series']);
   const game = rec(s['game']);
   const options = rec(s['options']);
+  const hostSeat = Math.trunc(num(s['hostSeat'], ABSENT));
   const phaseRaw = s['phase'];
   const phase: TablePhase | '' = isTablePhase(phaseRaw) ? phaseRaw : '';
   const rematchVotes = list(s['rematchVotes']).filter((x): x is number => typeof x === 'number');
@@ -301,6 +308,9 @@ export function projectTable(roomState: unknown, mySeat?: number): TableViewMode
     ironHand: bool(options['ironHand']),
     mySeat: me,
     myTeam,
+    hostSeat,
+    isHost: me >= 0 && hostSeat === me,
+    visibility: str(options['visibility']),
     seats,
     byPosition,
     myHand,

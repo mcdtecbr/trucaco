@@ -62,6 +62,7 @@ export function snapshot(
     rematchVotes: [],
     rematchDeadlineAt: 0,
     matchNumber: 1,
+    hostSeat: -1,
     privates: privates ?? {
       '0': {
         seat: 0,

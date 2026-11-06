@@ -4,7 +4,7 @@ import { ERROR_CODES } from './index';
 describe('ErrorCode', () => {
   it('únicos, com os do motor e os do servidor', () => {
     expect(new Set(ERROR_CODES).size).toBe(ERROR_CODES.length);
-    expect(ERROR_CODES).toHaveLength(27);
+    expect(ERROR_CODES).toHaveLength(30);
     for (const c of [
       'GAME_FINISHED',
       'SERIES_FINISHED',
@@ -12,6 +12,9 @@ describe('ErrorCode', () => {
       'RATE_LIMITED',
       'TOKEN_EXPIRED',
       'REMATCH_NOT_AVAILABLE',
+      'NOT_HOST',
+      'BOTS_NOT_ALLOWED',
+      'SEAT_OCCUPIED',
     ]) {
       expect(ERROR_CODES).toContain(c);
     }

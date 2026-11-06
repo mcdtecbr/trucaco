@@ -145,6 +145,15 @@ describe('roomStore e projeção da espera', () => {
     expect(p.seats.map((s) => s.seat)).toEqual([0, 1, 2, 3]);
     expect(p.mySeat).toBe(1);
   });
+  it('projeta hostSeat e visibilidade; ausentes viram -1 e vazio', () => {
+    const p = projectWaiting({ ...json, hostSeat: 0, options: { visibility: 'private' } });
+    expect(p).toMatchObject({ hostSeat: 0, visibility: 'private' });
+    expect(projectWaiting(json)).toMatchObject({ hostSeat: -1, visibility: '' });
+    expect(projectWaiting({ ...json, hostSeat: 'x', options: 3 })).toMatchObject({
+      hostSeat: -1,
+      visibility: '',
+    });
+  });
   it('roomCode inválido (fora do alfabeto, tamanho, tipo) vira vazio', () => {
     for (const bad of ['abc', 'ABCDEFG0', '../admin', 'ABCDEFGHI', 42, null]) {
       expect(projectWaiting({ ...json, roomCode: bad }).roomCode).toBe('');

@@ -929,3 +929,75 @@ describe('4E: sinais', () => {
     expect(ctl.sendSignal('nod')).toBe(false);
   });
 });
+
+describe('bots de vaga', () => {
+  const waitingHost = (over: Record<string, unknown> = {}) =>
+    snapshot({
+      phase: 'waiting',
+      hostSeat: 0,
+      options: { visibility: 'private' },
+      ...over,
+    } as never);
+
+  it('o host envia botSeat e fillBots na espera', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(waitingHost());
+    expect(ctl.setBotSeat(2, true)).toBe(true);
+    expect(ctl.setBotSeat(2, false)).toBe(true);
+    expect(ctl.fillBots()).toBe(true);
+    expect(sent).toEqual([
+      { type: 'botSeat', target: 2, enabled: true },
+      { type: 'botSeat', target: 2, enabled: false },
+      { type: 'fillBots' },
+    ]);
+  });
+
+  it('não envia fora da espera, sem ser host, em mesa pública, sem estado, assento inválido ou sem sala', () => {
+    const none = setup();
+    expect(none.ctl.fillBots()).toBe(false);
+    const playing = setup();
+    playing.ctl.applyState(snapshot({ hostSeat: 0 }));
+    expect(playing.ctl.fillBots()).toBe(false);
+    const guest = setup();
+    guest.ctl.applyState(waitingHost({ hostSeat: 1 }));
+    expect(guest.ctl.setBotSeat(2, true)).toBe(false);
+    const pub = setup();
+    pub.ctl.applyState(waitingHost({ options: { visibility: 'public' } }));
+    expect(pub.ctl.fillBots()).toBe(false);
+    const bad = setup();
+    bad.ctl.applyState(waitingHost());
+    expect(bad.ctl.setBotSeat(7, true)).toBe(false);
+    const off = setup();
+    off.ctl.applyState(waitingHost());
+    off.disconnect();
+    expect(off.ctl.fillBots()).toBe(false);
+    for (const t of [none, playing, guest, pub, bad, off]) expect(t.sent).toEqual([]);
+  });
+
+  it('erros novos do servidor aparecem em errorCode e o próximo envio os limpa', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waitingHost());
+    for (const code of ['NOT_HOST', 'BOTS_NOT_ALLOWED', 'SEAT_OCCUPIED']) {
+      ctl.onServerError({ code });
+      expect(store.getState().errorCode).toBe(code);
+      expect(hasMessage(code)).toBe(true);
+    }
+    ctl.setBotSeat(1, true);
+    expect(store.getState().errorCode).toBeNull();
+  });
+
+  it('com meu assento ainda desconhecido o pedido sai (o servidor valida), sem laço', () => {
+    const { ctl, sent } = setup();
+    ctl.applyState(waitingHost({ privates: {} }));
+    expect(ctl.fillBots()).toBe(true);
+    expect(sent).toEqual([{ type: 'fillBots' }]);
+  });
+
+  it('projeta hostSeat e isHost', () => {
+    const { ctl, store } = setup();
+    ctl.applyState(waitingHost());
+    expect(store.getState().vm).toMatchObject({ hostSeat: 0, isHost: true, visibility: 'private' });
+    ctl.applyState(waitingHost({ hostSeat: 3 }));
+    expect(store.getState().vm).toMatchObject({ hostSeat: 3, isHost: false });
+  });
+});

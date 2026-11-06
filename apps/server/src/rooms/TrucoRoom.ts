@@ -59,6 +59,7 @@ import {
   variantById,
 } from '@trucaco/rules';
 import type {
+  BotProfile,
   GameEvent,
   HandAction,
   PublicGameEvent,
@@ -93,6 +94,7 @@ import { GRANT_KEY, getLobby } from '../lobby/lobby';
 import { onBlockChange, onUserDeleted } from '../social/blockBus';
 import type { Grant } from '../lobby/lobby';
 import { randomRoomCode } from '../lobby/roomCode';
+import { pickBotIdentity } from './botRoster';
 import { DISPOSE_FLUSH_MS, MatchRecorder, flushWithin } from './matchRecorder';
 import type { EndReason } from './matchRecorder';
 import { devReconnectUserId, getRoomAuth, USER_ID_MAX } from './roomAuth';
@@ -121,6 +123,11 @@ export const DEFAULT_FINISH_DELAY_MS = 15_000;
 export const MAX_MESSAGES_PER_SECOND = 30;
 /** Atraso de "pensar" do bot de ausência (para a jogada não ser instantânea). */
 export const DEFAULT_BOT_THINK_MS = 600;
+/** Atraso de "pensar" do bot de VAGA: sorteado nesta faixa (ms), para a jogada parecer humana. */
+export const VACANCY_BOT_THINK_MIN_MS = 900;
+export const VACANCY_BOT_THINK_MAX_MS = 1800;
+/** Séries por sala com bot de vaga (a 1ª mais as revanches); depois, `REMATCH_NOT_AVAILABLE`. */
+export const MAX_BOT_TABLE_MATCHES = 5;
 /** Reconexões (e retomadas por novo join) por assento na partida; acima disso o bot fica com a cadeira. */
 export const DEFAULT_MAX_RECONNECTS = 20;
 /**
@@ -353,6 +360,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private readonly botSeats = new Set<Seat>();
   /** Bots de AUSÊNCIA (humano que caiu): não sinalizam; o assento mantém apelido/avatar do humano. */
   private readonly absenceBotSeats = new Set<Seat>();
+  /**
+   * Bots de VAGA (mesa privada, escolhidos pelo host na espera): também estão em `botSeats`, mas nunca em
+   * `absenceBotSeats` nem em `userBySeat` (não têm `userId`). Sinalizam, aceitam ou correm pela força da mão.
+   */
+  private readonly vacancyBotSeats = new Set<Seat>();
+  /** Assento do host (muda bots na espera); -1 = sem host. Passa ao menor assento humano se ele sair. */
+  private hostSeat = -1;
   /** Assentos com socket caído e janela de reconexão aberta (`allowReconnection`). */
   private readonly droppedSeats = new Set<Seat>();
   /** Assentos expulsos por abuso (strikes): a queda seguinte NÃO abre janela de reconexão. */
@@ -468,7 +482,13 @@ export class TrucoRoom extends Room<{ state: TableState }> {
         (this.reconnectCount.get(seat) ?? 0) < this.maxReconnects()
       );
     }
-    return this.series === null;
+    if (this.series !== null) return false;
+    // Bots de vaga ocupam assento sem contar no `maxClients`: assentos ocupados + reservas pendentes
+    // nunca passam de 4, para o convidado extra ser recusado já na reserva.
+    const now = Date.now();
+    let pendingCount = 0;
+    for (const until of this.pendingReservations.values()) if (until > now) pendingCount++;
+    return this.occupiedSeats() + pendingCount < TABLE_SEATS;
   }
 
   override onCreate(rawOptions: unknown): void {
@@ -608,6 +628,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.bindToTable(auth.userId);
     this.seatBySession.set(client.sessionId, seat);
     this.userBySeat.set(seat, auth.userId);
+    if (this.hostSeat === -1) this.setHost(seat);
     this.lastSeq.set(seat, this.seq);
     this.seatPresence.set(seat, 'online');
     setPlayer(this.state, seat, {
@@ -620,12 +641,57 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     client.view = createSeatView(this.state, seat);
     log.info('truco: jogador sentou', { room: this.roomId, seat });
     this.syncPairs();
-    if (this.userBySeat.size === TABLE_SEATS) {
-      this.lock().catch((err: unknown) => log.error('truco: lock falhou', { err: String(err) }));
+    this.afterOccupancyChange();
+  }
+
+  /** Assentos com gente OU bot de vaga (um assento de ausência continua em `userBySeat`). */
+  private occupiedSeats(): number {
+    let n = this.userBySeat.size;
+    for (const s of this.vacancyBotSeats) if (!this.userBySeat.has(s)) n++;
+    return n;
+  }
+
+  private isOccupied(seat: Seat): boolean {
+    return this.userBySeat.has(seat) || this.vacancyBotSeats.has(seat);
+  }
+
+  private setHost(seat: Seat): void {
+    this.hostSeat = seat;
+    this.state.hostSeat = seat;
+  }
+
+  /** Menor assento humano (o novo host quando o anterior sai na espera), ou -1. */
+  private lowestHumanSeat(): Seat {
+    const seats = this.humanSeats().sort((a, b) => a - b);
+    return seats[0] ?? -1;
+  }
+
+  /**
+   * Na espera, depois de entrar gente ou mudar bots: com os 4 assentos ocupados (humano ou bot) tranca a
+   * sala e agenda o início; senão cancela o início agendado e destranca.
+   */
+  private afterOccupancyChange(): void {
+    if (this.series !== null || this.closing) return;
+    if (this.occupiedSeats() === TABLE_SEATS) {
+      if (!this.locked) {
+        this.lock().catch((err: unknown) => log.error('truco: lock falhou', { err: String(err) }));
+      }
       // Adiado para o próximo tick do relógio: o 4º cliente já terminou de entrar e recebe os
       // primeiros eventos da partida (mensagens enviadas durante o `onJoin` chegam antes de o
       // cliente registrar os handlers). Cancelável: se alguém sai antes do tick, a sala destranca.
-      this.startTimer = this.clock.setTimeout(() => this.startGame(), 0);
+      if (this.startTimer === null) {
+        this.startTimer = this.clock.setTimeout(() => this.startGame(), 0);
+      }
+      return;
+    }
+    if (this.startTimer !== null) {
+      this.startTimer.clear();
+      this.startTimer = null;
+    }
+    if (this.locked) {
+      this.unlock().catch((err: unknown) =>
+        log.error('truco: unlock falhou', { err: String(err) }),
+      );
     }
   }
 
@@ -713,16 +779,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       // Quem sentar depois não herda a expulsão (o ban por `userId` continua em `bannedUsers`).
       this.expelledSeats.delete(seat);
       setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty' });
+      if (this.hostSeat === seat) this.setHost(this.lowestHumanSeat());
       this.syncPairs();
-      if (this.startTimer !== null) {
-        this.startTimer.clear();
-        this.startTimer = null;
-      }
-      if (this.locked) {
-        this.unlock().catch((err: unknown) =>
-          log.error('truco: unlock falhou', { err: String(err) }),
-        );
-      }
+      this.afterOccupancyChange();
       return;
     }
     // Partida em curso: o humano não volta pela janela. O bot assume AGORA (sem esperar 60 s).
@@ -1055,18 +1114,18 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const seats = this.grant?.kind === 'queue' ? this.grant.seats : null;
     if (seats === null) return this.firstFreeSeat();
     const seat = seats.get(userId);
-    return seat !== undefined && !this.userBySeat.has(seat) ? seat : null;
+    return seat !== undefined && !this.isOccupied(seat) ? seat : null;
   }
 
   private firstFreeSeat(): Seat | null {
-    for (let s = 0; s < TABLE_SEATS; s++) if (!this.userBySeat.has(s)) return s;
+    for (let s = 0; s < TABLE_SEATS; s++) if (!this.isOccupied(s)) return s;
     return null;
   }
 
   private startGame(pe: Seat = 0): void {
     this.startTimer = null;
     const options = this.options;
-    if (options === null || this.series !== null || this.userBySeat.size !== TABLE_SEATS) return;
+    if (options === null || this.series !== null || this.occupiedSeats() !== TABLE_SEATS) return;
     const variant = variantById(options.variant);
     const ironHand = options.ironHand;
     const started = startSeries({
@@ -1183,6 +1242,11 @@ export class TrucoRoom extends Room<{ state: TableState }> {
       this.reject(client, 'RATE_LIMITED');
       return;
     }
+    if (msg.type === 'botSeat' || msg.type === 'fillBots') {
+      const code = this.changeBots(seat, msg);
+      if (code !== null) this.reject(client, code);
+      return;
+    }
     if (msg.type === 'voteCancel') {
       const code = this.voteCancel(seat);
       if (code !== null) this.reject(client, code);
@@ -1210,6 +1274,62 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     this.timeouts.set(seat, 0);
     this.refreshPresence(seat);
+  }
+
+  /**
+   * Bots de vaga (`botSeat` e `fillBots`). Ordem das recusas: mesa da fila (`BOTS_NOT_ALLOWED`), quem não é o
+   * host (`NOT_HOST`), fora da espera (`BOTS_NOT_ALLOWED`), assento com humano (`SEAT_OCCUPIED`). Estado
+   * intocado em qualquer recusa. Pôr bot em assento que já é de bot, ou tirar de assento vazio, não faz nada.
+   */
+  private changeBots(
+    seat: Seat,
+    msg: Extract<ClientMessage, { type: 'botSeat' | 'fillBots' }>,
+  ): ErrorCode | null {
+    // Permissão explícita: só mesa privada concedida pelo lobby (nunca por exclusão).
+    if (this.grant?.kind !== 'private' || this.options?.visibility !== 'private') {
+      return 'BOTS_NOT_ALLOWED';
+    }
+    if (seat !== this.hostSeat) return 'NOT_HOST';
+    if (this.series !== null || this.state.phase !== 'waiting' || this.closing) {
+      return 'BOTS_NOT_ALLOWED';
+    }
+    if (msg.type === 'fillBots') {
+      for (let s = 0; s < TABLE_SEATS; s++) if (!this.isOccupied(s)) this.addVacancyBot(s);
+    } else {
+      if (this.userBySeat.has(msg.target)) return 'SEAT_OCCUPIED';
+      if (msg.enabled) {
+        if (!this.vacancyBotSeats.has(msg.target)) this.addVacancyBot(msg.target);
+      } else if (this.vacancyBotSeats.has(msg.target)) {
+        this.removeVacancyBot(msg.target);
+      }
+    }
+    log.info('truco: bots de vaga', { room: this.roomId, bots: this.vacancyBotSeats.size });
+    this.syncPairs();
+    this.afterOccupancyChange();
+    return null;
+  }
+
+  private addVacancyBot(seat: Seat): void {
+    const taken = new Set<string>();
+    for (const s of this.vacancyBotSeats) taken.add(this.state.players[s]?.nickname ?? '');
+    const identity = pickBotIdentity(taken);
+    this.vacancyBotSeats.add(seat);
+    this.botSeats.add(seat);
+    // Sem mensagem `presence` nem entrada em `seatPresence`: o estado já traz `status: 'bot'` e `isBot`.
+    // (`presence 'bot'` é só para bot de AUSÊNCIA, que tinha um humano.)
+    setPlayer(this.state, seat, {
+      nickname: identity.nickname,
+      avatar: identity.avatar,
+      status: 'bot',
+      isBot: true,
+    });
+  }
+
+  private removeVacancyBot(seat: Seat): void {
+    this.vacancyBotSeats.delete(seat);
+    this.botSeats.delete(seat);
+    this.seatPresence.delete(seat);
+    setPlayer(this.state, seat, { nickname: '', avatar: '', status: 'empty', isBot: false });
   }
 
   /** Cooldown por assento: se já passou, registra o instante e devolve true. */
@@ -1563,9 +1683,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
    * humanos conectados. Idempotente, sem "desvoto". Unanimidade dos humanos conectados inicia a revanche.
    */
   private voteRematch(seat: Seat): ErrorCode | null {
-    if (!this.rematchWindowOpen()) return 'REMATCH_NOT_AVAILABLE';
+    if (!this.rematchWindowOpen() || this.rematchBlockedByBots()) return 'REMATCH_NOT_AVAILABLE';
     const voters = this.connectedHumans();
-    if (voters.length < REMATCH_MIN_HUMANS || !voters.includes(seat)) {
+    if (voters.length < this.rematchMinHumans() || !voters.includes(seat)) {
       return 'REMATCH_NOT_AVAILABLE';
     }
     if (!this.rematchVotes.has(seat)) {
@@ -1574,6 +1694,21 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     }
     this.checkRematch();
     return null;
+  }
+
+  /** Com bots de vaga na mesa basta 1 humano conectado; sem eles, `REMATCH_MIN_HUMANS`. */
+  private rematchMinHumans(): number {
+    return this.vacancyBotSeats.size > 0 ? 1 : REMATCH_MIN_HUMANS;
+  }
+
+  /**
+   * Mesa com bot de vaga: sem revanche se algum humano SAIU (assento em bot de ausência, com o `userId` dele)
+   * ou se a sala já jogou `MAX_BOT_TABLE_MATCHES` séries (limita gravação em `matches` por abuso). A
+   * primeira partida nunca é bloqueada. Uso de `REMATCH_NOT_AVAILABLE` (sem código novo).
+   */
+  private rematchBlockedByBots(): boolean {
+    if (this.vacancyBotSeats.size === 0) return false;
+    return this.absenceBotSeats.size > 0 || this.matchNumber >= MAX_BOT_TABLE_MATCHES;
   }
 
   private publishRematchVotes(): void {
@@ -1599,8 +1734,9 @@ export class TrucoRoom extends Room<{ state: TableState }> {
 
   private checkRematch(): void {
     if (this.rematchVotes.size === 0 || !this.rematchWindowOpen()) return;
+    if (this.rematchBlockedByBots()) return;
     const voters = this.connectedHumans();
-    if (voters.length < REMATCH_MIN_HUMANS) return;
+    if (voters.length < this.rematchMinHumans()) return;
     if (!voters.every((s) => this.rematchVotes.has(s))) return;
     this.startRematch();
   }
@@ -1632,7 +1768,8 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     this.reconnectCount.clear(); // cada partida tem o seu teto de reconexões
     for (const s of this.userBySeat.keys()) this.refreshPresence(s);
     // Quem virou bot na janela segue com a cadeira reservada: o dono só reentra em sala destrancada.
-    if (this.botSeats.size > 0 && this.locked) {
+    // Bot de vaga não tem dono: não destranca.
+    if (this.absenceBotSeats.size > 0 && this.locked) {
       this.unlock().catch((err: unknown) =>
         log.error('truco: unlock falhou', { err: String(err) }),
       );
@@ -2043,8 +2180,23 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private armBot(seat: Seat, scheduled: SeriesState): void {
     if (!this.botSeats.has(seat)) return;
     this.botTimer?.clear();
-    const thinkMs = this.config.botThinkMs ?? DEFAULT_BOT_THINK_MS;
-    this.botTimer = this.clock.setTimeout(() => this.onBotTurn(seat, scheduled), thinkMs);
+    this.botTimer = this.clock.setTimeout(
+      () => this.onBotTurn(seat, scheduled),
+      this.thinkMs(seat),
+    );
+  }
+
+  /** Atraso de pensar: teste/servidor fixa por `botThinkMs`; senão vaga sorteia 900 a 1800 ms, ausência 600. */
+  private thinkMs(seat: Seat): number {
+    if (this.config.botThinkMs !== undefined) return this.config.botThinkMs;
+    if (!this.vacancyBotSeats.has(seat)) return DEFAULT_BOT_THINK_MS;
+    const span = VACANCY_BOT_THINK_MAX_MS - VACANCY_BOT_THINK_MIN_MS;
+    return VACANCY_BOT_THINK_MIN_MS + Math.floor(Math.random() * (span + 1));
+  }
+
+  /** Perfil do motor: bot de vaga decide aposta pela mão; ausência e jogada por prazo sempre correm. */
+  private profileOf(seat: Seat): BotProfile {
+    return this.vacancyBotSeats.has(seat) ? 'vacancy' : 'absence';
   }
 
   /**
@@ -2056,7 +2208,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
     const series = this.series;
     if (this.closing || series === null || series !== scheduled || isSeriesOver(series)) return;
     if (!this.botSeats.has(seat) || !pendingSeats(series).includes(seat)) return;
-    const action = botAction(series, seat, this.rng);
+    const action = botAction(series, seat, this.rng, this.profileOf(seat));
     if (action === null) {
       log.error('truco: bot sem ação', { room: this.roomId, seat });
       return;
@@ -2080,7 +2232,7 @@ export class TrucoRoom extends Room<{ state: TableState }> {
   private autoPlay(seat: Seat): void {
     const series = this.series;
     if (series === null || isSeriesOver(series)) return;
-    const action = botAction(series, seat, this.rng);
+    const action = botAction(series, seat, this.rng, this.profileOf(seat));
     if (action === null) {
       log.error('truco: bot sem ação no timeout', { room: this.roomId, seat });
       return;

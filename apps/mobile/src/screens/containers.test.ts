@@ -8,7 +8,7 @@ import { outcomeFromShareAction } from '../platform/shareOutcome';
 import { performLogout } from '../lobby/logout';
 import { prefillCode, startHome } from '../lobby/homeLifecycle';
 import { createLobbyStore } from '../store/lobbyStore';
-import { decideWaitingRoute, exitTable } from './waitingRoute';
+import { canManageBots, decideWaitingRoute, exitTable } from './waitingRoute';
 
 describe('HomeScreen: ciclo de vida e deep link', () => {
   it('ao montar limpa erro/aviso e o cleanup faz dispose (sai da fila)', () => {
@@ -122,5 +122,15 @@ describe('SettingsScreen: logout', () => {
     d.logout = () => Promise.reject(new Error('x'));
     await expect(performLogout(d)).rejects.toThrow();
     expect(order).toContain('reset');
+  });
+});
+
+describe('controles de bots da sala de espera', () => {
+  it('só o host de mesa privada os vê', () => {
+    expect(canManageBots({ mySeat: 0, hostSeat: 0, visibility: 'private' })).toBe(true);
+    expect(canManageBots({ mySeat: 1, hostSeat: 0, visibility: 'private' })).toBe(false);
+    expect(canManageBots({ mySeat: 0, hostSeat: 0, visibility: 'public' })).toBe(false);
+    expect(canManageBots({ mySeat: 0, hostSeat: 0, visibility: '' })).toBe(false);
+    expect(canManageBots({ mySeat: -1, hostSeat: -1, visibility: 'private' })).toBe(false);
   });
 });

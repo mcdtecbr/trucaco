@@ -17,7 +17,15 @@ describe('parseClientMessage válidas', () => {
     ok({ type: 'play', card }, { type: 'play', card });
     ok({ type: 'play', card, covered: true }, { type: 'play', card, covered: true });
     ok({ type: 'playBlind', index: 0 }, { type: 'playBlind', index: 0 });
-    for (const type of ['bet', 'accept', 'run', 'voteCancel', 'voteRematch', 'ready'] as const) {
+    for (const type of [
+      'bet',
+      'accept',
+      'run',
+      'voteCancel',
+      'voteRematch',
+      'ready',
+      'fillBots',
+    ] as const) {
       ok({ type }, { type });
       bad({ type, extra: 1 });
     }
@@ -235,5 +243,30 @@ describe('setCode (combinado da dupla)', () => {
     bad({ type: 'setCode', signalId: 7, meaning: 'x' });
     bad({ type: 'setCode', signalId: 'wink', meaning: 'x', seat: 1 });
     bad({ type: 'setCode', signalId: '__proto__', meaning: 'x' });
+  });
+});
+
+describe('botSeat e fillBots (bots de vaga)', () => {
+  it('aceita botSeat com target 0..3 e enabled booleano', () => {
+    for (const target of [0, 1, 2, 3]) {
+      ok({ type: 'botSeat', target, enabled: true }, { type: 'botSeat', target, enabled: true });
+    }
+    ok(
+      { type: 'botSeat', target: 2, enabled: false },
+      { type: 'botSeat', target: 2, enabled: false },
+    );
+  });
+
+  it('rejeita seat, campos extras, target fora de 0..3 e tipos errados', () => {
+    bad({ type: 'botSeat', seat: 1, target: 2, enabled: true });
+    bad({ type: 'botSeat', target: 2, enabled: true, extra: 1 });
+    bad({ type: 'botSeat', target: 4, enabled: true });
+    bad({ type: 'botSeat', target: -1, enabled: true });
+    bad({ type: 'botSeat', target: 1.5, enabled: true });
+    bad({ type: 'botSeat', target: '1', enabled: true });
+    bad({ type: 'botSeat', target: 1, enabled: 1 });
+    bad({ type: 'botSeat', target: 1 });
+    bad({ type: 'botSeat', enabled: true });
+    bad({ type: 'fillBots', target: 1 });
   });
 });

@@ -88,6 +88,9 @@ const MESSAGES: Readonly<Record<string, string>> = {
   CHAT_BLOCKED: 'Mensagem não enviada.',
   CODE_NOT_SAVED: 'O combinado não foi salvo; vale só nesta mesa.',
   REMATCH_NOT_AVAILABLE: 'A revanche não está disponível.',
+  NOT_HOST: 'Só quem criou a mesa pode mudar os bots.',
+  BOTS_NOT_ALLOWED: 'Esta mesa não aceita bots.',
+  SEAT_OCCUPIED: 'Este assento está ocupado por um jogador.',
   ROOM_NOT_FOUND: 'A mesa não existe mais.',
   TOKEN_EXPIRED: 'Sua sessão expirou. Entre de novo.',
   // Só do cliente

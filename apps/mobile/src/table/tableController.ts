@@ -177,6 +177,13 @@ export interface TableController {
   voteCancel(): boolean;
   /** Voto "Jogar de novo": só com a janela de revanche aberta e uma vez por partida. */
   voteRematch(): boolean;
+  /**
+   * Bots de vaga (só UX; o servidor valida): põe (`true`) ou tira (`false`) um bot no assento livre.
+   * `false` = fora da espera, não sou o host ou sem sala (nada sai). Erros do servidor vão para `errorCode`.
+   */
+  setBotSeat(seat: number, enabled: boolean): boolean;
+  /** Host: preenche as vagas com bots e a partida começa. `false` = nada enviado. */
+  fillBots(): boolean;
   /** Valida com o protocol e envia. `false` = recusado (erro em `chatError`) ou sem sala. */
   sendChat(scope: ChatScope, text: string): boolean;
   sendPhrase(scope: ChatScope, phraseId: string): boolean;
@@ -528,6 +535,18 @@ export function createTableController(opts: TableControllerOptions): TableContro
   /** Durante a partida só existe o chat da mesa; o da dupla é da sala de espera (o servidor também recusa). */
   function partnerChatClosed(scope: string): boolean {
     return scope === 'partner' && store.getState().vm?.phase === 'playing';
+  }
+
+  /**
+   * Só na espera e sem contradizer o que já se sabe (mesa pública, outro host). Estado ainda desconhecido
+   * deixa passar: o servidor decide (NOT_HOST etc. voltam em `errorCode`).
+   */
+  function canManageBots(): boolean {
+    const vm = store.getState().vm;
+    if (vm === null || vm.phase !== 'waiting') return false;
+    if (vm.visibility === 'public') return false;
+    // Meu assento ainda desconhecido (primeiro estado sem `privates`): não barra, o servidor valida.
+    return vm.hostSeat < 0 || vm.mySeat < 0 || vm.isHost;
   }
 
   function sendParsed(message: unknown): boolean {
@@ -952,6 +971,23 @@ export function createTableController(opts: TableControllerOptions): TableContro
       rematchSentFor = vm.matchNumber;
       store.getState().patch({ errorCode: null });
       lastSend = 'rematch';
+      return true;
+    },
+
+    setBotSeat(seat, enabled) {
+      if (!canManageBots()) return false;
+      const parsed = parseClientMessage({ type: 'botSeat', target: seat, enabled });
+      if (!parsed.ok || !opts.send(parsed.message)) return false;
+      lastSend = 'other';
+      store.getState().patch({ errorCode: null });
+      return true;
+    },
+
+    fillBots() {
+      if (!canManageBots()) return false;
+      if (!opts.send({ type: 'fillBots' })) return false;
+      lastSend = 'other';
+      store.getState().patch({ errorCode: null });
       return true;
     },
 
