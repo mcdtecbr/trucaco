@@ -13,7 +13,7 @@ Cada avatar tem uma **voz**, escolhida no criador de avatar e salva em `AvatarPa
 | Masculina | `masc_1` a `masc_5` | 5 vozes            | `masc_1`            |
 | Feminina  | `fem_1` a `fem_4`   | 4 vozes            | `fem_1`             |
 
-Vozes de lançamento (Gemini TTS, modelo `gemini-3.8-flash-tts`; o nome do fornecedor fica só aqui e em `assets/audio/LICENSES.md`, nunca no protocolo): `masc_1` Puck, `masc_2` Schedar, `masc_3` Zubenelgenubi, `masc_4` Sadaltager, `masc_5` Fenrir, `fem_1` Autonoe, `fem_2` Aoede, `fem_3` Despina, `fem_4` Zephyr. Licença de uso comercial do áudio gerado **ainda não confirmada**. Voz sem arquivo toca a primeira do mesmo grupo que tem arquivo, e a tela de som mostra "em breve".
+Vozes de lançamento (Gemini TTS, modelo `gemini-3.8-flash-tts`; o nome do fornecedor fica só aqui e em `assets/audio/LICENSES.md`, nunca no protocolo): `masc_1` Puck, `masc_2` Schedar, `masc_3` Zubenelgenubi, `masc_4` Sadaltager, `masc_5` Fenrir, `fem_1` Autonoe, `fem_2` Aoede, `fem_3` Despina, `fem_4` Zephyr. Uso comercial do áudio gerado confirmado em 2026-11-06 (termos a registrar em `assets/audio/LICENSES.md`). Voz sem arquivo toca a primeira do mesmo grupo que tem arquivo, e a tela de som mostra "em breve".
 
 Cada voz tem os mesmos eventos, para qualquer avatar poder usar qualquer voz.
 
