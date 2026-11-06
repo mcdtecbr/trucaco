@@ -15,6 +15,8 @@ export interface LingeringTrick {
   readonly plays: TableViewModel['current'];
   readonly winnerSeat: number;
   readonly ownCovered: { readonly rank: string; readonly suit: string } | null;
+  /** A vaza fechou a mão (ou a partida): a tela a segura pela pausa do fim da mão, antes de recolher. */
+  readonly handEnd?: boolean;
 }
 
 /** Mensagem de chat recebida. `text` é sempre exibido como `<Text>` (nunca HTML). */

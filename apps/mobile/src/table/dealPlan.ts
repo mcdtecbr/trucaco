@@ -15,6 +15,20 @@ export const DEAL_STEP_MS = 70;
 /** Duração do voo de uma carta até o assento. */
 export const DEAL_FLIGHT_MS = 260;
 
+/** Pausa no fim da mão: a última carta e a vaza ficam na mesa, legíveis, antes de recolher ao monte. */
+export const HAND_HOLD_MS = 2200;
+/** Mesma pausa com "reduzir movimento" (sem animação, mas ainda precisa dar para ler). */
+export const HAND_HOLD_REDUCED_MS = 1500;
+
+/**
+ * Pausa de apresentação do fim da mão/partida. `animate` falso (E2E, testes) = nenhuma pausa; com reduzir
+ * movimento a pausa é menor. É só apresentação: o servidor já decidiu e o estado novo já chegou.
+ */
+export function handHoldMs(animate: boolean, reduceMotion: boolean): number {
+  if (!animate) return 0;
+  return reduceMotion ? HAND_HOLD_REDUCED_MS : HAND_HOLD_MS;
+}
+
 export interface DealCard {
   readonly seat: number;
   /** 0, 1 ou 2: a rodada de distribuição. */

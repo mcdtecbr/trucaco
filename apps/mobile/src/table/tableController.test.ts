@@ -5,6 +5,7 @@ import { errorMessage, hasMessage } from '../i18n/errors';
 import { snapshot, priv, player } from './snapshotFixtures';
 import {
   BUSY_TIMEOUT_MS,
+  HAND_LINGER_MS,
   LINGER_MS,
   PRESENCE_NOTE_MS,
   REPLAY_MIN_AGE_MS,
@@ -633,6 +634,46 @@ describe('rodada de correção 3H2: última vaza da mão', () => {
     ev(5, { type: 'trickDecided', index: 2, winnerSeat: 1, winnerTeam: 1 });
     expect(h.store.getState().lingering?.plays).toHaveLength(4);
     expect(h.store.getState().lingering?.winnerSeat).toBe(1);
+  });
+});
+
+describe('pausa do fim da mão', () => {
+  const four = [
+    { seat: 0, rank: '4', suit: 'paus', covered: false },
+    { seat: 1, rank: '5', suit: 'ouros', covered: false },
+    { seat: 2, rank: '6', suit: 'copas', covered: false },
+    { seat: 3, rank: '7', suit: 'ouros', covered: false },
+  ];
+
+  it('vaza que fecha a mão fica HAND_LINGER_MS (maior que a vaza comum)', () => {
+    expect(HAND_LINGER_MS).toBeGreaterThan(LINGER_MS);
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { current: four } }));
+    h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { current: [] } }));
+    expect(h.store.getState().lingering?.handEnd).toBe(true);
+    h.fire(LINGER_MS);
+    expect(h.store.getState().lingering).not.toBeNull();
+    h.fire(HAND_LINGER_MS);
+    expect(h.store.getState().lingering).toBeNull();
+  });
+
+  it('fim da partida: a última vaza também é retida', () => {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { current: four } }));
+    h.ctl.applyState(snapshot({ phase: 'finished', hand: { current: [] } }));
+    expect(h.store.getState().lingering?.plays).toHaveLength(4);
+    expect(h.store.getState().lingering?.handEnd).toBe(true);
+  });
+
+  it('vaza comum dentro da mão não é de fim de mão', () => {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { current: four } }));
+    h.ctl.applyState(
+      snapshot({
+        hand: { current: [], tricks: [{ plays: four, winnerSeat: 3, starter: 0, winnerTeam: 1 }] },
+      }),
+    );
+    expect(h.store.getState().lingering?.handEnd).not.toBe(true);
   });
 });
 

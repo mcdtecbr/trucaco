@@ -13,6 +13,7 @@ interface Props {
   key2: string;
   enabled?: boolean;
   fresh?: boolean;
+  holdMs?: number;
 }
 
 let root: Root;
@@ -26,6 +27,7 @@ function Probe(p: Props) {
     pe: 0,
     mySeat: 0,
     fresh: p.fresh ?? true,
+    holdMs: p.holdMs ?? 0,
   });
   return null;
 }
@@ -43,6 +45,63 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   vi.useRealTimers();
+});
+
+describe('useDealSequence: pausa do fim da mão', () => {
+  it('troca de mão com pausa: segura (mão nova escondida), depois recolhe e distribui', () => {
+    render({ key2: '1:1', holdMs: 2200 });
+    advance(plan.endMs + 60);
+    render({ key2: '1:2', holdMs: 2200 });
+    expect(last.phase).toBe('hold');
+    expect(last.run).toBeNull();
+    expect(last.handHidden).toBe(true);
+    expect(last.viraHidden).toBe(true);
+    advance(2199);
+    expect(last.phase).toBe('hold');
+    advance(1);
+    expect(last.phase).toBe('dealing');
+    expect(last.run?.plan.collectMs).toBeGreaterThan(0);
+    advance(planCollect.selfLandedMs);
+    expect(last.phase).toBe('vira');
+    advance(planCollect.endMs);
+    expect(last.phase).toBe('idle');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sem pausa (holdMs 0, E2E): recolhe na hora', () => {
+    render({ key2: '1:1' });
+    advance(plan.endMs + 60);
+    render({ key2: '1:2' });
+    expect(last.phase).toBe('dealing');
+  });
+
+  it('reduzir movimento (enabled falso): pausa e volta ao normal sem animar', () => {
+    render({ key2: '1:1', enabled: false, holdMs: 1500 });
+    expect(last.phase).toBe('idle');
+    render({ key2: '1:2', enabled: false, holdMs: 1500 });
+    expect(last.phase).toBe('hold');
+    advance(1500);
+    expect(last.phase).toBe('idle');
+    expect(last.handHidden).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('primeira leitura (reconexão) não faz pausa', () => {
+    render({ key2: '1:3', fresh: false, holdMs: 2200 });
+    expect(last.phase).toBe('idle');
+  });
+
+  it('nova troca durante a pausa reinicia a pausa', () => {
+    render({ key2: '1:1', holdMs: 2200 });
+    advance(plan.endMs + 60);
+    render({ key2: '1:2', holdMs: 2200 });
+    advance(1000);
+    render({ key2: '1:3', holdMs: 2200 });
+    advance(1500);
+    expect(last.phase).toBe('hold');
+    advance(700);
+    expect(last.phase).toBe('dealing');
+  });
 });
 
 describe('useDealSequence', () => {

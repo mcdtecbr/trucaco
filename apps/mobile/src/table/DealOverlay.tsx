@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
 import { Card, cardSizes, screenPosition } from '@trucaco/ui';
@@ -12,7 +12,7 @@ import type { DealPlan } from './dealPlan';
  * servidor e esta camada só desenha. Um único `Animated.Value` (relógio em ms) guia todas as cartas.
  */
 
-export type DealPhase = 'idle' | 'dealing' | 'vira';
+export type DealPhase = 'idle' | 'hold' | 'dealing' | 'vira';
 
 export interface DealSequence {
   readonly phase: DealPhase;
@@ -24,6 +24,8 @@ export interface DealSequence {
   readonly viraHidden: boolean;
 }
 
+/** Pausa do fim da mão: a mão nova já está no estado, mas não aparece nem aceita jogada. */
+const HOLD: DealSequence = { phase: 'hold', run: null, handHidden: true, viraHidden: true };
 const IDLE: DealSequence = { phase: 'idle', run: null, handHidden: false, viraHidden: false };
 
 /**
@@ -38,32 +40,53 @@ export function useDealSequence(opts: {
   mySeat: number;
   /** A mão acabou de começar (sem vazas e sem jogadas); falso em reconexão no meio da mão. */
   fresh?: boolean;
+  /**
+   * Pausa, em ms, antes de recolher quando a mão troca por outra (o fim da mão fica legível na mesa).
+   * 0 (padrão) = sem pausa. Vale mesmo com `enabled` falso (reduzir movimento): só não anima depois.
+   */
+  holdMs?: number;
 }): DealSequence {
   const { key, enabled, pe, mySeat } = opts;
+  const holdMs = opts.holdMs ?? 0;
   const fresh = opts.fresh ?? true;
   const prev = useRef<string | null>(null);
   const runId = useRef(0);
   const [seq, setSeq] = useState<DealSequence>(IDLE);
 
-  useEffect(() => {
+  // Layout effect: a mão nova nunca chega a ser pintada antes da pausa.
+  useLayoutEffect(() => {
+    const changed = prev.current !== null && prev.current !== key;
     const decision = dealDecision(prev.current, key, enabled, fresh);
     prev.current = key;
-    if (!decision.animate || mySeat < 0) {
+    const hold = changed && holdMs > 0 ? holdMs : 0;
+    if (!decision.animate && hold === 0) {
       setSeq(IDLE);
       return undefined;
     }
-    const plan = dealPlan({ pe, mySeat, collect: decision.collect });
-    const run = { id: ++runId.current, plan };
-    setSeq({ phase: 'dealing', run, handHidden: true, viraHidden: true });
-    const t1 = setTimeout(
-      () => setSeq({ phase: 'vira', run, handHidden: false, viraHidden: true }),
-      plan.selfLandedMs,
-    );
-    const t2 = setTimeout(() => setSeq(IDLE), plan.endMs + 50);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const begin = (): void => {
+      if (!decision.animate || mySeat < 0) {
+        setSeq(IDLE);
+        return;
+      }
+      const plan = dealPlan({ pe, mySeat, collect: decision.collect });
+      const run = { id: ++runId.current, plan };
+      setSeq({ phase: 'dealing', run, handHidden: true, viraHidden: true });
+      timers.push(
+        setTimeout(
+          () => setSeq({ phase: 'vira', run, handHidden: false, viraHidden: true }),
+          plan.selfLandedMs,
+        ),
+        setTimeout(() => setSeq(IDLE), plan.endMs + 50),
+      );
     };
+    if (hold > 0) {
+      setSeq(HOLD);
+      timers.push(setTimeout(begin, hold));
+    } else {
+      begin();
+    }
+    return () => timers.forEach(clearTimeout);
     // `pe` e `mySeat` mudam junto com a mão; a sequência só reinicia quando a mão muda.
   }, [key, enabled]);
 

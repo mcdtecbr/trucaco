@@ -13,6 +13,8 @@ import { captureBaseline, startGainWatch } from '../room/achievementWatch';
 import { progressStore, useProgressStore } from '../store/progressStore';
 import { useRoomStore } from '../store/roomStore';
 import { selectProvider, useSessionStore } from '../store/sessionStore';
+import { handHoldMs } from '../table/dealPlan';
+import { useFinishHold } from '../table/useFinishHold';
 import { effectiveDeadline, useTableStore } from '../table/tableStore';
 import {
   connectionBanner,
@@ -193,7 +195,12 @@ function JoinedTable() {
       }
     : null;
 
-  const view = roomViewFor(tablePhase);
+  // Fim da partida: a mesa fica o tempo de ler a última vaza antes da tela de resultado.
+  const skipHold = useTableStore(
+    (st) => (st.vm?.series.winnerTeam ?? -1) < 0 || st.lingering?.handEnd !== true,
+  );
+  const shownPhase = useFinishHold(tablePhase, handHoldMs(!isE2EMode(), reduceMotion), skipHold);
+  const view = roomViewFor(shownPhase);
   let body;
   if (view === 'playing') body = <PlayingTable onLeave={leave} />;
   else if (view === 'finished') body = <FinishedTable onLeave={leave} />;
