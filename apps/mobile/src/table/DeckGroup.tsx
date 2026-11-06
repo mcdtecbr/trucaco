@@ -1,5 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { Card, cardName, parseFace } from '@trucaco/ui';
+import { FLIP_MS } from './dealPlan';
+import { FlipReveal } from './FlipReveal';
 import {
   DECK_GROUP_H,
   DECK_GROUP_W,
@@ -17,6 +19,8 @@ export interface DeckGroupProps {
   manilhaLabel?: string | undefined;
   /** A vira aparece so depois de distribuir (e some quando as cartas voltam ao monte). */
   viraHidden: boolean;
+  /** A vira aparece com um flip curto (só quando a mesa anima a distribuição). */
+  flipVira?: boolean;
 }
 
 /**
@@ -47,7 +51,9 @@ export function DeckGroup(p: DeckGroupProps) {
           ]}
           testID="vira-card"
         >
-          <Card size="sm" rank={face.rank} suit={face.suit} accessibilityLabel="Vira" />
+          <FlipReveal shown={showVira} animate={p.flipVira === true} ms={FLIP_MS}>
+            <Card size="sm" rank={face.rank} suit={face.suit} accessibilityLabel="Vira" />
+          </FlipReveal>
         </View>
       ) : null}
       <View style={styles.deck} testID="deck-stack">

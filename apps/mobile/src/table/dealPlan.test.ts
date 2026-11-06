@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   CARDS_PER_SEAT,
+  COLLECT_FLIP_MS,
   COLLECT_MS,
+  COLLECT_PILE_MS,
   DEAL_FLIGHT_MS,
   DEAL_STEP_MS,
+  DEAL_OVERLAP_MS,
   SHUFFLE_MS,
+  SHUFFLE_OVERLAP_MS,
   dealDecision,
   dealPlan,
   dealSeatOrder,
   handHoldMs,
+  PLAY_SLIDE_MS,
+  playSlideMs,
 } from './dealPlan';
 
 describe('dealSeatOrder', () => {
@@ -27,7 +33,7 @@ describe('dealPlan', () => {
     expect(p.cards.map((c) => c.round)).toEqual([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]);
     const starts = p.cards.map((c) => c.startMs);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
-    expect(starts[0]).toBe(SHUFFLE_MS);
+    expect(starts[0]).toBe(SHUFFLE_MS - DEAL_OVERLAP_MS);
     expect(starts[1]! - starts[0]!).toBe(DEAL_STEP_MS);
   });
 
@@ -35,10 +41,22 @@ describe('dealPlan', () => {
     const a = dealPlan({ pe: 0, mySeat: 3, collect: false });
     const b = dealPlan({ pe: 0, mySeat: 3, collect: true });
     expect(b.collectMs).toBe(COLLECT_MS);
-    expect(b.endMs - a.endMs).toBe(COLLECT_MS);
+    expect(b.endMs - a.endMs).toBe(COLLECT_MS - SHUFFLE_OVERLAP_MS);
+    // As fases se sobrepõem: o balanço começa antes do fim do recolher e a 1ª carta antes do fim do balanço.
+    expect(b.shuffleStartMs).toBeLessThan(b.collectMs);
+    expect(b.cards[0]!.startMs).toBeLessThan(b.shuffleStartMs + b.shuffleMs);
     // Assento 3 é o terceiro a receber em cada rodada: a última carta dele pousa antes da do pé.
     expect(b.selfLandedMs).toBeLessThan(b.endMs);
     expect(b.endMs).toBe(b.cards[11]!.startMs + DEAL_FLIGHT_MS);
+  });
+
+  it('tempos: recolher em duas partes, 2 a 3 cartas em voo, distribuição em cerca de 3 s', () => {
+    expect(COLLECT_MS).toBe(COLLECT_FLIP_MS + COLLECT_PILE_MS);
+    expect(DEAL_FLIGHT_MS / DEAL_STEP_MS).toBeGreaterThanOrEqual(1.5);
+    expect(DEAL_FLIGHT_MS / DEAL_STEP_MS).toBeLessThanOrEqual(3);
+    const p = dealPlan({ pe: 0, mySeat: 0, collect: false });
+    expect(p.endMs - p.cards[0]!.startMs).toBeGreaterThanOrEqual(2500);
+    expect(p.endMs - p.cards[0]!.startMs).toBeLessThanOrEqual(3500);
   });
 
   it('pé desconhecido não quebra', () => {
@@ -56,6 +74,15 @@ describe('dealDecision', () => {
     expect(dealDecision(null, '1:1', true)).toEqual({ animate: true, collect: false });
     expect(dealDecision(null, '1:1', true, false)).toEqual({ animate: false, collect: false });
     expect(dealDecision('1:1', '1:2', true)).toEqual({ animate: true, collect: true });
+  });
+});
+
+describe('playSlideMs', () => {
+  it('E2E e reduzir movimento não passam deslize; antes de armar vale 0', () => {
+    expect(playSlideMs(false, false, true)).toBeUndefined();
+    expect(playSlideMs(true, true, true)).toBeUndefined();
+    expect(playSlideMs(true, false, false)).toBe(0);
+    expect(playSlideMs(true, false, true)).toBe(PLAY_SLIDE_MS);
   });
 });
 

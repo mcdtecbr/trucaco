@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { HandFan } from './HandFan';
-import { PlayedCards, placePlays } from './PlayedCards';
+import { PlayedCards, placePlays, slideFrom } from './PlayedCards';
 import { blindActions, canCover, handCardViews } from './handActions';
 
 const HAND = [
@@ -126,5 +126,30 @@ describe('placePlays / PlayedCards', () => {
     expect(renderToStaticMarkup(<PlayedCards plays={[]} mySeat={0} />)).toContain(
       'Nenhuma carta na mesa',
     );
+  });
+});
+
+describe('slideFrom / PlayedCards slideMs', () => {
+  it('a carta parte do lado do assento do jogador', () => {
+    expect(slideFrom('self', 64, 90).y).toBeGreaterThan(0);
+    expect(slideFrom('partner', 64, 90).y).toBeLessThan(0);
+    expect(slideFrom('left', 64, 90).x).toBeLessThan(0);
+    expect(slideFrom('right', 64, 90).x).toBeGreaterThan(0);
+  });
+
+  it('carta nova com deslize nasce invisível; com slideMs 0 já nasce parada', () => {
+    const plays = [{ seat: 0, rank: '3', suit: 'paus', covered: false }];
+    const slide = renderToStaticMarkup(<PlayedCards plays={plays} mySeat={0} slideMs={450} />);
+    const still = renderToStaticMarkup(<PlayedCards plays={plays} mySeat={0} slideMs={0} />);
+    expect(slide).toContain('opacity:0');
+    expect(still).toContain('opacity:1');
+  });
+
+  it('com e sem deslize renderiza as mesmas cartas (rótulos preservados)', () => {
+    const plays = [{ seat: 0, rank: '3', suit: 'paus', covered: false }];
+    const a = renderToStaticMarkup(<PlayedCards plays={plays} mySeat={0} />);
+    const b = renderToStaticMarkup(<PlayedCards plays={plays} mySeat={0} slideMs={450} />);
+    expect(a).toContain('três de paus');
+    expect(b).toContain('três de paus');
   });
 });

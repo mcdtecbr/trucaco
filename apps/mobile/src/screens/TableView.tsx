@@ -8,7 +8,7 @@
  * - `landscape` (celular deitado) e `wide` (web largo): mesa horizontal; parceiro em cima, adversários
  *   nos lados, eu embaixo; mão ao centro, sinais à esquerda dela e aposta no canto direito.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -37,6 +37,7 @@ import {
   MIN_TOUCH,
   PEEK_PX,
   PlayedCards,
+  type ViewHandle,
   SEAT_NAME_GAP,
   ScoreHistoryList,
   ScoreLayers,
@@ -69,7 +70,10 @@ import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
 import { DealOverlay, useDealSequence } from '../table/DealOverlay';
-import { handHoldMs } from '../table/dealPlan';
+import { FLIP_MS, handHoldMs, playSlideMs } from '../table/dealPlan';
+import { measureDealGeom } from '../table/dealGeom';
+import type { DealGeom } from '../table/dealGeom';
+import { FlipReveal } from '../table/FlipReveal';
 import { DeckGroup } from '../table/DeckGroup';
 import { ScoreAd } from '../table/ScoreAd';
 import {
@@ -525,7 +529,9 @@ export function TableView(p: TableViewProps) {
   });
   const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
   const holding = deal.phase === 'hold';
-  const legal = p.connected && !modalOpen && !holding ? vm.legalActions : [];
+  // Sem ações legais (cartas, apostas) enquanto a mão está escondida (pausa e distribuição, ~3,7 s com a
+  // recolhida): a mão é a do servidor, mas ainda não apareceu. O relógio da vez do servidor (20 s) corre.
+  const legal = p.connected && !modalOpen && !deal.handHidden ? vm.legalActions : [];
   const pending = pendingText(vm);
   const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
@@ -627,6 +633,7 @@ export function TableView(p: TableViewProps) {
       viraSuit={vm.vira.suit}
       manilhaLabel={vm.manilhaLabel}
       viraHidden={deal.viraHidden}
+      flipVira={p.animateDeal === true && !p.reduceMotion}
     />
   );
 
@@ -635,7 +642,9 @@ export function TableView(p: TableViewProps) {
   const lingerByHold =
     p.lingering?.handEnd === true && p.animateDeal === true && vm.phase === 'playing';
   const showLinger = vm.current.length === 0 && p.lingering !== null && (!lingerByHold || holding);
-  const trickPlays = showLinger ? (p.lingering?.plays ?? []) : vm.current;
+  // Durante a distribuição a vaza fica vazia: jogada de bot que chega cedo aparece (deslizando) depois.
+  const dealingNow = deal.phase === 'dealing';
+  const trickPlays = dealingNow ? [] : showLinger ? (p.lingering?.plays ?? []) : vm.current;
   const trickOwn = showLinger ? (p.lingering?.ownCovered ?? null) : vm.ownCoveredCurrent;
   const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
   const lingerWinner =
@@ -670,8 +679,45 @@ export function TableView(p: TableViewProps) {
     />
   );
 
+  // Deslize da carta jogada: só depois de a mesa estar montada (estado que chega de reconexão não anima).
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setArmed(true), 1000);
+    return () => clearTimeout(id);
+  }, []);
+  // `undefined` = sem animação (E2E, reduzir movimento). Com `armed` falso o valor é 0: as cartas já
+  // presentes na montagem ficam paradas (o `SlideIn` decide só na montagem e a árvore não muda ao armar).
+  const slideMs = playSlideMs(p.animateDeal === true, p.reduceMotion, armed);
+  // Vaza final retida na pausa: o recolher a vira para o verso (vem daqui, nunca é recalculada).
+  // Atualizado em efeito (não no render): captura durante a pausa e limpa quando a sequência acaba.
+  const collectPlaysRef = useRef<typeof trickPlays>([]);
+  useEffect(() => {
+    if (holding && showLinger && trickPlays.length > 0) collectPlaysRef.current = trickPlays;
+    else if (deal.phase === 'idle') collectPlaysRef.current = [];
+  }, [holding, showLinger, trickPlays, deal.phase]);
+  // Geometria real para o recolher e a distribuição partirem/chegarem exatamente nas cartas reais:
+  // pano (raiz do overlay), vaza e mão medidas na janela, durante a pausa e ao iniciar a sequência.
+  const feltRef = useRef<ViewHandle>(null);
+  const trickRef = useRef<ViewHandle>(null);
+  const handRef = useRef<ViewHandle>(null);
+  const [geom, setGeom] = useState<DealGeom | null>(null);
+  const measuring = deal.phase === 'hold' || deal.run !== null;
+  useEffect(() => {
+    if (!measuring) return undefined;
+    let alive = true;
+    const id = requestAnimationFrame(() => {
+      void measureDealGeom(feltRef, trickRef, handRef).then((g) => {
+        if (alive && g !== null) setGeom(g);
+      });
+    });
+    return () => {
+      alive = false;
+      cancelAnimationFrame(id);
+    };
+  }, [measuring, deal.run?.id, arena?.w, arena?.h]);
   const trickCards = (
     <PlayedCards
+      containerRef={trickRef}
       plays={trickPlays}
       mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
       ownCovered={trickOwn}
@@ -679,6 +725,7 @@ export function TableView(p: TableViewProps) {
       nicknameOf={nicknameOf}
       size={m.played}
       arrangement={m.trick}
+      {...(slideMs !== undefined ? { slideMs } : {})}
     />
   );
   const winnerText =
@@ -902,6 +949,12 @@ export function TableView(p: TableViewProps) {
       ad={p.tableAd}
       testID="table-felt"
     >
+      <View
+        ref={feltRef}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+        collapsable={false}
+      />
       {landscapeArena ?? flexArena}
       {deal.run !== null ? (
         <DealOverlay
@@ -909,6 +962,18 @@ export function TableView(p: TableViewProps) {
           plan={deal.run.plan}
           mySeat={vm.mySeat}
           avatarSize={m.avatar}
+          collectPlays={collectPlaysRef.current}
+          trickSize={m.played}
+          trickRow={m.trick === 'row'}
+          trickScale={trickFit}
+          handSize={m.hand}
+          {...(geom !== null
+            ? {
+                feltSize: geom.felt,
+                trickCenter: geom.trick,
+                ...(geom.hand !== null ? { handCenter: geom.hand } : {}),
+              }
+            : {})}
           deckAt={
             geo !== null
               ? {
@@ -974,15 +1039,24 @@ export function TableView(p: TableViewProps) {
   const landDock = landscapeDockPlan(win.width, m.avatar + 2 * RING_PX, betNeed);
   const phonePlan = phoneDockPlan(win.width - DOCK_PAD_X, m.hand, betNeed);
   const handSize = landscape ? landDock.hand : m.hand;
+  // A mão só "aparece" (flip curto) depois que as cartas do overlay pousaram; fica ativa no mesmo
+  // instante em que `handHidden` cai (as minhas 3 cartas pousaram), sem esperar o fim da distribuição.
   const hand = (
-    <View
+    <FlipReveal
       testID="my-hand"
+      containerRef={handRef}
+      shown={!deal.handHidden}
+      animate={deal.run !== null}
+      delayMs={FLIP_MS / 2}
+      ms={FLIP_MS / 2}
       style={deal.handHidden ? styles.hidden : undefined}
       pointerEvents={deal.handHidden ? 'none' : 'auto'}
+      aria-hidden={deal.handHidden}
+      importantForAccessibility={deal.handHidden ? 'no-hide-descendants' : 'auto'}
     >
       <HandFan
         hand={vm.myHand}
-        legalActions={actionsOn && !holding ? vm.legalActions : []}
+        legalActions={actionsOn && !deal.handHidden ? vm.legalActions : []}
         blindCount={vm.blindCount}
         coverMode={p.coverMode}
         manilhas={vm.manilhas}
@@ -990,7 +1064,7 @@ export function TableView(p: TableViewProps) {
         size={handSize}
         onPress={p.on.pressCard}
       />
-    </View>
+    </FlipReveal>
   );
 
   /**

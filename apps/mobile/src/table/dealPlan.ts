@@ -6,17 +6,29 @@
 
 /** Cartas por jogador numa distribuição normal. */
 export const CARDS_PER_SEAT = 3;
-/** Recolher as cartas da mão anterior ao monte. */
-export const COLLECT_MS = 380;
-/** Embaralhar (monte se abre e se intercala). */
-export const SHUFFLE_MS = 420;
-/** Intervalo entre o início do voo de uma carta e o da seguinte. */
-export const DEAL_STEP_MS = 70;
+/** Recolher, 1ª parte: as cartas da vaza viram para o verso e se juntam numa pilha no centro. */
+export const COLLECT_FLIP_MS = 450;
+/** Recolher, 2ª parte: a pilha desliza até o monte e some nele. */
+export const COLLECT_PILE_MS = 600;
+/** Recolher as cartas da mão anterior ao monte (virar + deslizar). */
+export const COLLECT_MS = COLLECT_FLIP_MS + COLLECT_PILE_MS;
+/** O balanço do embaralhar começa assim que a pilha está chegando ao monte (fases se sobrepõem). */
+export const SHUFFLE_OVERLAP_MS = 200;
+/** A 1ª carta sai nos últimos ms do balanço, sem esperar o monte assentar. */
+export const DEAL_OVERLAP_MS = 100;
+/** Flip curto das minhas cartas ao pousarem (e da vira ao aparecer). */
+export const FLIP_MS = 180;
+/** Embaralhar: balanço curto do monte. */
+export const SHUFFLE_MS = 350;
+/** Intervalo entre o início do voo de uma carta e o da seguinte (2 a 3 cartas em voo ao mesmo tempo). */
+export const DEAL_STEP_MS = 230;
 /** Duração do voo de uma carta até o assento. */
-export const DEAL_FLIGHT_MS = 260;
+export const DEAL_FLIGHT_MS = 450;
+/** Deslize de uma carta jogada, do assento do jogador até a vaza. */
+export const PLAY_SLIDE_MS = 450;
 
 /** Pausa no fim da mão: a última carta e a vaza ficam na mesa, legíveis, antes de recolher ao monte. */
-export const HAND_HOLD_MS = 2200;
+export const HAND_HOLD_MS = 2000;
 /** Mesma pausa com "reduzir movimento" (sem animação, mas ainda precisa dar para ler). */
 export const HAND_HOLD_REDUCED_MS = 1500;
 
@@ -27,6 +39,19 @@ export const HAND_HOLD_REDUCED_MS = 1500;
 export function handHoldMs(animate: boolean, reduceMotion: boolean): number {
   if (!animate) return 0;
   return reduceMotion ? HAND_HOLD_REDUCED_MS : HAND_HOLD_MS;
+}
+
+/**
+ * Duração do deslize da carta jogada. `undefined` = sem animação (E2E, reduzir movimento); 0 = ainda não
+ * armado (cartas já presentes na montagem, como numa reconexão, ficam paradas).
+ */
+export function playSlideMs(
+  animate: boolean,
+  reduceMotion: boolean,
+  armed: boolean,
+): number | undefined {
+  if (!animate || reduceMotion) return undefined;
+  return armed ? PLAY_SLIDE_MS : 0;
 }
 
 export interface DealCard {
@@ -40,6 +65,8 @@ export interface DealCard {
 export interface DealPlan {
   readonly collectMs: number;
   readonly shuffleMs: number;
+  /** Início do balanço (sobrepõe o fim do recolher). */
+  readonly shuffleStartMs: number;
   readonly cards: readonly DealCard[];
   /** Instante em que a última carta do assento local pousa (a mão aparece). */
   readonly selfLandedMs: number;
@@ -69,7 +96,8 @@ export function dealPlan(opts: {
   const order = dealSeatOrder(opts.pe < 0 ? seats - 1 : opts.pe, seats);
   const collectMs = opts.collect ? COLLECT_MS : 0;
   const shuffleMs = SHUFFLE_MS;
-  const t0 = collectMs + shuffleMs;
+  const shuffleStartMs = Math.max(0, collectMs - SHUFFLE_OVERLAP_MS);
+  const t0 = shuffleStartMs + shuffleMs - DEAL_OVERLAP_MS;
   const cards: DealCard[] = [];
   for (let round = 0; round < perSeat; round++) {
     for (const seat of order) {
@@ -81,9 +109,11 @@ export function dealPlan(opts: {
   return {
     collectMs,
     shuffleMs,
+    shuffleStartMs,
     cards,
     selfLandedMs: lastSelf + DEAL_FLIGHT_MS,
-    endMs: last + DEAL_FLIGHT_MS,
+    // Depois da última aterrissagem, deixa o flip das minhas cartas terminar.
+    endMs: Math.max(last + DEAL_FLIGHT_MS, lastSelf + DEAL_FLIGHT_MS + FLIP_MS),
   };
 }
 

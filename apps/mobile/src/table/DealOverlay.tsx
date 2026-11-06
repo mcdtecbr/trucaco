@@ -1,9 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
-import { Card, cardSizes, screenPosition } from '@trucaco/ui';
-import type { ScreenPosition } from '@trucaco/ui';
-import { DEAL_FLIGHT_MS, dealDecision, dealPlan } from './dealPlan';
+import {
+  Card,
+  TRICK_TILT,
+  cardSizes,
+  parseFace,
+  placePlays,
+  screenPosition,
+  trickSlotOffsets,
+} from '@trucaco/ui';
+import type { CardSize, PlayedCardView, ScreenPosition } from '@trucaco/ui';
+import { COLLECT_FLIP_MS, DEAL_FLIGHT_MS, FLIP_MS, dealDecision, dealPlan } from './dealPlan';
 import type { DealPlan } from './dealPlan';
 
 /**
@@ -126,6 +134,9 @@ export function dealTargets(
   };
 }
 
+/** Easing contínuo: sai do monte já em movimento e só desacelera ao chegar. */
+const FLIGHT_EASING = Easing.out(Easing.quad);
+
 const DEFAULT_DEAL_AVATAR = 76;
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
 
@@ -135,7 +146,31 @@ export function DealOverlay({
   mySeat,
   avatarSize = DEFAULT_DEAL_AVATAR,
   deckAt,
+  collectPlays,
+  trickSize = 'sm',
+  trickRow = false,
+  trickCenter,
+  trickScale = 1,
+  feltSize,
+  handCenter,
+  handSize = 'md',
 }: {
+  /** Vaza em fileira (celular deitado): o recolher parte da fileira, não da cruz. */
+  trickRow?: boolean;
+  /** Centro da grade da vaza real (coordenadas do overlay); omitido = centro do pano. */
+  trickCenter?: Point;
+  /** Escala aplicada à vaza real (telas baixas encolhem a cruz). */
+  trickScale?: number;
+  /** Tamanho do pano já medido: evita um quadro sem cartas antes do `onLayout`. */
+  feltSize?: { w: number; h: number };
+  /** Centro da mão real (coordenadas do overlay): as minhas cartas pousam nela. */
+  handCenter?: Point;
+  /** Tamanho das cartas da minha mão. */
+  handSize?: CardSize;
+  /** Cartas da vaza final (para virar ao recolher); ausentes = só o verso. */
+  collectPlays?: readonly PlayedCardView[];
+  /** Tamanho das cartas da vaza na mesa (as cartas recolhidas partem dele). */
+  trickSize?: CardSize;
   runId: number;
   plan: DealPlan;
   mySeat: number;
@@ -144,7 +179,7 @@ export function DealOverlay({
   /** Centro do monte (coordenadas do overlay). Omitido = canto superior esquerdo. */
   deckAt?: Point;
 }) {
-  const [box, setBox] = useState({ w: 0, h: 0 });
+  const [box, setBox] = useState({ w: feltSize?.w ?? 0, h: feltSize?.h ?? 0 });
   const clock = useRef(new Animated.Value(0)).current;
   const onLayout = (e: LayoutChangeEvent): void => {
     const { width, height } = e.nativeEvent.layout;
@@ -184,18 +219,23 @@ export function DealOverlay({
 
   const deck = tg.deck;
   const ready = box.w > 0 && box.h > 0;
-  const shuffleStart = plan.collectMs;
-  const shuffleEnd = plan.collectMs + plan.shuffleMs;
+  const TRICK = cardSizes[trickSize];
+  const collectByPos = placePlays(collectPlays ?? [], mySeat).byPosition;
+  const trickOffsets = trickSlotOffsets(trickSize, trickRow ? 'row' : 'cross');
+  const HAND = cardSizes[handSize];
+  const shuffleStart = plan.shuffleStartMs;
+  const shuffleEnd = plan.shuffleStartMs + plan.shuffleMs;
+  const lastStart = plan.cards[plan.cards.length - 1]?.startMs ?? plan.endMs;
 
   // Monte: aparece quando as cartas voltam (ou de início), some quando a última sai.
   const deckOpacity = clock.interpolate({
-    inputRange: [0, Math.max(1, plan.collectMs * 0.6), plan.endMs - 60, plan.endMs],
+    inputRange: [0, Math.max(1, plan.collectMs * 0.85), lastStart + 60, lastStart + 160],
     outputRange: [plan.collectMs > 0 ? 0 : 1, 1, 1, 0],
     extrapolate: 'clamp',
   });
   // Embaralhar: duas metades do monte se afastam e se cruzam, três vezes.
   const swing = (sign: number) => {
-    const n = 6;
+    const n = 4;
     const input = [0, shuffleStart];
     const out = [0, 0];
     for (let i = 1; i <= n; i++) {
@@ -233,71 +273,190 @@ export function DealOverlay({
           </Animated.View>
           {plan.collectMs > 0
             ? (['partner', 'left', 'self', 'right'] as const).map((pos, i) => {
-                const from = tg[pos];
-                const s = i * 40;
-                const e = Math.max(s + 1, plan.collectMs - 20);
-                const input = [0, s, e, plan.collectMs];
-                const dx = clock.interpolate({
-                  inputRange: input,
-                  outputRange: [from.x - deck.x, from.x - deck.x, 0, 0],
-                  extrapolate: 'clamp',
-                });
-                const dy = clock.interpolate({
-                  inputRange: input,
-                  outputRange: [from.y - deck.y, from.y - deck.y, 0, 0],
-                  extrapolate: 'clamp',
-                });
-                const op = clock.interpolate({
-                  inputRange: [0, s, e, plan.collectMs],
-                  outputRange: [1, 1, 1, 0],
-                  extrapolate: 'clamp',
-                });
+                // Parte EXATAMENTE da carta real da vaza (posição, tamanho e inclinação), vira para o
+                // verso ao se juntar numa pilha no centro e já desliza ao monte (movimentos somados: sem
+                // parar na pilha), encolhendo até o tamanho do monte.
+                const play = collectByPos[pos];
+                // Só recolhe cartas que estavam na mesa: nunca inventa uma carta onde não havia.
+                if (play === undefined) return null;
+                const face = play !== undefined && !play.covered ? parseFace(play) : null;
+                const off = trickOffsets[pos];
+                const center = trickCenter ?? { x: box.w / 2, y: box.h / 2 };
+                const stack = { x: (i - 1.5) * 2, y: (i - 1.5) * -2 };
+                const flipEnd = COLLECT_FLIP_MS;
+                const flipMid = COLLECT_FLIP_MS / 2;
+                const pileStart = COLLECT_FLIP_MS - 200;
+                const pileEnd = plan.collectMs;
+                const fromX = center.x + off.x * trickScale - deck.x;
+                const fromY = center.y + off.y * trickScale - deck.y;
+                const toX = center.x + stack.x - deck.x;
+                const toY = center.y + stack.y - deck.y;
+                const g = [0, flipEnd];
+                const sl = [pileStart, pileEnd];
+                const easing = Easing.inOut(Easing.quad);
+                const clampOut = { extrapolate: 'clamp' as const };
+                const dx = Animated.add(
+                  clock.interpolate({
+                    inputRange: g,
+                    outputRange: [fromX, toX],
+                    easing,
+                    ...clampOut,
+                  }),
+                  clock.interpolate({
+                    inputRange: sl,
+                    outputRange: [0, -toX],
+                    easing,
+                    ...clampOut,
+                  }),
+                );
+                const dy = Animated.add(
+                  clock.interpolate({
+                    inputRange: g,
+                    outputRange: [fromY, toY],
+                    easing,
+                    ...clampOut,
+                  }),
+                  clock.interpolate({
+                    inputRange: sl,
+                    outputRange: [0, -toY],
+                    easing,
+                    ...clampOut,
+                  }),
+                );
                 const rot = clock.interpolate({
-                  inputRange: input,
-                  outputRange: ['0deg', '0deg', '12deg', '12deg'],
-                  extrapolate: 'clamp',
+                  inputRange: [0, flipEnd, pileEnd],
+                  outputRange: [`${TRICK_TILT[pos]}deg`, `${(i - 1.5) * 3}deg`, '0deg'],
+                  ...clampOut,
+                });
+                const scale = clock.interpolate({
+                  inputRange: [0, pileStart, pileEnd],
+                  outputRange: [trickScale, trickScale, CARD.width / TRICK.width],
+                  ...clampOut,
+                });
+                const flip = clock.interpolate({
+                  inputRange: [0, flipMid, flipEnd],
+                  outputRange: [1, 0.02, 1],
+                  ...clampOut,
+                });
+                const faceOp = clock.interpolate({
+                  inputRange: [0, flipMid - 1, flipMid],
+                  outputRange: [1, 1, 0],
+                  ...clampOut,
+                });
+                const backOp = clock.interpolate({
+                  inputRange: [0, flipMid - 1, flipMid],
+                  outputRange: [0, 0, 1],
+                  ...clampOut,
+                });
+                const gone = clock.interpolate({
+                  inputRange: [0, pileEnd - 40, pileEnd],
+                  outputRange: [1, 1, 0],
+                  ...clampOut,
                 });
                 return (
-                  <Animated.View key={`collect-${pos}`} style={place(deck, dx, dy, rot, op)}>
-                    <Card size="sm" />
+                  <Animated.View
+                    key={`collect-${pos}`}
+                    style={{
+                      position: 'absolute',
+                      left: deck.x - TRICK.width / 2,
+                      top: deck.y - TRICK.height / 2,
+                      opacity: gone,
+                      zIndex: i + 1,
+                      transform: [
+                        { translateX: dx },
+                        { translateY: dy },
+                        { rotate: rot },
+                        { scale },
+                        { scaleX: flip },
+                      ],
+                    }}
+                  >
+                    <Animated.View style={{ opacity: backOp }}>
+                      <Card size={trickSize} />
+                    </Animated.View>
+                    <Animated.View style={[StyleSheet.absoluteFill, { opacity: faceOp }]}>
+                      {face !== null ? (
+                        <Card size={trickSize} rank={face.rank} suit={face.suit} />
+                      ) : (
+                        <Card size={trickSize} />
+                      )}
+                    </Animated.View>
                   </Animated.View>
                 );
               })
             : null}
           {plan.cards.map((c, i) => {
-            const to = tg[screenPosition(mySeat, c.seat)];
-            // Cartas do mesmo assento pousam levemente deslocadas (leque) para não se esconderem.
-            const spread = (c.round - 1) * 14;
-            const horizontal = screenPosition(mySeat, c.seat);
-            const endX =
-              to.x - deck.x + (horizontal === 'left' || horizontal === 'right' ? 0 : spread);
-            const endY =
-              to.y - deck.y + (horizontal === 'left' || horizontal === 'right' ? spread : 0);
+            const pos = screenPosition(mySeat, c.seat);
+            const mine = pos === 'self';
+            // Minhas cartas pousam no leque da mão real e viram para a face; as dos outros ficam na pilha
+            // ao lado do avatar. Cartas do mesmo assento pousam levemente deslocadas.
+            const to = mine && handCenter !== undefined ? handCenter : tg[pos];
+            const sideways = pos === 'left' || pos === 'right';
+            const spread = mine ? (c.round - 1) * HAND.width * 0.7 : (c.round - 1) * 14;
+            const endX = to.x - deck.x + (sideways ? 0 : spread);
+            const endY = to.y - deck.y + (sideways ? spread : 0);
             const start = c.startMs;
             const land = start + DEAL_FLIGHT_MS;
-            const fade = start + DEAL_FLIGHT_MS * 0.7;
+            const flipStart = plan.selfLandedMs;
+            const flipHalf = flipStart + FLIP_MS / 2;
+            const fly = { easing: FLIGHT_EASING, extrapolate: 'clamp' as const };
             const dx = clock.interpolate({
               inputRange: [0, start, land],
               outputRange: [0, 0, endX],
-              extrapolate: 'clamp',
+              ...fly,
             });
             const dy = clock.interpolate({
               inputRange: [0, start, land],
               outputRange: [0, 0, endY],
-              extrapolate: 'clamp',
+              ...fly,
             });
-            const op = clock.interpolate({
-              inputRange: [0, Math.max(0, start - 1), start, fade, land],
-              outputRange: [0, 0, 1, 1, 0],
-              extrapolate: 'clamp',
+            // Minhas: ficam até o flip; a mão real "vira" por cima (FlipReveal). Dos outros: ficam.
+            const op = mine
+              ? clock.interpolate({
+                  inputRange: [0, Math.max(0, start - 1), start, flipHalf - 1, flipHalf],
+                  outputRange: [0, 0, 1, 1, 0],
+                  extrapolate: 'clamp',
+                })
+              : clock.interpolate({
+                  inputRange: [0, Math.max(0, start - 1), start],
+                  outputRange: [0, 0, 1],
+                  extrapolate: 'clamp',
+                });
+            const sx = mine
+              ? clock.interpolate({
+                  inputRange: [0, flipStart, flipHalf],
+                  outputRange: [1, 1, 0.02],
+                  extrapolate: 'clamp',
+                })
+              : 1;
+            const scale = clock.interpolate({
+              inputRange: [0, start, land],
+              outputRange: [1, 1, mine ? HAND.width / CARD.width : 1],
+              ...fly,
             });
+            const finalRot = mine ? 0 : clamp(endX, -1, 1) * 10 + (c.round - 1) * 6;
             const rot = clock.interpolate({
               inputRange: [0, start, land],
-              outputRange: ['0deg', '0deg', `${clamp(endX, -1, 1) * 10 + (c.round - 1) * 6}deg`],
-              extrapolate: 'clamp',
+              outputRange: ['0deg', '0deg', `${finalRot}deg`],
+              ...fly,
             });
             return (
-              <Animated.View key={i} style={place(deck, dx, dy, rot, op)}>
+              <Animated.View
+                key={i}
+                style={{
+                  position: 'absolute',
+                  left: deck.x - CARD.width / 2,
+                  top: deck.y - CARD.height / 2,
+                  opacity: op,
+                  transform: [
+                    { translateX: dx },
+                    { translateY: dy },
+                    { rotate: rot },
+                    { scale },
+                    { scaleX: sx },
+                  ],
+                }}
+              >
                 <Card size="sm" />
               </Animated.View>
             );
