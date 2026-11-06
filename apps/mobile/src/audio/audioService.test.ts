@@ -35,8 +35,8 @@ async function ready(audio: AudioService) {
 describe('pré-carregamento', () => {
   it('carrega só um take por evento das vozes presentes (com fallback por grupo) e os efeitos de jogo', async () => {
     const { backend, audio } = setup();
-    await audio.preloadVoices(['masc_3', 'masc_4', 'masc_1', 'fem_2', 'fem_4']);
-    // masc_3/masc_4 -> masc_1 (já pedida), fem_2/fem_4 -> fem_1: duas vozes, 1 take por evento, sem duplicar.
+    await audio.preloadVoices(['fem_3', 'fem_4', 'masc_1', 'fem_2', 'fem_1']);
+    // fem_2/fem_3/fem_4 -> fem_1 (já pedida): duas vozes (masc_1 e fem_1), 1 take por evento, sem duplicar.
     expect(backend.loads).toHaveLength(VOICE_EVENTS.length * 2);
     await audio.preloadSfx();
     expect(backend.loads).toHaveLength(VOICE_EVENTS.length * 2 + GAME_SFX_IDS.length);
@@ -126,8 +126,9 @@ describe('tocar', () => {
   it('voz sem arquivo toca a do mesmo grupo (resolveVoice)', async () => {
     const { backend, sources, audio } = setup();
     await ready(audio);
-    expect(audio.playVoice('masc_3', 'truco_1')).toBe(true);
-    expect(backend.plays[0]?.source).toBe(sources.idOf('v:masc_1:truco_1'));
+    await audio.preloadVoices(['fem_1']);
+    expect(audio.playVoice('fem_3', 'truco_1')).toBe(true);
+    expect(backend.plays[0]?.source).toBe(sources.idOf('v:fem_1:truco_1'));
   });
 
   it('sem som geral: nada toca; voltando, toca', async () => {

@@ -26,24 +26,27 @@ const BUDGET = 1024 * 1024;
 const sizeOf = (rel: string): number => statSync(join(AUDIO, rel)).size;
 
 describe('vozes', () => {
-  it('declara as 9 vozes do protocolo (5 masc, 4 fem); protótipo com masc_1 e fem_1', () => {
+  it('declara as 9 vozes do protocolo (5 masc, 4 fem); masc_1 a masc_5 e fem_1 com arquivo', () => {
     expect(VOICES.map((v) => v.id)).toEqual([...VOICE_IDS]);
-    expect(VOICES_WITH_FILES).toEqual(['masc_1', 'fem_1']);
+    expect(VOICES_WITH_FILES).toEqual(['masc_1', 'masc_2', 'masc_3', 'masc_4', 'masc_5', 'fem_1']);
     expect(voiceInfo('fem_2')).toMatchObject({
       group: 'fem',
       label: 'Feminina 2',
       hasFiles: false,
     });
-    expect(voiceInfo('masc_3')).toMatchObject({ group: 'masc', label: 'Masculina 3' });
+    expect(voiceInfo('masc_3')).toMatchObject({
+      group: 'masc',
+      label: 'Masculina 3',
+      hasFiles: true,
+    });
     expect(voiceInfo('masc_5')).toMatchObject({ group: 'masc', label: 'Masculina 5' });
     expect(voiceInfo('fem_4')).toMatchObject({ group: 'fem', label: 'Feminina 4' });
   });
 
   it('voz sem arquivo cai para a do mesmo grupo; sem nenhuma, null', () => {
     expect(resolveVoice('masc_1')).toBe('masc_1');
-    expect(resolveVoice('masc_3')).toBe('masc_1');
-    expect(resolveVoice('masc_4')).toBe('masc_1');
-    expect(resolveVoice('masc_5')).toBe('masc_1');
+    expect(resolveVoice('masc_3')).toBe('masc_3');
+    expect(resolveVoice('masc_5')).toBe('masc_5');
     expect(resolveVoice('fem_4')).toBe('fem_1');
     expect(resolveVoice('fem_2')).toBe('fem_1');
     expect(resolveVoice('fem_2', ['masc_1'])).toBeNull();

@@ -221,11 +221,12 @@ describe('voz no criador de avatar', () => {
     expect(must('avatar-voice-masc_1').getAttribute('aria-checked')).toBe('true');
     expect(must('avatar-voice-fem_2').textContent).toContain('em breve');
     expect(must('avatar-voice-masc_1').textContent).not.toContain('em breve');
-    expect(disabled('avatar-voice-listen-masc_2')).toBe(true);
+    expect(disabled('avatar-voice-listen-fem_2')).toBe(true);
+    expect(disabled('avatar-voice-listen-masc_2')).toBe(false);
     expect(disabled('avatar-voice-listen-fem_1')).toBe(false);
     expect(fallbackNote('fem_3')).toContain('Feminina 1');
     expect(fallbackNote('fem_4')).toContain('Feminina 1');
-    expect(fallbackNote('masc_4')).toContain('Masculina 1');
+    expect(fallbackNote('masc_4')).toBeNull();
     expect(fallbackNote('masc_1')).toBeNull();
   });
 
