@@ -48,8 +48,6 @@ export interface PlayedTrickView {
 export interface PlayedCardsProps {
   /** Vaza mais recente (a em curso, ou a última fechada). */
   readonly plays: readonly PlayedCardView[];
-  /** Vazas anteriores da MESMA mão, da mais antiga para a mais nova: ficam na mesa até o fim da mão. */
-  readonly earlier?: readonly PlayedTrickView[];
   readonly mySeat: number;
   /** Identidade da PRÓPRIA carta coberta nesta vaza (de `privates[mySeat].ownCovered`). */
   readonly ownCovered?: { readonly rank: string; readonly suit: string } | null;
@@ -69,8 +67,8 @@ export interface PlayedCardsProps {
   readonly containerRef?: Ref<ViewHandle>;
 }
 
-/** Vazas por mão (melhor de três): o leque de cada jogador comporta até este tanto de cartas. */
-export const MAX_FAN = 3;
+/** Cartas por jogador na mesa: uma só (a vaza fechada volta ao monte antes da seguinte). */
+export const MAX_FAN = 1;
 /**
  * Quanto cada carta mais nova avança sobre a anterior, em fração da largura. Na cruz sobra espaço e o
  * índice da carta velha segue legível; na fileira (celular deitado) a mesa é apertada: só o suficiente
@@ -88,17 +86,13 @@ export function trickFanStep(size: CardSize, arrangement: 'cross' | 'row' = 'cro
 const TILT: Readonly<Record<ScreenPosition, number>> = { self: 0, partner: 0, left: -8, right: 8 };
 
 /**
- * Cartas jogadas na mesa. Cada jogador acumula as suas em leque (a mais nova por cima): as cartas das
- * vazas já fechadas ficam na mesa até o fim da mão. Em cruz: eu embaixo, parceiro em cima, adversários nos
- * lados; em fileira, na ordem de jogo. A caixa tem tamanho fixo (reserva o leque cheio).
+ * Cartas da vaza em curso (ou da fechada, retida na pausa antes de voltar ao monte). Em cruz: eu embaixo,
+ * parceiro em cima, adversários nos lados; em fileira, na ordem de jogo. A caixa tem tamanho fixo.
  */
 export function PlayedCards(p: PlayedCardsProps) {
   const size = p.size ?? 'md';
   const arrangement = p.arrangement === 'row' ? 'row' : 'cross';
-  const layers: readonly PlayedTrickView[] = [
-    ...(p.earlier ?? []),
-    { plays: p.plays, ownCovered: p.ownCovered ?? null },
-  ];
+  const layers: readonly PlayedTrickView[] = [{ plays: p.plays, ownCovered: p.ownCovered ?? null }];
   const foot = trickFootprint(size, arrangement);
   const { width: cw, height: ch } = cardSizes[size];
   const total = layers.reduce((n, l) => n + l.plays.length, 0);

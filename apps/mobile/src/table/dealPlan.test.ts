@@ -98,3 +98,14 @@ describe('handHoldMs', () => {
     expect(handHoldMs(true, true)).toBeGreaterThan(0);
   });
 });
+
+describe('collectPlan', () => {
+  it('só recolhe: sem embaralhar nem distribuir', async () => {
+    const { collectPlan, COLLECT_MS } = await import('./dealPlan');
+    const p = collectPlan();
+    expect(p.cards).toHaveLength(0);
+    expect(p.shuffleMs).toBe(0);
+    expect(p.collectMs).toBe(COLLECT_MS);
+    expect(p.endMs).toBe(COLLECT_MS);
+  });
+});

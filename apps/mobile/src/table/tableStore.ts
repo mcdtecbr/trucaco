@@ -6,7 +6,7 @@
 import type { ChatScope, SignalId } from '@trucaco/protocol';
 import type { HandResult } from '@trucaco/ui';
 import { createStore, useStore } from 'zustand';
-import type { TableViewModel, TrickLayer } from './projectTable';
+import type { TableViewModel } from './projectTable';
 
 export type TableNotice = 'reconnected' | null;
 
@@ -20,10 +20,13 @@ export interface LingeringTrick {
   /** Só com `handEnd`: número da mão que acabou (para casar com o `trickDecided` que a completa). */
   readonly handNumber?: number;
   /**
-   * Só com `handEnd`: TODAS as vazas da mão que acabou (a última, `plays`, é a final). O servidor já abriu
-   * a mão seguinte, então `tricks` do estado não as traz mais; a pausa e o recolher usam esta lista.
+   * Só com `handEnd`: a vaza fechada que ainda estava na janela de leitura quando a mão acabou (correu
+   * com a vaza aberta). Recolhe junto com as cartas de `plays`.
    */
-  readonly layers?: readonly TrickLayer[];
+  readonly previous?: {
+    readonly plays: TableViewModel['current'];
+    readonly ownCovered: { readonly rank: string; readonly suit: string } | null;
+  };
 }
 
 /** Mensagem de chat recebida. `text` é sempre exibido como `<Text>` (nunca HTML). */

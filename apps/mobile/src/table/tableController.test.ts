@@ -3,7 +3,6 @@ import type { ClientMessage } from '@trucaco/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { errorMessage, hasMessage } from '../i18n/errors';
 import { snapshot, priv, player } from './snapshotFixtures';
-import { handLayers, projectTable } from './projectTable';
 import {
   BUSY_TIMEOUT_MS,
   HAND_LINGER_MS,
@@ -684,7 +683,7 @@ describe('pausa do fim da mão', () => {
   });
 });
 
-describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
+describe('vaza retida no fim da mão (só a final; as outras voltam ao monte a cada vaza)', () => {
   const mk = (seat: number, rank: string, suit: string, covered = false) => ({
     seat,
     rank,
@@ -710,31 +709,7 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     blind: false,
   });
 
-  it('handLayers: vazas fechadas e a em curso, na ordem, com a minha coberta de cada uma', () => {
-    const vm = projectTable(
-      snapshot({
-        hand: {
-          tricks: [closedTrick(t1, 3, 0), closedTrick(t2, 3, 3)],
-          current: [mk(3, 'J', 'ouros')],
-        },
-        privates: {
-          '0': {
-            seat: 0,
-            hand: [{ rank: '3', suit: 'paus' }],
-            legalActions: [],
-            partnerCards: [],
-            ownCovered: [{ rank: '6', suit: 'copas', trick: 1 }],
-          },
-        },
-      }),
-    );
-    const layers = handLayers(vm);
-    expect(layers.map((l) => l.plays.length)).toEqual([4, 4, 1]);
-    expect(layers[0]?.ownCovered).toBeNull();
-    expect(layers[1]?.ownCovered).toEqual({ rank: '6', suit: 'copas' });
-  });
-
-  it('mão decidida na 3ª vaza: o retido leva as 3 vazas (12 cartas), a final completa pelos eventos', () => {
+  it('mão decidida na 3ª vaza: o retido leva só a vaza final (4 cartas, as outras já voltaram ao monte), completa pelos eventos', () => {
     const h = setup();
     h.ctl.applyState(
       snapshot({
@@ -750,12 +725,11 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { current: [] } }));
     const l = h.store.getState().lingering;
     expect(l?.handEnd).toBe(true);
-    expect(l?.layers?.map((x) => x.plays.length)).toEqual([4, 4, 4]);
-    expect(l?.layers?.[2]?.plays.map((p) => p.seat)).toEqual([3, 0, 1, 2]);
+    expect(l?.plays.map((p) => p.seat)).toEqual([3, 0, 1, 2]);
     expect(l?.winnerSeat).toBe(3);
   });
 
-  it('mão decidida na 2ª vaza (duas vazas) retém só as duas', () => {
+  it('mão decidida na 2ª vaza retém só a final', () => {
     const h = setup();
     h.ctl.applyState(
       snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: t2.slice(0, 3) } }),
@@ -764,7 +738,7 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     for (const p of t2) ev(h, 2, play(p));
     ev(h, 3, { type: 'trickDecided', index: 1, winnerSeat: 3, winnerTeam: 1 });
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { current: [] } }));
-    expect(h.store.getState().lingering?.layers?.map((x) => x.plays.length)).toEqual([4, 4]);
+    expect(h.store.getState().lingering?.plays).toHaveLength(4);
   });
 
   it('mão que acaba por CORRER com a vaza aberta vazia não recolhe a vaza anterior de novo', () => {
@@ -776,19 +750,20 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     // A vaza 1 já está em `tricks` (patch comum) e a mão acaba depois, sem carta na vaza aberta.
     h.ctl.applyState(snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: [] } }));
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
+    // Vaza aberta vazia: a vaza 1, ainda legível, vira a retenção do fim da mão (pausa e recolher).
     const l = h.store.getState().lingering;
     expect(l?.handEnd).toBe(true);
-    expect(l?.layers).toHaveLength(1);
-    expect(l?.plays).toHaveLength(0);
+    expect(l?.plays).toHaveLength(4);
+    expect(l?.previous).toBeUndefined();
   });
 
-  it('correr com a vaza aberta parcial: recolhe as fechadas e as cartas que estavam na mesa', () => {
+  it('correr com a vaza aberta parcial: retém as cartas que estavam na mesa', () => {
     const h = setup();
     h.ctl.applyState(
       snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: t2.slice(0, 2) } }),
     );
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
-    expect(h.store.getState().lingering?.layers?.map((x) => x.plays.length)).toEqual([4, 2]);
+    expect(h.store.getState().lingering?.plays).toHaveLength(2);
   });
 
   it('ordem real do servidor (cardPlayed, trickDecided, handStarted da mão nova, só então o patch): a 4ª carta entra', () => {
@@ -802,7 +777,7 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     ev(h, 4, { type: 'handStarted', handNumber: 2, pe: 1, scores: [1, 0], special: 'normal' });
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
     const l = h.store.getState().lingering;
-    expect(l?.layers?.map((x) => x.plays.length)).toEqual([4, 4]);
+    expect(l?.plays).toHaveLength(4);
     expect(l?.winnerSeat).toBe(3);
   });
 
@@ -838,7 +813,7 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
         hand: { tricks: [], current: [mk(1, '4', 'copas')] },
       }),
     );
-    expect(h.store.getState().lingering?.layers?.map((x) => x.plays.length)).toEqual([4, 4]);
+    expect(h.store.getState().lingering?.plays).toHaveLength(4);
   });
 
   it('minha coberta: o evento traz a identidade e tricks não; correr depois não duplica a vaza', () => {
@@ -862,7 +837,30 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     ev(h, 4, { type: 'trickDecided', index: 0, winnerSeat: 3, winnerTeam: 1 });
     h.ctl.applyState(snapshot({ hand: { tricks: [closedTrick(covered, 3, 0)], current: [] } }));
     h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
-    expect(h.store.getState().lingering?.layers?.map((x) => x.plays.length)).toEqual([4]);
+    expect(h.store.getState().lingering?.handEnd).toBe(true);
+    expect(h.store.getState().lingering?.plays).toHaveLength(4);
+  });
+
+  it('mão acaba por correr com 1 carta na vaza aberta: a vaza 1 ainda legível vai junto em `previous`', () => {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { tricks: [], current: t1 } }));
+    h.ctl.applyState(snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: [] } }));
+    const one = [mk(3, 'A', 'ouros')];
+    h.ctl.applyState(snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: one } }));
+    h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
+    const l = h.store.getState().lingering;
+    expect(l?.handEnd).toBe(true);
+    expect(l?.plays).toHaveLength(1);
+    expect(l?.previous?.plays).toHaveLength(4);
+  });
+
+  it('retenção comum já expirada: a mão que acaba por correr não retém nada', () => {
+    const h = setup();
+    h.ctl.applyState(snapshot({ hand: { tricks: [], current: t1 } }));
+    h.ctl.applyState(snapshot({ hand: { tricks: [closedTrick(t1, 3, 0)], current: [] } }));
+    h.fire(LINGER_MS);
+    h.ctl.applyState(snapshot({ game: { handNumber: 2 }, hand: { tricks: [], current: [] } }));
+    expect(h.store.getState().lingering).toBeNull();
   });
 
   it('bo3: vaza final do jogo 1 não reaparece quando a mão 1 do jogo seguinte acaba sem carta', () => {
@@ -890,11 +888,11 @@ describe('acúmulo das vazas da mão (todas ficam na mesa até o fim)', () => {
     expect(h.store.getState().lingering?.plays).toHaveLength(3);
   });
 
-  it('vaza comum no meio da mão não carrega layers (as fechadas vêm de tricks do estado)', () => {
+  it('vaza comum no meio da mão não é de fim de mão', () => {
     const h = setup();
     h.ctl.applyState(snapshot({ hand: { current: t1 } }));
     h.ctl.applyState(snapshot({ hand: { current: [], tricks: [closedTrick(t1, 3, 0)] } }));
-    expect(h.store.getState().lingering?.layers).toBeUndefined();
+    expect(h.store.getState().lingering?.handEnd).toBeUndefined();
   });
 });
 

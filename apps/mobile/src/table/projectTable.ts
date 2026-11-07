@@ -385,16 +385,3 @@ export function actionSignature(vm: TableViewModel): string {
     vm.myHand.length,
   ].join('|');
 }
-
-/** Todas as vazas da mão em `vm` (fechadas + a em curso, se houver), com a minha coberta de cada uma. */
-export function handLayers(vm: TableViewModel): TrickLayer[] {
-  const out: TrickLayer[] = vm.tricks.map((t, i) => {
-    const own = vm.ownCoveredByTrick.find((c) => c.trick === i);
-    return {
-      plays: t.plays,
-      ownCovered: own === undefined ? null : { rank: own.rank, suit: own.suit },
-    };
-  });
-  if (vm.current.length > 0) out.push({ plays: vm.current, ownCovered: vm.ownCoveredCurrent });
-  return out.filter((l) => l.plays.length > 0);
-}

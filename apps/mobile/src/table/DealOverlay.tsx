@@ -11,7 +11,14 @@ import {
   trickCardOffset,
 } from '@trucaco/ui';
 import type { CardSize, PeekDirection, PlayedTrickView, ScreenPosition } from '@trucaco/ui';
-import { COLLECT_FLIP_MS, DEAL_FLIGHT_MS, FLIP_MS, dealDecision, dealPlan } from './dealPlan';
+import {
+  COLLECT_FLIP_MS,
+  DEAL_FLIGHT_MS,
+  FLIP_MS,
+  collectPlan,
+  dealDecision,
+  dealPlan,
+} from './dealPlan';
 import type { DealPlan } from './dealPlan';
 
 /**
@@ -136,6 +143,53 @@ export function useDealSequence(opts: {
   // da mão que acabou seriam desmontadas por um instante e remontadas deslizando de novo.
   const changing = prev.current !== null && prev.current !== key && holdMs > 0;
   return changing ? HOLD : seq;
+}
+
+export interface TrickCollectRun {
+  readonly id: number;
+  readonly plan: DealPlan;
+  /** A vaza que volta ao monte (a mesma que estava na mesa). */
+  readonly tricks: readonly PlayedTrickView[];
+}
+
+/**
+ * Recolher a cada vaza: quando a vaza fechada retida (`linger`) deixa a mesa, as cartas dela se juntam e
+ * voltam ao monte (sem embaralhar). `blocked` (pausa/distribuição de fim de mão, ou o fim da mão chegando)
+ * cancela: lá o recolher é o da sequência da mão. Só apresentação.
+ */
+export function useTrickCollect(
+  linger: PlayedTrickView | null,
+  enabled: boolean,
+  blocked: boolean,
+): TrickCollectRun | null {
+  const last = useRef<PlayedTrickView | null>(null);
+  const ids = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [run, setRun] = useState<TrickCollectRun | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    },
+    [],
+  );
+  // Layout effect: nenhum quadro com a mesa vazia entre a vaza sair e o recolher aparecer.
+  useLayoutEffect(() => {
+    if (linger !== null) {
+      last.current = linger;
+      return;
+    }
+    const t = last.current;
+    last.current = null;
+    if (t === null || !enabled || blocked) return;
+    const next: TrickCollectRun = { id: ++ids.current, plan: collectPlan(), tricks: [t] };
+    setRun(next);
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = setTimeout(
+      () => setRun((cur) => (cur?.id === next.id ? null : cur)),
+      next.plan.endMs + 50,
+    );
+  }, [linger, enabled, blocked]);
+  return run;
 }
 
 export interface Point {
@@ -301,6 +355,7 @@ export function DealOverlay({
   // Embaralhar: duas metades do monte se afastam e se cruzam, três vezes.
   const swing = (sign: number) => {
     const n = 4;
+    if (plan.shuffleMs <= 0) return 0;
     const input = [0, shuffleStart];
     const out = [0, 0];
     for (let i = 1; i <= n; i++) {

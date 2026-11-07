@@ -33,7 +33,7 @@ import type { ClockOffset } from './clockOffset';
 import { isPresenceStatus, presenceText } from './presence';
 import { HAND_HOLD_MS } from './dealPlan';
 import { actionSignature, projectTable } from './projectTable';
-import type { PlayedView, TableViewModel, TrickLayer } from './projectTable';
+import type { PlayedView, TableViewModel } from './projectTable';
 import type { ChatEntry, LingeringTrick, TableStore, TableStoreState } from './tableStore';
 
 /** Se o estado não reagir à ação em tanto tempo, o botão destrava (mensagem perdida). */
@@ -253,6 +253,8 @@ export function lingeringFor(
   prev: TableViewModel | null,
   next: TableViewModel,
   closed: ClosedTrick | null = null,
+  /** Retenção em curso (vaza comum ainda legível): a mão acabar por cima dela não a descarta. */
+  active: LingeringTrick | null = null,
 ): LingeringTrick | null {
   if (prev === null) return null;
   const newHand =
@@ -280,26 +282,22 @@ export function lingeringFor(
       closed.plays.length >= prev.current.length &&
       !(lastClosed !== undefined && samePlays(lastClosed.plays, closed.plays));
     const finalPlays = closedIsNew ? closed.plays : prev.current;
-    // Mesa inteira da mão que acabou: as vazas fechadas e a final (mesmo parcial, quando a mão acaba por
-    // correr). Tudo isso é público; nada além do que já foi jogado.
-    const layers: TrickLayer[] = prev.tricks.map((t, i) => {
-      const own = prev.ownCoveredByTrick.find((c) => c.trick === i);
-      return {
-        plays: t.plays,
-        ownCovered: own === undefined ? null : { rank: own.rank, suit: own.suit },
-      };
-    });
-    if (finalPlays.length > 0)
-      layers.push({ plays: finalPlays, ownCovered: prev.ownCoveredCurrent });
-    const shown = layers.filter((l) => l.plays.length > 0);
-    if (shown.length === 0) return null;
+    const ordinary = active !== null && active.handEnd !== true ? active : null;
+    if (finalPlays.length === 0) {
+      // Mão acabou por correr com a vaza aberta vazia: a vaza comum ainda legível vira a retenção do fim da
+      // mão (pausa e recolher), em vez de sumir sem recolher.
+      if (ordinary === null) return null;
+      return { ...ordinary, handEnd: true, handNumber: prev.handNumber };
+    }
     return {
       plays: finalPlays,
       winnerSeat: closedIsNew ? closed.winnerSeat : -1,
       ownCovered: prev.ownCoveredCurrent,
       handEnd: true,
       handNumber: prev.handNumber,
-      layers: shown,
+      ...(ordinary !== null && !samePlays(ordinary.plays, finalPlays)
+        ? { previous: { plays: ordinary.plays, ownCovered: ordinary.ownCovered } }
+        : {}),
     };
   }
   if (next.current.length > 0) return null;
@@ -505,7 +503,7 @@ export function createTableController(opts: TableControllerOptions): TableContro
       busyTimer = null;
     }
     const canCover = vm.legalActions.some((id) => parseLegalAction(id)?.kind === 'playCovered');
-    const ling = newMatch ? null : lingeringFor(cur.vm, vm, closedTrick);
+    const ling = newMatch ? null : lingeringFor(cur.vm, vm, closedTrick, cur.lingering);
     // A vaza final já foi consumida pela troca de mão: não pode reaparecer na mão seguinte.
     if (cur.vm !== null && handChanged(cur.vm, vm)) closedTrick = null;
     if (ling !== null) {
@@ -699,20 +697,10 @@ export function createTableController(opts: TableControllerOptions): TableContro
             sameHand &&
             closedTrick.plays.length >= cur.lingering.plays.length
           ) {
-            const lay = cur.lingering.layers;
             patch.lingering = {
               ...cur.lingering,
               plays: closedTrick.plays,
               winnerSeat: closedTrick.winnerSeat,
-              // A vaza final da mão retida também ganha a carta que faltava.
-              ...(lay !== undefined && lay.length > 0 && cur.lingering.plays.length > 0
-                ? {
-                    layers: [
-                      ...lay.slice(0, -1),
-                      { ...lay[lay.length - 1]!, plays: closedTrick.plays },
-                    ],
-                  }
-                : {}),
             };
           }
         }

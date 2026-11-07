@@ -53,7 +53,6 @@ import {
   spacing,
 } from '@trucaco/ui';
 import type { HandResult, PeekDirection, TableLayout } from '@trucaco/ui';
-import { handLayers } from '../table/projectTable';
 import type { SeatView, TableViewModel, TrickLayer } from '../table/projectTable';
 import type { ConnectionBanner } from '../table/tableRoute';
 import type {
@@ -71,7 +70,7 @@ import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
-import { DealOverlay, useDealLanded, useDealSequence } from '../table/DealOverlay';
+import { DealOverlay, useDealLanded, useDealSequence, useTrickCollect } from '../table/DealOverlay';
 import { FLIP_MS, handHoldMs, playSlideMs } from '../table/dealPlan';
 import { measureDealGeom } from '../table/dealGeom';
 import type { DealGeom } from '../table/dealGeom';
@@ -401,6 +400,20 @@ function pendingText(vm: TableViewModel): string | null {
   return `${name !== undefined && name !== '' ? name : 'Adversário'} pediu ${what}${worth}.`;
 }
 
+/**
+ * Cartas na mesa durante a pausa do fim da mão: a vaza final e, se a mão acabou por correr com a vaza
+ * anterior ainda legível, as cartas dela nos assentos que a final não ocupa (a mais nova fica por cima).
+ */
+export function holdLayer(l: LingeringTrick, mySeat: number): TrickLayer {
+  const prev = l.previous;
+  if (prev === undefined) return { plays: l.plays, ownCovered: l.ownCovered };
+  const seats = new Set(l.plays.map((x) => x.seat));
+  return {
+    plays: [...prev.plays.filter((x) => !seats.has(x.seat)), ...l.plays],
+    ownCovered: seats.has(mySeat) ? l.ownCovered : prev.ownCovered,
+  };
+}
+
 /** "De quem é a vez": `actingSeat` do servidor (não `hand.turn`); decisão especial é da dupla. */
 export function turnText(vm: TableViewModel): string | null {
   if (vm.phase !== 'playing') return null;
@@ -544,9 +557,7 @@ export function TableView(p: TableViewProps) {
   const dealt = useDealLanded(deal);
   // Sem ações legais (cartas, apostas) enquanto a mão está escondida (pausa e distribuição, ~3,7 s com a
   // recolhida): a mão é a do servidor, mas ainda não apareceu. O relógio da vez do servidor (20 s) corre.
-  const legal = p.connected && !modalOpen && !deal.handHidden ? vm.legalActions : [];
   const pending = pendingText(vm);
-  const turn = turnText(vm);
   const mineSeat = vm.byPosition.self;
   const fx: SeatSignals = {
     sfxMarks: p.sfxMarks,
@@ -655,24 +666,45 @@ export function TableView(p: TableViewProps) {
   // no fim da partida a mesa fica por `useFinishHold` e o temporizador do controlador segura a vaza.
   const lingerByHold =
     p.lingering?.handEnd === true && p.animateDeal === true && vm.phase === 'playing';
+  // Vaza fechada no meio da mão (animado): fica legível pelo tempo do controlador (~1,5 s) e então volta ao
+  // monte; as jogadas que já chegaram da vaza seguinte esperam o recolher acabar (depois deslizam).
+  const lingerMid =
+    p.lingering !== null &&
+    p.lingering.handEnd !== true &&
+    p.animateDeal === true &&
+    !p.reduceMotion;
   // Na pausa a vaza retida fica na mesa mesmo que um bot já tenha jogado a primeira carta da mão nova
   // (o servidor segue adiante): senão a vaza some antes do recolher e a carta nova aparece cedo.
   const showLinger =
     p.lingering !== null &&
-    (lingerByHold && holding ? true : vm.current.length === 0 && !lingerByHold);
-  // Durante a distribuição a vaza fica vazia: jogada de bot que chega cedo aparece (deslizando) depois.
-  const dealingNow = deal.phase === 'dealing';
-  // Todas as cartas da mão ficam na mesa até o fim dela: vazas fechadas + a em curso. No fim da mão o
-  // servidor já abriu a seguinte, então a pausa e o recolher usam as vazas retidas (`lingering.layers`).
-  const retained: readonly TrickLayer[] | undefined =
-    showLinger && p.lingering?.handEnd === true
-      ? (p.lingering.layers ?? [{ plays: p.lingering.plays, ownCovered: p.lingering.ownCovered }])
-      : undefined;
-  const tableLayers: readonly TrickLayer[] = dealingNow ? [] : (retained ?? handLayers(vm));
-  const latestLayer = tableLayers[tableLayers.length - 1];
-  const earlierLayers = tableLayers.slice(0, -1);
-  const trickPlays = latestLayer?.plays ?? [];
-  const trickOwn = latestLayer?.ownCovered ?? null;
+    (lingerByHold && holding ? true : lingerMid || (vm.current.length === 0 && !lingerByHold));
+  const midRun = useTrickCollect(
+    lingerMid && p.lingering !== null
+      ? { plays: p.lingering.plays, ownCovered: p.lingering.ownCovered }
+      : null,
+    p.animateDeal === true && !p.reduceMotion,
+    deal.phase !== 'idle' || p.lingering?.handEnd === true,
+  );
+  // Durante a distribuição e o recolher da vaza a mesa fica vazia: jogada de bot que chega cedo aparece
+  // (deslizando) depois. A mesa só tem a vaza em curso: as anteriores já voltaram ao monte.
+  const dealingNow = deal.phase === 'dealing' || midRun !== null;
+  const tableLayer: TrickLayer | null = dealingNow
+    ? null
+    : showLinger && p.lingering !== null
+      ? holdLayer(p.lingering, vm.mySeat)
+      : vm.current.length > 0
+        ? { plays: vm.current, ownCovered: vm.ownCoveredCurrent }
+        : null;
+  // Retenção da vaza e recolher (~2,5 s): a mesa ainda é da vaza anterior, então jogar carta espera (como na
+  // pausa do fim da mão) e o aviso "Sua vez" não aparece.
+  const trickBusy = lingerMid || midRun !== null;
+  const legalNoPlay = trickBusy
+    ? vm.legalActions.filter((id) => !id.startsWith('play'))
+    : vm.legalActions;
+  const legal = p.connected && !modalOpen && !deal.handHidden ? legalNoPlay : [];
+  const turn = holding || trickBusy ? null : turnText(vm);
+  const trickPlays = tableLayer?.plays ?? [];
+  const trickOwn = tableLayer?.ownCovered ?? null;
   const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
   const lingerWinner =
     lingerSeat >= 0
@@ -720,16 +752,16 @@ export function TableView(p: TableViewProps) {
   // sequência acaba.
   const collectRef = useRef<readonly TrickLayer[]>([]);
   useEffect(() => {
-    if (holding && showLinger && tableLayers.length > 0) collectRef.current = tableLayers;
+    if (holding && showLinger && tableLayer !== null) collectRef.current = [tableLayer];
     else if (deal.phase === 'idle') collectRef.current = [];
-  }, [holding, showLinger, tableLayers, deal.phase]);
+  }, [holding, showLinger, tableLayer, deal.phase]);
   // Geometria real para o recolher e a distribuição partirem/chegarem exatamente nas cartas reais:
   // pano (raiz do overlay), vaza e mão medidas na janela, durante a pausa e ao iniciar a sequência.
   const feltRef = useRef<ViewHandle>(null);
   const trickRef = useRef<ViewHandle>(null);
   const handRef = useRef<ViewHandle>(null);
   const [geom, setGeom] = useState<DealGeom | null>(null);
-  const measuring = deal.phase === 'hold' || deal.run !== null;
+  const measuring = deal.phase === 'hold' || deal.run !== null || lingerMid || midRun !== null;
   useEffect(() => {
     if (!measuring) return undefined;
     let alive = true;
@@ -747,7 +779,6 @@ export function TableView(p: TableViewProps) {
     <PlayedCards
       containerRef={trickRef}
       plays={trickPlays}
-      earlier={earlierLayers}
       mySeat={vm.mySeat >= 0 ? vm.mySeat : 0}
       ownCovered={trickOwn}
       manilhas={vm.manilhas}
@@ -998,14 +1029,14 @@ export function TableView(p: TableViewProps) {
         collapsable={false}
       />
       {landscapeArena ?? flexArena}
-      {deal.run !== null ? (
+      {deal.run !== null || midRun !== null ? (
         <DealOverlay
-          runId={deal.run.id}
-          plan={deal.run.plan}
+          runId={(deal.run ?? midRun)!.id}
+          plan={(deal.run ?? midRun)!.plan}
           mySeat={vm.mySeat}
           avatarSize={m.avatar}
           peek={m.peek}
-          collectTricks={collectRef.current}
+          collectTricks={deal.run !== null ? collectRef.current : (midRun?.tricks ?? [])}
           trickSize={m.played}
           trickRow={m.trick === 'row'}
           trickScale={trickFit}
@@ -1099,7 +1130,7 @@ export function TableView(p: TableViewProps) {
     >
       <HandFan
         hand={vm.myHand}
-        legalActions={actionsOn && !deal.handHidden ? vm.legalActions : []}
+        legalActions={actionsOn && !deal.handHidden ? legalNoPlay : []}
         blindCount={vm.blindCount}
         coverMode={p.coverMode}
         manilhas={vm.manilhas}

@@ -355,7 +355,7 @@ describe('TableView: 3H2', () => {
     expect(out).toContain('Vaza de Bia');
   });
 
-  it('as cartas de TODAS as vazas da mão ficam na mesa (fechadas e a em curso)', () => {
+  it('só a vaza em curso fica na mesa (as fechadas já voltaram ao monte)', () => {
     const t1 = [
       { seat: 0, rank: 'K', suit: 'ouros', covered: false },
       { seat: 1, rank: '4', suit: 'paus', covered: false },
@@ -375,9 +375,9 @@ describe('TableView: 3H2', () => {
         },
       }),
     );
-    expect(out).toContain('rei de ouros');
-    expect(out).toContain('quatro de paus');
-    expect(out).toContain('cinco de espadas');
+    expect(out).not.toContain('rei de ouros');
+    expect(out).not.toContain('quatro de paus');
+    expect(out).not.toContain('cinco de espadas');
     expect(out).toContain('ás de copas');
   });
 

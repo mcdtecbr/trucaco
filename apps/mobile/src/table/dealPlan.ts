@@ -117,6 +117,21 @@ export function dealPlan(opts: {
   };
 }
 
+/**
+ * Plano só de recolher: as cartas da vaza se juntam e voltam ao monte (a cada vaza, no meio da mão). Sem
+ * embaralhar nem distribuir.
+ */
+export function collectPlan(): DealPlan {
+  return {
+    collectMs: COLLECT_MS,
+    shuffleMs: 0,
+    shuffleStartMs: COLLECT_MS,
+    cards: [],
+    selfLandedMs: COLLECT_MS,
+    endMs: COLLECT_MS,
+  };
+}
+
 export interface DealDecision {
   readonly animate: boolean;
   /** Há mão anterior para recolher ao monte. */
