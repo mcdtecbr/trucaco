@@ -323,3 +323,32 @@ export function trickFitScale(
     width === undefined ? 1 : Math.max(0.6, (width.arenaW - 2 * width.avatarBox - 8) / width.footW);
   return Math.min(base, byH, byW);
 }
+
+/** Altura máxima da placa de publicidade impressa no pano (igual ao `boxH` do `TableFelt`). */
+export const AD_PLATE_MAX_H = 110;
+/** Folga da placa (girada 5 graus) para as cartas e para a faixa do parceiro. */
+export const AD_PLATE_MARGIN = 24;
+/** A cruz não encolhe abaixo disto só para abrir espaço à placa. */
+export const AD_MIN_TRICK_SCALE = 0.75;
+
+/**
+ * A placa fica no centro do pano e a cruz da vaza também: sobrepõem-se. Havendo espaço, a placa vai para a
+ * faixa livre acima da cruz (entre o parceiro e a vaza); se faltar um pouco, a cruz encolhe até
+ * `AD_MIN_TRICK_SCALE` para abrir a faixa. Tela realmente apertada: a placa fica no centro e a vaza a cobre.
+ * `offsetY` é relativo ao centro do pano (negativo = acima).
+ */
+export function trickAdLayout(
+  arenaH: number,
+  zones: { partnerZone: number; mineZone: number },
+  playedH: number,
+  trickScale: number,
+): { scale: number; offsetY: number } {
+  const zone = arenaH - zones.partnerZone - zones.mineZone;
+  const plate = Math.min(arenaH * 0.45, AD_PLATE_MAX_H) + AD_PLATE_MARGIN;
+  const full = crossHeight(playedH);
+  const bySpace = (zone - 2 * plate) / full;
+  const scale = Math.min(trickScale, bySpace);
+  if (scale < Math.min(trickScale, AD_MIN_TRICK_SCALE)) return { scale: trickScale, offsetY: 0 };
+  const band = (zone - full * scale) / 2;
+  return { scale, offsetY: zones.partnerZone + band / 2 - arenaH / 2 };
+}

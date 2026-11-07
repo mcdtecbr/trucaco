@@ -10,7 +10,7 @@ import {
   screenPosition,
   trickCardOffset,
 } from '@trucaco/ui';
-import type { CardSize, PlayedTrickView, ScreenPosition } from '@trucaco/ui';
+import type { CardSize, PeekDirection, PlayedTrickView, ScreenPosition } from '@trucaco/ui';
 import { COLLECT_FLIP_MS, DEAL_FLIGHT_MS, FLIP_MS, dealDecision, dealPlan } from './dealPlan';
 import type { DealPlan } from './dealPlan';
 
@@ -34,6 +34,40 @@ export interface DealSequence {
 
 /** Pausa do fim da mão: a mão nova já está no estado, mas não aparece nem aceita jogada. */
 const HOLD: DealSequence = { phase: 'hold', run: null, handHidden: true, viraHidden: true };
+/**
+ * Costas das cartas de cada assento durante a sequência: `null` = o estado manda (sem animação); na pausa
+ * do fim da mão nenhuma (as cartas estão na mesa); na distribuição, uma por carta já pousada. A carta
+ * aparece no leque ao lado do avatar no instante em que a voadora chega, nunca antes.
+ */
+export function useDealLanded(seq: DealSequence): Readonly<Record<number, number>> | null {
+  const runId = seq.run?.id ?? 0;
+  const [state, setState] = useState<{ id: number; counts: Readonly<Record<number, number>> }>({
+    id: 0,
+    counts: {},
+  });
+  const plan = seq.run?.plan;
+  useEffect(() => {
+    if (plan === undefined) return undefined;
+    const timers = plan.cards.map((c) =>
+      setTimeout(
+        () =>
+          setState((cur) => ({
+            id: runId,
+            counts: {
+              ...(cur.id === runId ? cur.counts : {}),
+              [c.seat]: ((cur.id === runId ? cur.counts[c.seat] : 0) ?? 0) + 1,
+            },
+          })),
+        c.startMs + DEAL_FLIGHT_MS - LAND_FADE_LEAD_MS,
+      ),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [runId, plan]);
+  if (seq.phase === 'hold') return {};
+  if (seq.run === null) return null;
+  return state.id === runId ? state.counts : {};
+}
+
 const IDLE: DealSequence = { phase: 'idle', run: null, handHidden: false, viraHidden: false };
 
 /**
@@ -137,6 +171,23 @@ export function dealTargets(
   };
 }
 
+/** A carta voadora começa a sumir (e a do leque a aparecer) este tanto antes de pousar. */
+const LAND_FADE_LEAD_MS = 60;
+const LAND_FADE_MS = 120;
+/** Folga entre a carta que pousa e a borda do avatar. */
+const LAND_GAP = 2;
+
+/**
+ * Onde a carta de um adversário pousa: AO LADO do avatar, do lado em que o leque aparece (`peek`), com a
+ * carta inteira fora do rosto. Devolve o centro da carta.
+ */
+export function sideLanding(avatarCenter: Point, avatarSize: number, dir: PeekDirection): Point {
+  const half = avatarSize / 2 + RING + LAND_GAP;
+  if (dir === 'down') return { x: avatarCenter.x, y: avatarCenter.y + half + CARD.height / 2 };
+  const dx = half + CARD.width / 2;
+  return { x: avatarCenter.x + (dir === 'right' ? dx : -dx), y: avatarCenter.y };
+}
+
 /** Easing contínuo: sai do monte já em movimento e só desacelera ao chegar. */
 const FLIGHT_EASING = Easing.out(Easing.quad);
 
@@ -157,7 +208,10 @@ export function DealOverlay({
   feltSize,
   handCenter,
   handSize = 'md',
+  peek,
 }: {
+  /** Lado do leque de costas de cada assento: as cartas pousam ao lado do avatar, nunca sobre ele. */
+  peek?: Readonly<Record<'partner' | 'left' | 'right', PeekDirection>>;
   /** Vaza em fileira (celular deitado): o recolher parte da fileira, não da cruz. */
   trickRow?: boolean;
   /** Centro da grade da vaza real (coordenadas do overlay); omitido = centro do pano. */
@@ -409,7 +463,13 @@ export function DealOverlay({
             const mine = pos === 'self';
             // Minhas cartas pousam no leque da mão real e viram para a face; as dos outros ficam na pilha
             // ao lado do avatar. Cartas do mesmo assento pousam levemente deslocadas.
-            const to = mine && handCenter !== undefined ? handCenter : tg[pos];
+            const dir = pos === 'self' ? undefined : peek?.[pos];
+            const to =
+              mine && handCenter !== undefined
+                ? handCenter
+                : dir !== undefined
+                  ? sideLanding(tg[pos], avatarSize, dir)
+                  : tg[pos];
             const sideways = pos === 'left' || pos === 'right';
             const spread = mine ? (c.round - 1) * HAND.width * 0.7 : (c.round - 1) * 14;
             const endX = to.x - deck.x + (sideways ? 0 : spread);
@@ -436,9 +496,17 @@ export function DealOverlay({
                   outputRange: [0, 0, 1, 1, 0],
                   extrapolate: 'clamp',
                 })
-              : clock.interpolate({
-                  inputRange: [0, Math.max(0, start - 1), start],
-                  outputRange: [0, 0, 1],
+              : // Dos outros: voa até o lado do avatar e some ao pousar (o leque de costas do assento
+                // ganha a carta nesse instante), sem nunca cobrir o rosto.
+                clock.interpolate({
+                  inputRange: [
+                    0,
+                    Math.max(0, start - 1),
+                    start,
+                    land - LAND_FADE_LEAD_MS,
+                    land - LAND_FADE_LEAD_MS + LAND_FADE_MS,
+                  ],
+                  outputRange: [0, 0, 1, 1, 0],
                   extrapolate: 'clamp',
                 });
             const sx = mine

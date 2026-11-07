@@ -60,6 +60,11 @@ export interface PlayedCardsProps {
   readonly arrangement?: 'cross' | 'row';
   /** Duração (ms) do deslize da carta jogada, do assento até a vaza. Ausente ou 0 = sem animação. */
   readonly slideMs?: number;
+  /**
+   * Cartas que entram juntas na mesa (ex.: bots que jogaram durante a distribuição) deslizam uma depois da
+   * outra, com este intervalo entre elas (ms). Padrão: 70% do deslize. Carta que chega sozinha não espera.
+   */
+  readonly staggerMs?: number;
   /** Recebe a vista raiz da vaza (para medir a posição na tela e partir dela no recolher). */
   readonly containerRef?: Ref<ViewHandle>;
 }
@@ -97,6 +102,31 @@ export function PlayedCards(p: PlayedCardsProps) {
   const foot = trickFootprint(size, arrangement);
   const { width: cw, height: ch } = cardSizes[size];
   const total = layers.reduce((n, l) => n + l.plays.length, 0);
+  // Cartas ainda não vistas neste componente (o conjunto só é gravado depois do commit): as que entram no
+  // mesmo render deslizam em fila, na ordem em que foram jogadas.
+  const seen = useRef<ReadonlySet<string>>(new Set());
+  // Na primeira renderização (ex.: giro de tela com a mesa cheia) não há fila: tudo entra junto.
+  const mounted = useRef(false);
+  const entering = new Map<string, number>();
+  const slideKey = (k: number, play: PlayedCardView): string =>
+    `${k}:${play.seat}:${play.rank}${play.suit}:${String(play.covered)}`;
+  layers.forEach((layer, k) => {
+    const { byPosition, order } = placePlays(layer.plays, p.mySeat);
+    for (const pos of order) {
+      const play = byPosition[pos];
+      if (play === undefined) continue;
+      const key = slideKey(k, play);
+      if (!seen.current.has(key) && !entering.has(key))
+        entering.set(key, mounted.current ? entering.size : 0);
+    }
+  });
+  useEffect(() => {
+    mounted.current = true;
+    const next = new Set<string>();
+    layers.forEach((layer, k) => layer.plays.forEach((play) => next.add(slideKey(k, play))));
+    seen.current = next;
+  });
+  const stagger = p.staggerMs ?? Math.round((p.slideMs ?? 0) * 0.7);
   return (
     <View
       ref={p.containerRef}
@@ -153,6 +183,7 @@ export function PlayedCards(p: PlayedCardsProps) {
                   pos={pos}
                   size={size}
                   ms={p.slideMs}
+                  delay={(entering.get(slideKey(k, play)) ?? 0) * stagger}
                 >
                   {cardNode}
                 </SlideIn>
@@ -190,23 +221,27 @@ function SlideIn(p: {
   readonly pos: ScreenPosition;
   readonly size: CardSize;
   readonly ms: number;
+  /** Espera antes de começar (a carta fica invisível): fila de cartas que entram juntas. */
+  readonly delay?: number;
   readonly children: ReactNode;
 }) {
   const from = slideFrom(p.pos, cardSizes[p.size].width, cardSizes[p.size].height);
   // Decide só na montagem: cartas já presentes quando o deslize é armado (reconexão) ficam paradas.
   const ms = useRef(p.ms).current;
+  const delay = useRef(p.delay ?? 0).current;
   const t = useRef(new Animated.Value(ms > 0 ? 0 : 1)).current;
   useEffect(() => {
     if (ms <= 0) return undefined;
     const anim = Animated.timing(t, {
       toValue: 1,
       duration: ms,
+      delay,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: Platform.OS !== 'web',
     });
     anim.start();
     return () => anim.stop();
-  }, [t, ms]);
+  }, [t, ms, delay]);
   const dx = t.interpolate({ inputRange: [0, 1], outputRange: [from.x, 0] });
   const dy = t.interpolate({ inputRange: [0, 1], outputRange: [from.y, 0] });
   const opacity = t.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 1, 1] });

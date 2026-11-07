@@ -7,6 +7,10 @@ import {
   crossHeight,
   flexZones,
   trickFitScale,
+  trickAdLayout,
+  AD_MIN_TRICK_SCALE,
+  AD_PLATE_MARGIN,
+  AD_PLATE_MAX_H,
   DECK_GROUP_W,
   FELT_PAD,
   RING_PX,
@@ -141,4 +145,38 @@ describe('retrato baixo (avatar menor, abaixo de SHORT_PHONE_HEIGHT)', () => {
       expect(fit).toBeGreaterThanOrEqual(0.6);
     });
   }
+});
+
+describe('trickAdLayout: a vaza não cobre a placa quando há espaço', () => {
+  const played = cardSizes.md.height;
+  const zones = flexZones(76, true);
+
+  it('tela alta: a placa sobe para a faixa acima da cruz, sem encostar na vaza nem no parceiro', () => {
+    const arenaH = 1000;
+    const r = trickAdLayout(arenaH, zones, played, 1);
+    expect(r.scale).toBe(1);
+    const plate = Math.min(arenaH * 0.45, AD_PLATE_MAX_H);
+    const zone = arenaH - zones.partnerZone - zones.mineZone;
+    const crossTop = zones.partnerZone + (zone - crossHeight(played) * r.scale) / 2;
+    const plateCenter = arenaH / 2 + r.offsetY;
+    expect(plateCenter + plate / 2 + AD_PLATE_MARGIN / 2).toBeLessThanOrEqual(crossTop);
+    expect(plateCenter - plate / 2).toBeGreaterThanOrEqual(zones.partnerZone);
+  });
+
+  it('falta pouco: a cruz encolhe (até o mínimo) para abrir a faixa', () => {
+    // Altura em que a cruz inteira não deixaria faixa para a placa, mas a 90% deixa.
+    const plate = AD_PLATE_MAX_H + AD_PLATE_MARGIN;
+    const arenaH = 2 * plate + crossHeight(played) * 0.9 + zones.partnerZone + zones.mineZone;
+    const r = trickAdLayout(arenaH, zones, played, 1);
+    expect(r.scale).toBeLessThan(1);
+    expect(r.scale).toBeGreaterThanOrEqual(AD_MIN_TRICK_SCALE);
+    expect(r.offsetY).toBeLessThan(0);
+  });
+
+  it('tela realmente apertada: nada muda (a placa fica no centro e a vaza a cobre)', () => {
+    expect(trickAdLayout(420, flexZones(52, true), played, 0.8)).toEqual({
+      scale: 0.8,
+      offsetY: 0,
+    });
+  });
 });

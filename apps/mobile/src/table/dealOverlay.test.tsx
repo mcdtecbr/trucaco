@@ -2,7 +2,8 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Animated } from 'react-native';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlayedCards } from '@trucaco/ui';
 import { DealOverlay } from './DealOverlay';
 import { dealPlan } from './dealPlan';
@@ -143,5 +144,26 @@ describe('PlayedCards: deslize', () => {
     expect(before).not.toBeNull();
     act(() => root.render(<PlayedCards plays={plays} mySeat={0} slideMs={450} />));
     expect(cardEl()).toBe(before);
+  });
+});
+
+describe('PlayedCards: cartas que entram juntas deslizam em fila', () => {
+  const bot = (seat: number, rank: string) => ({ seat, rank, suit: 'paus', covered: false });
+  const delays = (spy: { mock: { calls: readonly unknown[][] } }): number[] =>
+    spy.mock.calls.map((c) => (c[1] as { delay?: number }).delay ?? 0);
+
+  it('3 bots que jogaram durante a distribuição entram um depois do outro; a carta seguinte, sozinha, não espera', () => {
+    // Montada vazia (a mesa fica vazia durante a distribuição) e depois recebe as 3 cartas de uma vez.
+    act(() => root.render(<PlayedCards plays={[]} mySeat={0} slideMs={450} />));
+    const spy = vi.spyOn(Animated, 'timing');
+    const three = [bot(1, '4'), bot(2, '5'), bot(3, '6')];
+    act(() => root.render(<PlayedCards plays={three} mySeat={0} slideMs={450} />));
+    expect(delays(spy)).toEqual([0, 315, 630]);
+    spy.mockClear();
+    act(() =>
+      root.render(<PlayedCards plays={[...three, bot(0, '7')]} mySeat={0} slideMs={450} />),
+    );
+    expect(delays(spy)).toEqual([0]);
+    spy.mockRestore();
   });
 });

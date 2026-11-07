@@ -45,6 +45,8 @@ export interface TableFeltProps {
   readonly children?: ReactNode;
   /** Publicidade no pano. Omitido = arte placeholder do jogo. `null` = sem publicidade. */
   readonly ad?: TableAd | null;
+  /** Desloca a placa na vertical (px, negativo = acima do centro) para não ficar sob a vaza. */
+  readonly adOffsetY?: number;
   readonly style?: StyleProp<ViewStyle>;
   readonly contentStyle?: StyleProp<ViewStyle>;
   readonly testID?: string;
@@ -67,7 +69,7 @@ export function TableFelt(p: TableFeltProps) {
           aria-hidden
           importantForAccessibility="no-hide-descendants"
         >
-          <FeltArt w={size.w} h={size.h} ad={ad} />
+          <FeltArt w={size.w} h={size.h} ad={ad} adOffsetY={p.adOffsetY ?? 0} />
         </View>
       ) : null}
       <View style={[styles.content, p.contentStyle]} pointerEvents="box-none">
@@ -77,7 +79,17 @@ export function TableFelt(p: TableFeltProps) {
   );
 }
 
-function FeltArt({ w, h, ad }: { w: number; h: number; ad: TableAd | null }) {
+function FeltArt({
+  w,
+  h,
+  ad,
+  adOffsetY,
+}: {
+  w: number;
+  h: number;
+  ad: TableAd | null;
+  adOffsetY: number;
+}) {
   const r = Math.min(72, Math.min(w, h) / 3);
   const iw = w - WOOD * 2;
   const ih = h - WOOD * 2;
@@ -137,7 +149,7 @@ function FeltArt({ w, h, ad }: { w: number; h: number; ad: TableAd | null }) {
         <Rect width={iw} height={ih} rx={ir} fill="url(#folds)" />
         <Ellipse cx={iw * 0.3} cy={ih * 0.2} rx={iw * 0.4} ry={ih * 0.22} fill="url(#sheen)" />
       </G>
-      {ad !== null ? <AdArt ad={ad} cx={cx} cy={cy} w={iw} h={ih} /> : null}
+      {ad !== null ? <AdArt ad={ad} cx={cx} cy={cy + adOffsetY} w={iw} h={ih} /> : null}
       {/* Vinheta e sombra interna da madeira por cima de tudo. */}
       <G x={WOOD} y={WOOD}>
         <Rect width={iw} height={ih} rx={ir} fill="url(#vignette)" />

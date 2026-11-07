@@ -71,7 +71,7 @@ import { SoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
-import { DealOverlay, useDealSequence } from '../table/DealOverlay';
+import { DealOverlay, useDealLanded, useDealSequence } from '../table/DealOverlay';
 import { FLIP_MS, handHoldMs, playSlideMs } from '../table/dealPlan';
 import { measureDealGeom } from '../table/dealGeom';
 import type { DealGeom } from '../table/dealGeom';
@@ -93,6 +93,7 @@ import {
   landscapeDockPlan,
   landscapeGeometry,
   phoneDockPlan,
+  trickAdLayout,
   trickFitScale,
 } from '../table/tableGeometry';
 import { TableFelt } from '../table/TableFelt';
@@ -310,6 +311,8 @@ interface SeatSignals {
   reduceMotion: boolean;
   avatarSize: number;
   onSignalEnd(seat: number, key: number): void;
+  /** Costas já distribuídas por assento durante a animação; `null` = vale a contagem do estado. */
+  dealt?: Readonly<Record<number, number>> | null;
 }
 
 /** Avatar quadrado com o apelido em faixa e, se for o caso, as costas das cartas saindo por trás. */
@@ -338,7 +341,13 @@ function Seat({
   own?: boolean;
 }) {
   const status = s.nickname === '' && s.status === 'connected' ? 'empty' : s.status;
-  const cards = vm.phase === 'playing' ? s.handSize : 0;
+  const dealt = fx.dealt ?? null;
+  const cards =
+    vm.phase !== 'playing'
+      ? 0
+      : dealt === null
+        ? s.handSize
+        : Math.min(s.handSize, dealt[s.seat] ?? 0);
   return (
     <View testID={testID} style={styles.seatBox}>
       {peek !== undefined ? (
@@ -531,6 +540,7 @@ export function TableView(p: TableViewProps) {
   });
   const nicknameOf = (seat: number): string => vm.seats[seat]?.nickname ?? '';
   const holding = deal.phase === 'hold';
+  const dealt = useDealLanded(deal);
   // Sem ações legais (cartas, apostas) enquanto a mão está escondida (pausa e distribuição, ~3,7 s com a
   // recolhida): a mão é a do servidor, mas ainda não apareceu. O relógio da vez do servidor (20 s) corre.
   const legal = p.connected && !modalOpen && !deal.handHidden ? vm.legalActions : [];
@@ -543,6 +553,7 @@ export function TableView(p: TableViewProps) {
     reduceMotion: p.reduceMotion,
     avatarSize: m.avatar,
     onSignalEnd: p.on.signalEnd,
+    dealt,
   };
   // Sonda para E2E (esperar por estado, nunca por tempo); fora da árvore de acessibilidade.
   const probe = `${vm.phase}|turn=${vm.actingSeat}|hand=${vm.handNumber}|act=${String(vm.canAct)}|plays=${vm.current.length}|match=${vm.matchNumber}|me=${vm.mySeat}|bots=${vm.seats.filter((x) => x.isBot).length}`;
@@ -889,7 +900,7 @@ export function TableView(p: TableViewProps) {
     ((arena?.w ?? est.w) - (m.avatar + 2 * RING_PX)) / 2 - DECK_GROUP_W - spacing.xs - 4,
   );
   // Telas baixas: a cruz da vaza encolhe para caber entre o parceiro (em cima) e o meu avatar (embaixo).
-  const trickFit = trickFitScale(
+  const trickFit0 = trickFitScale(
     arena?.h ?? est.h,
     zones,
     cardSizes[m.played].height,
@@ -900,6 +911,13 @@ export function TableView(p: TableViewProps) {
       footW: trickFootprint(m.played, 'cross').width,
     },
   );
+
+  // A placa de publicidade do pano fica fora da vaza quando há espaço (senão a cruz a cobre).
+  const adLayout =
+    landscape || p.tableAd === null
+      ? { scale: trickFit0, offsetY: 0 }
+      : trickAdLayout(arena?.h ?? est.h, zones, cardSizes[m.played].height, trickFit0);
+  const trickFit = adLayout.scale;
 
   const flexArena = (
     <View
@@ -969,6 +987,7 @@ export function TableView(p: TableViewProps) {
       style={styles.board}
       contentStyle={styles.boardContent}
       ad={p.tableAd}
+      adOffsetY={adLayout.offsetY}
       testID="table-felt"
     >
       <View
@@ -984,6 +1003,7 @@ export function TableView(p: TableViewProps) {
           plan={deal.run.plan}
           mySeat={vm.mySeat}
           avatarSize={m.avatar}
+          peek={m.peek}
           collectTricks={collectRef.current}
           trickSize={m.played}
           trickRow={m.trick === 'row'}
