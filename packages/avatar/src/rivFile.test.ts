@@ -46,6 +46,13 @@ describe('assets/rive/avatar.riv', () => {
     }
   });
 
+  // Fala: input Boolean `speaking` e a timeline `speak_loop` na layer `Speak`.
+  it('tem o input de fala e a animação speak_loop', () => {
+    for (const name of [RIVE_CONTRACT.speakingInput, 'speak_loop', 'Speak']) {
+      expect(text.includes(name), `item de fala ausente no .riv: ${name}`).toBe(true);
+    }
+  });
+
   it('tem as animações dos cabelos, barbas e chapéus da Fatia 4', () => {
     for (const name of ['hair_18', 'beard_4', 'hat_10']) {
       expect(text.includes(name), `animação ausente no .riv: ${name}`).toBe(true);

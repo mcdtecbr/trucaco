@@ -109,6 +109,39 @@ export function useSignalAnimation(input: SignalAnimationInput): SignalAnimation
   return { progress, activeId, highlight: reduce && activeId !== null };
 }
 
+/** Duração de um ciclo de boca aberta e fechada (30 quadros a 60 fps, igual ao `speak_loop` do rig). */
+export const SPEAK_CYCLE_MS = 500;
+
+/**
+ * Ciclo de fala 0 -> 1 em loop enquanto `speaking`. Devolve `null` quando não fala ou com menos
+ * movimento (a boca fica parada; o balão já mostra o texto).
+ */
+export function useSpeakingAnimation(
+  speaking: boolean,
+  reduceMotion: boolean,
+): Animated.Value | null {
+  const talk = useRef(new Animated.Value(0)).current;
+  const enabled = speaking && !reduceMotion;
+  useEffect(() => {
+    if (!enabled) return undefined;
+    talk.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(talk, {
+        toValue: 1,
+        duration: SPEAK_CYCLE_MS,
+        easing: Easing.linear,
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      talk.setValue(0);
+    };
+  }, [enabled, talk]);
+  return enabled ? talk : null;
+}
+
 /** Respiração contínua + piscada aleatória a cada 3-7 s (ociosos locais; nunca passam pelo servidor). */
 export function useIdleAnimation(enabled: boolean): {
   readonly breathe: Animated.Value;

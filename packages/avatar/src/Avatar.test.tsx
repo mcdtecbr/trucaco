@@ -108,3 +108,43 @@ describe('render estático', () => {
     expect(pickRenderer('fallback')).toBe('fallback');
   });
 });
+
+describe('fala (balão de chat)', () => {
+  it('com `speaking` a boca aberta entra na árvore; sem ele, não', () => {
+    const base = renderToStaticMarkup(<Avatar parts={DEFAULT_AVATAR_PARTS} />);
+    const talking = renderToStaticMarkup(<Avatar parts={DEFAULT_AVATAR_PARTS} speaking />);
+    expect(talking.length).toBeGreaterThan(base.length);
+  });
+
+  it('com menos movimento a boca fica parada', () => {
+    const base = renderToStaticMarkup(<Avatar parts={DEFAULT_AVATAR_PARTS} reduceMotion />);
+    const talking = renderToStaticMarkup(
+      <Avatar parts={DEFAULT_AVATAR_PARTS} reduceMotion speaking />,
+    );
+    expect(talking).toBe(base);
+  });
+});
+
+describe('fala com sinal em curso', () => {
+  it('sinal de boca aberta ou de sorriso tem prioridade sobre a fala', () => {
+    const talk = new Animated.Value(0.3);
+    const html = (id: (typeof SIGNAL_IDS)[number] | null, withTalk: boolean) =>
+      renderToStaticMarkup(
+        <AvatarFallback
+          parts={DEFAULT_AVATAR_PARTS}
+          size={64}
+          activeId={id}
+          progress={new Animated.Value(0.5)}
+          breathe={new Animated.Value(0)}
+          blink={new Animated.Value(0)}
+          highlight={false}
+          talk={withTalk ? talk : null}
+          accessibilityLabel="Avatar"
+        />,
+      );
+    expect(html(null, true)).not.toBe(html(null, false));
+    for (const id of ['mouth_open', 'tongue', 'smile'] as const) {
+      expect(html(id, true), id).toBe(html(id, false));
+    }
+  });
+});

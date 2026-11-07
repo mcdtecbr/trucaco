@@ -33,6 +33,8 @@ export interface AvatarFallbackProps {
   readonly blink: Animated.Value;
   /** Destaque estático (modo menos movimento). */
   readonly highlight: boolean;
+  /** Ciclo da fala 0 -> 1 em loop (`useSpeakingAnimation`); `null` quando não fala. */
+  readonly talk?: Animated.Value | null | undefined;
   readonly accessibilityLabel: string;
   readonly testID?: string | undefined;
   /**
@@ -47,6 +49,10 @@ export const SQUARE_ZOOM = 1.28;
 const SQUARE_SHIFT_Y = 0.05;
 /** Raio dos cantos do formato quadrado (fração do lado). */
 export const SQUARE_RADIUS = 0.18;
+
+/** Quadros-chave do `speak_loop` (30 quadros a 60 fps): fechada, aberta, quase fechada, aberta, fechada. */
+const TALK_INPUT = [0, 8 / 30, 14 / 30, 22 / 30, 1];
+const TALK_OPEN = [0, 0.9, 0.15, 1, 0];
 
 const INK = '#1E1A1A';
 const LIP = '#B4443A';
@@ -136,9 +142,21 @@ export function AvatarFallback(props: AvatarFallbackProps) {
   const smileOp = ch('smileOpacity');
   // boca escolhida: esmaece com o sorriso e some enquanto a boca aberta dos sinais aparece
   const smileMouthOp: Num = has('smileOpacity') ? Animated.subtract(1, smileOp) : 1;
+  // Fala (balão de chat): a boca aberta abre e fecha em loop, mesmos quadros do `speak_loop` do rig
+  // (0, 8, 14, 22 e 30 de 30). Um sinal de boca aberta em curso tem prioridade.
+  const talk = props.talk ?? null;
+  const talking = talk !== null && !has('mouthOpenOpacity') && !has('smileOpacity');
+  const talkOpen: Num | null = talking
+    ? talk.interpolate({ inputRange: TALK_INPUT, outputRange: TALK_OPEN })
+    : null;
+  const talkClosed: Num | null = talking
+    ? talk.interpolate({ inputRange: TALK_INPUT, outputRange: TALK_OPEN.map((v) => 1 - v) })
+    : null;
   const baseMouthOp: Num = has('mouthOpacity')
     ? Animated.multiply(smileMouthOp, ch('mouthOpacity'))
-    : smileMouthOp;
+    : talkClosed !== null
+      ? Animated.multiply(smileMouthOp, talkClosed)
+      : smileMouthOp;
 
   /** Id do recorte do sombreado, único por instância (vários avatares na mesma página web). */
   const clipIdOf = (p: Part): string | null =>
@@ -356,6 +374,12 @@ export function AvatarFallback(props: AvatarFallbackProps) {
           {has('mouthOpenOpacity') ? (
             <Animated.View
               style={[at(REGIONS.mouthOpen), { opacity: ch('mouthOpenOpacity') as number }]}
+            >
+              {layer('mouthOpen', REGIONS.mouthOpen, true)}
+            </Animated.View>
+          ) : talkOpen !== null ? (
+            <Animated.View
+              style={[at(REGIONS.mouthOpen), { opacity: talkOpen as unknown as number }]}
             >
               {layer('mouthOpen', REGIONS.mouthOpen, true)}
             </Animated.View>

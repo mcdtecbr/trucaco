@@ -6,7 +6,7 @@ import {
   type SignalId,
 } from '@trucaco/protocol';
 import { AvatarFallback } from './AvatarFallback';
-import { useIdleAnimation, useSignalAnimation } from './useSignalAnimation';
+import { useIdleAnimation, useSignalAnimation, useSpeakingAnimation } from './useSignalAnimation';
 
 /**
  * Renderizadores disponíveis. Hoje só o vetorial; `rive` entra nos blocos 4G/4H quando o
@@ -26,6 +26,8 @@ export interface AvatarProps {
   readonly signal?: { readonly id: SignalId; readonly key: number } | null;
   /** Chamado quando o sinal termina e o avatar voltou ao ocioso. */
   readonly onSignalEnd?: () => void;
+  /** Fala em curso (balão de chat na tela): a boca abre e fecha em loop; é o input `speaking` do rig. */
+  readonly speaking?: boolean;
   /** Lado em px (padrão 64). */
   readonly size?: number;
   /** Menos movimento: troca a animação por um destaque estático de 1 s. */
@@ -49,6 +51,7 @@ function AvatarImpl(props: AvatarProps) {
     onSignalEnd: props.onSignalEnd,
   });
   const { breathe, blink } = useIdleAnimation(!reduceMotion);
+  const talk = useSpeakingAnimation(props.speaking === true, reduceMotion);
   pickRenderer(props.renderer);
   return (
     <AvatarFallback
@@ -58,6 +61,7 @@ function AvatarImpl(props: AvatarProps) {
       progress={progress}
       breathe={breathe}
       blink={blink}
+      talk={talk}
       highlight={highlight}
       shape={props.shape}
       accessibilityLabel={props.accessibilityLabel ?? 'Avatar'}

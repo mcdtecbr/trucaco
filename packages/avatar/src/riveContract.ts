@@ -4,6 +4,13 @@ import { SIGNAL_TRIGGERS } from './signals';
 /** Estados ociosos da state machine (não são sinais; não passam pelo servidor). */
 export const RIVE_IDLE_STATES = ['idle_breathe', 'idle_blink', 'idle_look'] as const;
 
+/**
+ * Input Boolean da fala (layer `Speak` da `Main`): enquanto `true`, a timeline `speak_loop` (30 quadros,
+ * loop) abre e fecha a boca; `false` volta ao estado `speak_off`. O cliente liga ao mostrar o balão de
+ * chat e desliga quando ele some.
+ */
+export const RIVE_SPEAKING_INPUT = 'speaking';
+
 /** Limite do arquivo `.riv` exportado (docs/avatar-rig.md). */
 export const RIVE_MAX_BYTES = 500 * 1024;
 
@@ -21,6 +28,7 @@ export const RIVE_CONTRACT = {
   /** Inputs Trigger, um por sinal. */
   triggers: SIGNAL_TRIGGERS,
   idleStates: RIVE_IDLE_STATES,
+  speakingInput: RIVE_SPEAKING_INPUT,
   maxBytes: RIVE_MAX_BYTES,
 } as const;
 

@@ -380,6 +380,7 @@ function Seat({
             parts={s.avatar}
             signal={fx.signals[s.seat] ?? null}
             reduceMotion={fx.reduceMotion}
+            speaking={bubbles[s.seat] !== undefined || speech?.[s.seat] !== undefined}
             onSignalEnd={fx.onSignalEnd}
           />
         }

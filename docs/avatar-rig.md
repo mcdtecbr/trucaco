@@ -75,6 +75,10 @@ Cada sinal precisa ser **legível a 64 px** e distinguível dos outros num relan
 
 Os estados ociosos ficam em camadas (layers) independentes da camada dos sinais, para não competirem. Eles são locais, não passam pelo servidor.
 
+### 2.4 Fala (input Boolean `speaking`, 07/11/2026)
+
+Um input **Boolean** `speaking` na layer `Speak` da `Main`, com dois estados: `speak_off` (vazio, estado inicial) e `speak_loop` (timeline `speak_loop`, 30 quadros a 60 fps, em loop). Transições `speak_off` → `speak_loop` com `speaking = true` e de volta com `speaking = false`, sem duração. A timeline anima só a opacidade do grupo `boca2` (boca aberta com dentes): 0% (quadro 0), 90% (8), 15% (14), 100% (22), 0% (30), ou seja, a boca abre e fecha duas vezes por ciclo de 0,5 s. As línguas ficam ocultas. O cliente liga `speaking` enquanto o balão de chat (ou de fala) do assento está na tela e desliga quando ele some; não passa pelo servidor. Um sinal de boca aberta (`mouth_open`, `tongue`) ou de sorriso (`smile`, `wink`, `wink_r`) em curso tem prioridade no fallback. O fallback vetorial reproduz os mesmos quadros (`TALK_INPUT` e `TALK_OPEN` em `AvatarFallback.tsx`; `<Avatar speaking>`). `avatar.riv` com 60.968 bytes, 15 Numbers, 16 triggers e 1 Boolean. Validado só no preview do editor Rive; o runtime web e o aparelho não foram testados.
+
 ## 3. Variantes por parte (a ORDEM é contrato)
 
 O índice é a posição na lista, começando em 0. **Não reordenar.** A mesma lista está em `PART_VARIANT_NAMES` (`packages/avatar/src/parts.ts`).

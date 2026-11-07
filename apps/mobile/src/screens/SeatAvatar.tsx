@@ -30,6 +30,8 @@ export interface SeatAvatarProps {
   /** Sinal em animação neste assento (objeto estável até mudar) ou null. */
   readonly signal: ActiveSignal | null;
   readonly reduceMotion: boolean;
+  /** Balão de chat ou de fala aberto neste assento: a boca do avatar abre e fecha. */
+  readonly speaking?: boolean;
   /** Estável (método do controlador). */
   readonly onSignalEnd: (seat: number, key: number) => void;
 }
@@ -54,6 +56,7 @@ export const SeatAvatar = memo(function SeatAvatar(p: SeatAvatarProps) {
         signal={signal}
         onSignalEnd={end}
         reduceMotion={p.reduceMotion}
+        speaking={p.speaking === true}
         testID={`avatar-${seat}`}
       />
     </View>
