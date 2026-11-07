@@ -596,7 +596,24 @@ export function createTableController(opts: TableControllerOptions): TableContro
     if (!opts.send(msg)) return false;
     lastSend = 'action';
     busySignature = actionSignature(vm);
-    s.patch({ busy: true, selected: null, errorCode: null, coverMode: false });
+    // Jogar carta com a vaza anterior ainda retida (leitura de ~1,5 s): quem já decidiu jogar não espera.
+    // A retenção termina agora, o recolher começa e a carta nova desliza para a mesa limpa logo depois.
+    // (A retenção do fim da mão é outra coisa: a mão fica escondida e nenhuma carta se joga nela.)
+    const cutLinger =
+      (msg.type === 'play' || msg.type === 'playBlind') &&
+      s.lingering !== null &&
+      s.lingering.handEnd !== true;
+    if (cutLinger) {
+      clear(lingerTimer);
+      lingerTimer = null;
+    }
+    s.patch({
+      busy: true,
+      selected: null,
+      errorCode: null,
+      coverMode: false,
+      ...(cutLinger ? { lingering: null } : {}),
+    });
     clear(busyTimer);
     busyTimer = timers.setTimeout(unlock, BUSY_TIMEOUT_MS);
     return true;

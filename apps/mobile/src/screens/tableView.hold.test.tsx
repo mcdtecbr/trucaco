@@ -307,16 +307,40 @@ describe('TableView: retenção da vaza e a jogada seguinte', () => {
     expect(trickHas('ás de copas')).toBe(true);
   });
 
-  it('na retenção e no recolher não se joga carta nem aparece "Sua vez"; depois volta ao normal', () => {
+  it('na retenção e no recolher a carta já pode ser jogada e "Sua vez" aparece (a mesa não prende a jogada)', () => {
     render(props(snapshot({ hand: { tricks: [], current: t1 }, privates: mineLegal })));
     render(props(closedBy([]), { lingering: mid }));
-    expect(cardDisabled()).toBe(true);
-    expect(host.querySelector('[data-testid="turn-text"]')).toBeNull();
+    expect(cardDisabled()).toBe(false);
+    expect(host.querySelector('[data-testid="turn-text"]')?.textContent).toContain('Sua vez');
     render(props(closedBy([]), { lingering: null }));
-    expect(cardDisabled()).toBe(true);
-    expect(host.querySelector('[data-testid="turn-text"]')).toBeNull();
+    expect(cardDisabled()).toBe(false);
+    expect(host.querySelector('[data-testid="turn-text"]')?.textContent).toContain('Sua vez');
     advance(COLLECT_MS + 200);
     expect(cardDisabled()).toBe(false);
+  });
+
+  it('a pausa do fim da mão continua segurando a jogada (mão escondida)', () => {
+    render(props(snapshot({ hand: { tricks: [], current: t1 }, privates: mineLegal })));
+    render(props(nextHand(), { lingering }));
+    expect(cardDisabled()).toBe(true);
+  });
+
+  it('jogar durante a retenção: a carta fica fora da mesa no recolher, entra deslizando depois e não duplica', () => {
+    const mineOnTable = [{ seat: 0, rank: '3', suit: 'paus', covered: false }];
+    const count = (label: string): number =>
+      host.querySelectorAll(`[data-testid="trick"] [aria-label*="${label}"]`).length;
+    render(props(snapshot({ hand: { tricks: [], current: t1 }, privates: mineLegal })));
+    render(props(closedBy([]), { lingering: mid }));
+    expect(trickHas('rei de ouros')).toBe(true);
+    // A jogada saiu (o controlador encerrou a retenção): o servidor já traz a minha carta na vaza nova.
+    render(props(closedBy(mineOnTable), { lingering: null }));
+    expect(count('três de paus')).toBe(0);
+    expect(trickHas('rei de ouros')).toBe(false);
+    advance(COLLECT_MS + 200);
+    expect(count('três de paus')).toBe(1);
+    expect(trickHas('rei de ouros')).toBe(false);
+    advance(2000);
+    expect(count('três de paus')).toBe(1);
   });
 
   it('mão que acaba por correr sobre a vaza retida: pausa, recolhe junto e "Vaza de X" não fica sobre a distribuição', () => {

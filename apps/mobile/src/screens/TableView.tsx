@@ -66,7 +66,7 @@ import { Button } from '../ui/Button';
 import { ChatPanel } from './ChatPanel';
 import { ChatDock } from './ChatDock';
 import type { ChatDockProps } from './ChatDock';
-import { SoundboardPanel } from './SoundboardPanel';
+import { SoundboardGrid, SoundboardToggle, useSoundboardPanel } from './SoundboardPanel';
 import type { ChatPanelProps } from './ChatPanel';
 import { CodesPanel } from './CodesPanel';
 import type { CodesPanelProps } from './CodesPanel';
@@ -526,22 +526,38 @@ export function TableView(p: TableViewProps) {
     connected: p.connected && !modalOpen,
     onSend: p.on.sendSignal,
   });
-  // Uma camada por vez: abrir os sinais fecha menu e histórico; o diálogo de sair fecha todas.
+  const soundPanel = useSoundboardPanel({
+    connected: p.connected && !modalOpen,
+    onSend: p.soundboard?.onSend ?? (() => false),
+  });
+  // Uma camada por vez: abrir os sinais (ou os efeitos) fecha menu, histórico e a outra grade; o diálogo
+  // de sair fecha todas.
   const signalsOpen = signalPanel.open;
   const closeSignals = signalPanel.setOpen;
+  const soundOpen = soundPanel.open;
+  const closeSound = soundPanel.setOpen;
   useEffect(() => {
     if (signalsOpen) {
       setMenuOpen(false);
       setHistoryOpen(false);
+      closeSound(false);
     }
-  }, [signalsOpen]);
+  }, [signalsOpen, closeSound]);
+  useEffect(() => {
+    if (soundOpen) {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+      closeSignals(false);
+    }
+  }, [soundOpen, closeSignals]);
   useEffect(() => {
     if (modalOpen) {
       setMenuOpen(false);
       setHistoryOpen(false);
       closeSignals(false);
+      closeSound(false);
     }
-  }, [modalOpen, closeSignals]);
+  }, [modalOpen, closeSignals, closeSound]);
   const deal = useDealSequence({
     key: `${vm.matchNumber}:${vm.series.gameNumber}:${vm.handNumber}`,
     enabled: p.animateDeal === true && !p.reduceMotion && vm.handNumber > 0,
@@ -579,7 +595,6 @@ export function TableView(p: TableViewProps) {
   const cancelLabel = vm.iVotedCancel
     ? `Você já votou para cancelar a mesa. ${votes} votos.`
     : `Votar para cancelar a mesa. ${votes} votos até agora. Todos os jogadores humanos precisam concordar.`;
-  const usable = p.connected && !modalOpen;
 
   /** Barra de placar no topo, em largura total: duplas, vazas, valor, publicidade e ícones. */
   const scoreBar = (
@@ -605,6 +620,7 @@ export function TableView(p: TableViewProps) {
           if (open) {
             setMenuOpen(false);
             closeSignals(false);
+            closeSound(false);
           }
           setHistoryOpen(open);
         }}
@@ -634,6 +650,7 @@ export function TableView(p: TableViewProps) {
                 if (!menuOpen) {
                   setHistoryOpen(false);
                   closeSignals(false);
+                  closeSound(false);
                 }
                 setMenuOpen((o) => !o);
               }}
@@ -695,14 +712,11 @@ export function TableView(p: TableViewProps) {
       : vm.current.length > 0
         ? { plays: vm.current, ownCovered: vm.ownCoveredCurrent }
         : null;
-  // Retenção da vaza e recolher (~2,5 s): a mesa ainda é da vaza anterior, então jogar carta espera (como na
-  // pausa do fim da mão) e o aviso "Sua vez" não aparece.
-  const trickBusy = lingerMid || midRun !== null;
-  const legalNoPlay = trickBusy
-    ? vm.legalActions.filter((id) => !id.startsWith('play'))
-    : vm.legalActions;
-  const legal = p.connected && !modalOpen && !deal.handHidden ? legalNoPlay : [];
-  const turn = holding || trickBusy ? null : turnText(vm);
+  // Retenção da vaza e recolher (~2,5 s): jogar carta NÃO espera (o servidor já deu a vez e o relógio corre).
+  // O controlador encurta a retenção ao jogar; a carta nova desliza para a mesa limpa assim que o recolher
+  // acaba (`dealingNow`). Só a pausa do fim da mão (`handHidden`) segura as ações.
+  const legal = p.connected && !modalOpen && !deal.handHidden ? vm.legalActions : [];
+  const turn = holding ? null : turnText(vm);
   const trickPlays = tableLayer?.plays ?? [];
   const trickOwn = tableLayer?.ownCovered ?? null;
   const lingerSeat = showLinger ? (p.lingering?.winnerSeat ?? -1) : -1;
@@ -1076,19 +1090,6 @@ export function TableView(p: TableViewProps) {
     </Pressable>
   ) : null;
 
-  const signalButtons =
-    vm.mySeat >= 0 ? (
-      <View style={[styles.dockGroup, landscape && styles.dockGroupCol]}>
-        <SignalToggle
-          panel={signalPanel}
-          style={[styles.dockBtn, landscape && styles.dockBtnLand]}
-        />
-        {coverButton}
-      </View>
-    ) : (
-      coverButton
-    );
-
   const betCorner = (
     <BetButtons
       variant="corner"
@@ -1110,9 +1111,40 @@ export function TableView(p: TableViewProps) {
     }),
   );
   const betNeed = cornerMinWidth(betSpecs.side.length, betSpecs.main !== null);
-  const landDock = landscapeDockPlan(win.width, m.avatar + 2 * RING_PX, betNeed);
+  // O empilhamento de Sinais/Efeitos vale para a pior aposta (3 botões): a dock não muda de altura ao responder.
+  const landDock = landscapeDockPlan(
+    win.width,
+    m.avatar + 2 * RING_PX,
+    betNeed,
+    cornerMinWidth(2, true),
+  );
   const phonePlan = phoneDockPlan(win.width - DOCK_PAD_X, m.hand, betNeed);
   const handSize = landscape ? landDock.hand : m.hand;
+  // Sinais e Efeitos lado a lado só onde há largura (web largo, celular deitado folgado). No retrato ficam
+  // sempre um sobre o outro (44 de altura cada): sobra largura ao Cobrir, ao chat e à aposta, e a altura da
+  // dock não depende da jogada.
+  const stackBtns = landscape ? landDock.stackBtns : !horizontal;
+  const compactBtn = landscape || stackBtns;
+  const signalButtons =
+    vm.mySeat >= 0 ? (
+      <View style={[styles.dockGroup, landscape && styles.dockGroupCol]}>
+        <View style={[styles.dockGroup, stackBtns && styles.dockGroupCol]}>
+          <SignalToggle
+            panel={signalPanel}
+            style={[styles.dockBtn, compactBtn && styles.dockBtnLand]}
+          />
+          {p.soundboard !== undefined ? (
+            <SoundboardToggle
+              panel={soundPanel}
+              style={[styles.dockBtn, compactBtn && styles.dockBtnLand]}
+            />
+          ) : null}
+        </View>
+        {coverButton}
+      </View>
+    ) : (
+      coverButton
+    );
   // A mão só "aparece" (flip curto) depois que as cartas do overlay pousaram; fica ativa no mesmo
   // instante em que `handHidden` cai (as minhas 3 cartas pousaram), sem esperar o fim da distribuição.
   const hand = (
@@ -1130,7 +1162,7 @@ export function TableView(p: TableViewProps) {
     >
       <HandFan
         hand={vm.myHand}
-        legalActions={actionsOn && !deal.handHidden ? legalNoPlay : []}
+        legalActions={actionsOn && !deal.handHidden ? vm.legalActions : []}
         blindCount={vm.blindCount}
         coverMode={p.coverMode}
         manilhas={vm.manilhas}
@@ -1244,13 +1276,6 @@ export function TableView(p: TableViewProps) {
               <Text style={styles.menuText}>Combinar sinais</Text>
             </Pressable>
           ) : null}
-          {vm.mySeat >= 0 && p.soundboard !== undefined ? (
-            <SoundboardPanel
-              connected={usable}
-              onSend={p.soundboard.onSend}
-              silenced={p.soundboard.silenced}
-            />
-          ) : null}
           {p.sound !== undefined ? (
             <Pressable
               accessibilityRole="menuitem"
@@ -1295,6 +1320,30 @@ export function TableView(p: TableViewProps) {
           />
         </View>
       </View>
+    ) : null;
+
+  // Efeitos: camada acima da dock (a mão e as apostas seguem tocáveis); o fundo transparente acima da dock
+  // fecha ao tocar fora.
+  const soundSheet =
+    soundPanel.open && vm.mySeat >= 0 && p.soundboard !== undefined ? (
+      <>
+        <Pressable
+          style={[styles.backdrop, { top: barH, bottom: dockH }]}
+          onPress={() => closeSound(false)}
+          accessible={false}
+          importantForAccessibility="no"
+          testID="soundboard-backdrop"
+        />
+        <View style={[styles.signalSheet, { bottom: dockH }]} pointerEvents="box-none">
+          <View style={styles.signalSheetInner} testID="soundboard-panel">
+            <SoundboardGrid
+              panel={soundPanel}
+              silenced={p.soundboard.silenced}
+              maxHeight={Math.max(160, win.height * 0.5)}
+            />
+          </View>
+        </View>
+      </>
     ) : null;
 
   const closeLayers = (): void => {
@@ -1372,7 +1421,9 @@ export function TableView(p: TableViewProps) {
         <View style={styles.timerStrip} testID="turn-timer">
           <TurnTimer deadlineAt={p.deadlineAt} clockOffsetMs={p.clockOffsetMs} />
         </View>
-        <Banner banner={p.banner} onLeave={p.on.leave} />
+        <View style={styles.aboveLayers}>
+          <Banner banner={p.banner} onLeave={p.on.leave} />
+        </View>
         <KeyboardAvoidingView
           behavior={Platform.select({ ios: 'padding', default: undefined })}
           style={[styles.main, p.layout === 'wide' && styles.mainWide]}
@@ -1382,6 +1433,7 @@ export function TableView(p: TableViewProps) {
           {cornerChat}
         </KeyboardAvoidingView>
         {signalSheet}
+        {soundSheet}
       </View>
       {p.presenceNote !== null ? (
         <Text style={styles.presence} testID="presence-note" pointerEvents="none">
@@ -1545,7 +1597,9 @@ const styles = StyleSheet.create({
   },
   dockChat: { flex: 1, minWidth: 0 },
   dockChatWide: { width: 240 },
-  chatCorner: { position: 'absolute', right: spacing.sm, bottom: spacing.sm },
+  // Acima do fundo que fecha o painel de efeitos (zIndex 10) e da grade (15): chat e aviso seguem tocáveis.
+  chatCorner: { position: 'absolute', right: spacing.sm, bottom: spacing.sm, zIndex: 16 },
+  aboveLayers: { position: 'relative', zIndex: 16 },
   dockMine: { alignItems: 'center', flexShrink: 0 },
   dockHalfStart: {
     flex: 1,

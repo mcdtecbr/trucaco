@@ -445,6 +445,31 @@ describe('3H2: vaza que fica na mesa', () => {
     expect(store.getState().lingering).toBeNull();
   });
 
+  it('jogar carta com a vaza retida encerra a retenção na hora (a jogada não espera os 1,5 s)', () => {
+    const { ctl, store, fire, sent } = setup();
+    ctl.applyState(
+      snapshot({ hand: { current: [{ seat: 0, rank: '4', suit: 'paus', covered: false }] } }),
+    );
+    ctl.applyState(snapshot({ hand: { tricks: [closed], current: [] } }));
+    expect(store.getState().lingering).not.toBeNull();
+    ctl.pressCard('play:3paus');
+    expect(sent).toEqual([{ type: 'play', card: { rank: '3', suit: 'paus' } }]);
+    expect(store.getState().lingering).toBeNull();
+    fire(LINGER_MS); // o temporizador antigo não faz nada
+    expect(store.getState().lingering).toBeNull();
+  });
+
+  it('aposta (truco) com a vaza retida não a encerra: só jogar carta encerra', () => {
+    const { ctl, store, sent } = setup();
+    ctl.applyState(
+      snapshot({ hand: { current: [{ seat: 0, rank: '4', suit: 'paus', covered: false }] } }),
+    );
+    ctl.applyState(snapshot({ hand: { tricks: [closed], current: [] } }));
+    ctl.act('bet');
+    expect(sent.map((m) => m.type)).toEqual(['bet']);
+    expect(store.getState().lingering).not.toBeNull();
+  });
+
   it('sem vaza nova não há retenção', () => {
     const { ctl, store } = setup();
     ctl.applyState(snapshot());

@@ -73,7 +73,7 @@ export interface AudioServiceOptions {
 
 /**
  * Cada som carregado é um player nativo (um ExoPlayer no Android). Fixos: 1 take por evento por voz
- * presente (13 x 2) + 3 efeitos de jogo = 29. Sob demanda (outros takes, soundboard) vale um LRU de 12.
+ * presente (13 x 2) + 3 efeitos de jogo + 8 do soundboard (quem está sentado) = 37. Sob demanda (outros takes) vale um LRU de 12.
  */
 export const DEFAULT_MAX_ON_DEMAND = 12;
 

@@ -83,6 +83,8 @@ export interface FakeAudioService extends AudioService {
   readonly calls: FakeCall[];
   readonly preloaded: VoiceId[][];
   sfxPreloads: number;
+  /** Ids pedidos em cada `preloadSfx` (sem argumento = os de jogo, registrado como lista vazia). */
+  readonly sfxPreloadIds: Array<readonly string[]>;
   released: number;
   /** Chamadas de `warmEvent`. */
   readonly warmed: Array<[VoiceId, string]>;
@@ -98,6 +100,7 @@ export function createFakeAudioService(initial: Partial<AudioPrefs> = {}): FakeA
     calls: [],
     preloaded: [],
     sfxPreloads: 0,
+    sfxPreloadIds: [],
     released: 0,
     warmed: [],
     ready: null,
@@ -121,8 +124,9 @@ export function createFakeAudioService(initial: Partial<AudioPrefs> = {}): FakeA
       s.preloaded.push([...voices]);
       return Promise.resolve();
     },
-    preloadSfx() {
+    preloadSfx(ids) {
       s.sfxPreloads += 1;
+      s.sfxPreloadIds.push(ids === undefined ? [] : [...ids]);
       return Promise.resolve();
     },
     isVoiceReady: (voice, takeId) => s.ready === null || s.ready.has(`${voice}:${takeId}`),

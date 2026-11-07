@@ -570,6 +570,39 @@ describe('5b: efeitos e som na mesa', () => {
     expect(byTestId('sfx-mark-1')).toBeNull();
   });
 
+  it('o botão de efeitos fica visível na dock (fora do menu), ao lado dos sinais; fecha ao escolher ou tocar fora', () => {
+    mount(snapshot(), false);
+    const toggle = must('soundboard-toggle');
+    expect(byTestId('table-menu')).toBeNull();
+    expect(must('dock').contains(toggle)).toBe(true);
+    expect(must('dock').contains(must('signal-toggle'))).toBe(true);
+    expect(toggle.getAttribute('aria-label')).toBe('Abrir efeitos engraçados');
+    click(toggle);
+    expect(byTestId('soundboard-grid')).not.toBeNull();
+    // Fora da dock: a mão e as apostas seguem tocáveis.
+    expect(must('dock').contains(must('soundboard-grid'))).toBe(false);
+    click(must('soundboard-backdrop'));
+    expect(byTestId('soundboard-grid')).toBeNull();
+    click(toggle);
+    click(must('sfx-horn'));
+    expect(byTestId('soundboard-grid')).toBeNull();
+    expect(h.sent).toEqual([{ type: 'sfx', sfxId: 'horn' }]);
+  });
+
+  it('efeitos e sinais não ficam abertos ao mesmo tempo, e o menu não repete o painel de efeitos', () => {
+    mount(snapshot(), false);
+    click(must('soundboard-toggle'));
+    click(must('signal-toggle'));
+    expect(byTestId('soundboard-grid')).toBeNull();
+    expect(byTestId('signal-grid')).not.toBeNull();
+    click(must('soundboard-toggle'));
+    expect(byTestId('signal-grid')).toBeNull();
+    expect(byTestId('soundboard-grid')).not.toBeNull();
+    click(must('open-menu'));
+    expect(byTestId('soundboard-grid')).toBeNull();
+    expect(must('table-menu').querySelector('[data-testid="soundboard-toggle"]')).toBeNull();
+  });
+
   it('o atalho de som existe na mesa com rótulo acessível', () => {
     mount(snapshot());
     expect(must('sound-toggle').getAttribute('aria-label')).toBe('Som ligado. Desligar o som');

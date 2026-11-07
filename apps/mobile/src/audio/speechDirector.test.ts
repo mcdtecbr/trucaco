@@ -1,10 +1,10 @@
 import { SPEECH_TAKES } from '@trucaco/avatar';
-import { DEFAULT_AVATAR_PARTS } from '@trucaco/protocol';
+import { DEFAULT_AVATAR_PARTS, SFX_IDS } from '@trucaco/protocol';
 import type { PublicGameEvent } from '@trucaco/protocol';
 import { describe, expect, it } from 'vitest';
 import { projectTable } from '../table/projectTable';
 import type { TableViewModel } from '../table/projectTable';
-import { player, snapshot } from '../table/snapshotFixtures';
+import { player, priv, snapshot } from '../table/snapshotFixtures';
 import { GAME_DECIDED_HOLD_MS, createSpeechDirector } from './speechDirector';
 import type { SpeechLine } from './speechDirector';
 import { createFakeAudioService } from './fake';
@@ -234,10 +234,40 @@ describe('pré-carga e reset', () => {
     director.onState(vm);
     director.onState(vm);
     expect(audio.preloaded).toEqual([['fem_1', 'masc_1']]);
-    expect(audio.sfxPreloads).toBe(1);
+    // Efeitos de jogo (1) + soundboard (1, so quando ha assento meu).
+    expect(audio.sfxPreloads).toBe(vm.mySeat >= 0 ? 2 : 1);
     director.reset();
     expect(audio.released).toBe(1);
     director.onState(vm);
     expect(audio.preloaded).toHaveLength(2);
+  });
+
+  it('sentado: pré-carrega os 8 efeitos engraçados uma vez (o 1º toque no painel não carrega nada); espectador não', () => {
+    const seated = vmOf({ privates: priv(0) });
+    expect(seated.mySeat).toBe(0);
+    const { audio, director } = setup(seated);
+    director.onState(seated);
+    director.onState(seated);
+    expect(audio.sfxPreloadIds.filter((ids) => ids.includes('horn'))).toEqual([[...SFX_IDS]]);
+    director.reset();
+    director.onState(seated);
+    expect(audio.sfxPreloadIds.filter((ids) => ids.includes('horn'))).toHaveLength(2);
+
+    const watcher = { ...vmOf(), mySeat: -1 };
+    expect(watcher.mySeat).toBe(-1);
+    const other = setup(watcher);
+    other.director.onState(watcher);
+    expect(other.audio.sfxPreloadIds.filter((ids) => ids.includes('horn'))).toEqual([]);
+  });
+
+  it('efeitos engraçados silenciados não são pré-carregados; ao religar, o próximo estado carrega', () => {
+    const seated = vmOf({ privates: priv(0) });
+    const { audio, director } = setup(seated);
+    audio.setPrefs({ funnyMuted: true });
+    director.onState(seated);
+    expect(audio.sfxPreloadIds.filter((ids) => ids.includes('horn'))).toEqual([]);
+    audio.setPrefs({ funnyMuted: false });
+    director.onState(seated);
+    expect(audio.sfxPreloadIds.filter((ids) => ids.includes('horn'))).toHaveLength(1);
   });
 });

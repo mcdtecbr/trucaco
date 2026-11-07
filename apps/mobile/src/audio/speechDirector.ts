@@ -8,7 +8,7 @@
  */
 import { pickTake, voiceEventForGameEvent } from '@trucaco/avatar';
 import type { GameSfxId, VoiceEvent } from '@trucaco/avatar';
-import { VARIANT_IDS } from '@trucaco/protocol';
+import { SFX_IDS, VARIANT_IDS } from '@trucaco/protocol';
 import type { PublicGameEvent, VariantId, VoiceId } from '@trucaco/protocol';
 import type { TableViewModel } from '../table/projectTable';
 import type { AudioService } from './audioService';
@@ -58,6 +58,7 @@ function variantOf(vm: TableViewModel | null): VariantId {
 
 export function createSpeechDirector(opts: SpeechDirectorOptions): SpeechDirector {
   const { audio } = opts;
+  let funnyPreloaded = false;
   const rng = opts.rng ?? Math.random;
   const timers: SpeechTimers = opts.timers ?? {
     setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -145,12 +146,20 @@ export function createSpeechDirector(opts: SpeechDirectorOptions): SpeechDirecto
     },
 
     onState(vm) {
+      // Quem está sentado pode mandar (e sempre ouve) os efeitos engraçados: carrega os 8 ao entrar na mesa,
+      // para o primeiro toque no painel não criar player nativo (e decodificar) no meio de uma jogada.
+      // Silenciados (som geral ou efeitos engraçados) não carregam: ao religar, o próximo estado carrega.
+      const prefs = audio.getPrefs();
+      if (!funnyPreloaded && vm.mySeat >= 0 && !prefs.muted && !prefs.funnyMuted) {
+        funnyPreloaded = true;
+        void audio.preloadSfx(SFX_IDS);
+      }
       const voices = [...new Set(vm.seats.map((s) => s.avatar.voice ?? DEFAULT_VOICE))].sort();
       const key = voices.join(',');
       if (key === preloadKey) return;
       preloadKey = key;
       void audio.preloadVoices(voices);
-      // Só os efeitos de jogo; o soundboard carrega no primeiro uso (cada player custa memória nativa).
+      // Efeitos de jogo; os do soundboard carregam acima, para quem está sentado.
       void audio.preloadSfx(PRELOAD_SFX_IDS);
     },
 
@@ -160,6 +169,7 @@ export function createSpeechDirector(opts: SpeechDirectorOptions): SpeechDirecto
       pendingGame = null;
       lastTake.clear();
       preloadKey = '';
+      funnyPreloaded = false;
       audio.release();
     },
   };

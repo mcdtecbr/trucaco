@@ -243,7 +243,12 @@ export function handWidth(size: 'sm' | 'md' | 'lg'): number {
 const DOCK_GAP = 8;
 /** Padding horizontal da dock (dos dois lados). */
 export const DOCK_PAD_X = 16;
-const SIGNAL_W = 72;
+/** Largura de um botao da dock (Sinais, Efeitos, Cobrir). */
+const BTN_W = 72;
+/** Sinais + Efeitos lado a lado: dois botoes e a folga entre eles (`dockGroup`, spacing.sm). */
+const BTN_PAIR_W = 2 * BTN_W + DOCK_GAP;
+/** Folga real entre os botoes e o chat compacto no celular deitado (`dockHalfStart`, spacing.xs). */
+const CHAT_GAP = 4;
 /** Largura minima util do chat compacto (campo + Enviar + expandir). */
 export const CHAT_COMPACT_MIN_W = 150;
 /** Abaixo disto (largura da janela) o chat de canto no web largo cobriria o botao de aposta. */
@@ -265,26 +270,39 @@ export interface LandscapeDockPlan {
   /** Largura que sobra a esquerda do avatar (sinais e chat). */
   readonly leftRoom: number;
   readonly showChat: boolean;
+  /** Sem largura para Sinais, Efeitos e o chat juntos: Sinais e Efeitos ficam um sobre o outro (44 de altura cada). */
+  readonly stackBtns: boolean;
 }
 
-/** Paisagem: avatar no centro; mao + aposta a direita dele numa linha so (mao `sm` quando falta largura). */
+/**
+ * Paisagem: avatar no centro; mao + aposta a direita dele numa linha so (mao `sm` quando falta largura).
+ * `worstBetNeed` (aposta de 3 botoes) decide o empilhamento de Sinais/Efeitos: assim a altura da dock nao
+ * muda quando a aposta aparece ou some. O chat compacto continua quando cabe ao lado dos botoes.
+ */
 export function landscapeDockPlan(
   width: number,
   avatarBox: number,
   betNeed: number,
+  worstBetNeed: number = betNeed,
 ): LandscapeDockPlan {
   const room = width - 2 * DOCK_PAD_X - avatarBox - 2 * DOCK_GAP;
   const half = room / 2;
-  const need = (size: 'sm' | 'md'): number =>
-    handWidth(size) + (betNeed > 0 ? DOCK_GAP + betNeed : 0);
-  const hand: 'sm' | 'md' = need('md') <= half ? 'md' : 'sm';
-  const rightMin = need(hand);
-  const leftRoom = rightMin <= half ? half : room - rightMin;
+  const need = (size: 'sm' | 'md', bet: number): number =>
+    handWidth(size) + (bet > 0 ? DOCK_GAP + bet : 0);
+  const leftFor = (bet: number): number => {
+    const h: 'sm' | 'md' = need('md', bet) <= half ? 'md' : 'sm';
+    return need(h, bet) <= half ? half : room - need(h, bet);
+  };
+  const hand: 'sm' | 'md' = need('md', betNeed) <= half ? 'md' : 'sm';
+  const rightMin = need(hand, betNeed);
+  const leftRoom = leftFor(betNeed);
+  const stackBtns = leftFor(worstBetNeed) < BTN_PAIR_W + CHAT_GAP + CHAT_COMPACT_MIN_W;
   return {
     hand,
     rightMin,
     leftRoom,
-    showChat: leftRoom >= SIGNAL_W + DOCK_GAP + CHAT_COMPACT_MIN_W,
+    showChat: leftRoom >= (stackBtns ? BTN_W : BTN_PAIR_W) + CHAT_GAP + CHAT_COMPACT_MIN_W,
+    stackBtns,
   };
 }
 
